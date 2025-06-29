@@ -10,5 +10,5 @@ class Data(BaseModel):
 class ApiResponse(BaseModel):
     data: Data
     message: str
-    prompts: Optional[str]
+    prompts: Optional[str] = None
     status: int

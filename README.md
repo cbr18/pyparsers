@@ -1,0 +1,207 @@
+# CarsParser - Парсер автомобилей с Selenium
+
+Универсальный парсер для получения данных об автомобилях с различных источников с использованием Selenium.
+
+## Структура проекта
+
+```
+CarsParser/
+├── api/                    # Парсеры для разных источников
+│   ├── base_parser.py     # Базовый класс для парсеров
+│   ├── che168fetch.py     # Selenium парсер для Che168
+│   ├── dongchedifetch.py  # Парсер для Dongchedi
+│   ├── parser_factory.py  # Фабрика парсеров
+│   └── __init__.py
+├── models/                # Модели данных
+│   ├── car.py            # Модель автомобиля
+│   ├── response.py       # Модель ответа API
+│   ├── brand.py          # Модель бренда
+│   └── tag.py            # Модель тега
+├── main.py               # Основной файл для запуска
+├── translate.py          # Функции перевода
+├── converters.py         # Конвертеры данных
+└── pyproject.toml        # Зависимости проекта
+```
+
+## Установка и запуск
+
+### Установка зависимостей
+```bash
+uv pip install requests beautifulsoup4 pydantic googletrans==4.0.2 selenium
+```
+
+### Установка Chrome и ChromeDriver
+1. Установите [Google Chrome](https://www.google.com/chrome/)
+2. Скачайте [ChromeDriver](https://chromedriver.chromium.org/) (версия должна соответствовать версии Chrome)
+3. Добавьте ChromeDriver в PATH или поместите в папку проекта
+
+### Запуск
+```bash
+uv run python main.py
+```
+
+## Архитектура
+
+### Унифицированный интерфейс
+Все парсеры наследуются от `BaseCarParser` и предоставляют единый интерфейс:
+
+```python
+from api.parser_factory import ParserFactory
+
+# Получение парсера
+parser = ParserFactory.get_parser('che168')
+
+# Получение данных
+response = parser.fetch_cars('url')  # Selenium парсинг
+```
+
+### Доступные парсеры
+- **Che168Parser** - Selenium парсер для сайта Che168
+- **DongchediParser** - парсер для API Dongchedi
+
+## Использование
+
+### Базовое использование
+```python
+from api.parser_factory import ParserFactory
+
+# Тестирование всех парсеров
+factory = ParserFactory()
+for parser_name in factory.get_available_parsers():
+    parser = factory.get_parser(parser_name)
+    response = parser.fetch_cars()
+    print(f"Найдено машин: {len(response.data.search_sh_sku_info_list)}")
+```
+
+### Работа с конкретным парсером
+```python
+from api.che168fetch import Che168Parser
+
+parser = Che168Parser(headless=True)  # headless=True для работы в фоне
+response = parser.fetch_cars('url')   # Парсим с сайта
+```
+
+## Особенности
+
+### Che168 Selenium Parser
+- Использует Selenium WebDriver для полной имитации браузера
+- Обходит блокировки и защиту от парсинга
+- Поддерживает прокрутку страницы для загрузки всего контента
+- Имитирует человеческое поведение (случайные задержки, движения мыши)
+- Работает как с URL, так и с локальными файлами
+
+### Dongchedi Parser
+- Использует официальное API
+- Работает стабильно и быстро
+- Возвращает структурированные данные
+
+## Модели данных
+
+### Car (Автомобиль)
+Основные поля:
+- `title` - заголовок объявления
+- `brand_name` - название бренда
+- `car_name` - название модели
+- `car_year` - год выпуска
+- `sh_price` - цена
+- `image` - ссылка на фото
+- `link` - ссылка на объявление
+
+### ApiResponse
+Унифицированный ответ от всех парсеров:
+- `data` - данные с машинами
+- `message` - сообщение о статусе
+- `status` - HTTP статус
+
+## Настройки Selenium
+
+### Параметры Chrome
+```python
+parser = Che168Parser(
+    headless=True,  # Работа в фоне (без открытия окна браузера)
+)
+```
+
+### Настройки для обхода блокировки
+- Ротация User-Agent
+- Случайные размеры окна
+- Имитация человеческого поведения
+- Скрытие признаков автоматизации
+
+## Расширение функциональности
+
+### Добавление нового парсера
+1. Создайте класс, наследующий от `BaseCarParser`
+2. Реализуйте метод `fetch_cars()`
+3. Зарегистрируйте парсер в `ParserFactory`
+
+```python
+from api.base_parser import BaseCarParser
+from models.response import ApiResponse
+
+class MyParser(BaseCarParser):
+    def fetch_cars(self, source=None) -> ApiResponse:
+        # Ваша логика парсинга
+        pass
+
+# Регистрация
+ParserFactory.register_parser('my_parser', MyParser)
+```
+
+### Добавление нового Selenium парсера
+```python
+from api.base_parser import BaseCarParser
+from selenium import webdriver
+
+class MySeleniumParser(BaseCarParser):
+    def __init__(self, headless=True):
+        self.headless = headless
+        self.driver = None
+    
+    def _setup_driver(self):
+        # Настройка драйвера
+        pass
+    
+    def fetch_cars(self, source='url') -> ApiResponse:
+        # Selenium логика
+        pass
+```
+
+## Устранение проблем
+
+### ChromeDriver не найден
+```bash
+# Скачайте ChromeDriver с https://chromedriver.chromium.org/
+# Добавьте в PATH или поместите в папку проекта
+```
+
+### Ошибки Selenium
+```python
+# Проверьте версию Chrome и ChromeDriver
+# Они должны быть совместимы
+```
+
+### Медленная работа
+```python
+# Используйте headless=True для ускорения
+parser = Che168Parser(headless=True)
+```
+
+## Зависимости
+
+- `requests` - HTTP запросы
+- `beautifulsoup4` - парсинг HTML
+- `pydantic` - валидация данных
+- `googletrans==4.0.2` - перевод текста
+- `selenium` - автоматизация браузера
+
+## Производительность
+
+| Парсер | Скорость | Надежность | Обход блокировки |
+|--------|----------|------------|------------------|
+| Che168 Selenium | Средняя | Высокая | ✅ |
+| Dongchedi API | Высокая | Высокая | ✅ |
+
+## Лицензия
+
+MIT License 

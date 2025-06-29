@@ -1,0 +1,10 @@
+[project]
+name = "rest_parser"
+version = "0.1.0"
+dependencies = [
+  "requests",
+  "beautifulsoup4",
+  "selenium",
+  "pydantic",
+  "googletrans==4.0.2"
+]

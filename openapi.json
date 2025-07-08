@@ -1,0 +1,230 @@
+{
+    "openapi": "3.1.0",
+    "info": {
+        "title": "FastAPI",
+        "version": "0.1.0"
+    },
+    "paths": {
+        "/cars": {
+            "get": {
+                "summary": "Get Cars",
+                "operationId": "get_cars_cars_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "ApiResponse": {
+                "properties": {
+                    "data": {
+                        "$ref": "#/components/schemas/Data"
+                    },
+                    "message": {
+                        "type": "string",
+                        "title": "Message"
+                    },
+                    "prompts": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Prompts"
+                    },
+                    "status": {
+                        "type": "integer",
+                        "title": "Status"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "data",
+                    "message",
+                    "status"
+                ],
+                "title": "ApiResponse"
+            },
+            "Data": {
+                "properties": {
+                    "has_more": {
+                        "type": "boolean",
+                        "title": "Has More"
+                    },
+                    "search_sh_sku_info_list": {
+                        "items": {
+                            "$ref": "#/components/schemas/FilteredCar"
+                        },
+                        "type": "array",
+                        "title": "Search Sh Sku Info List"
+                    },
+                    "total": {
+                        "type": "integer",
+                        "title": "Total"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "has_more",
+                    "search_sh_sku_info_list",
+                    "total"
+                ],
+                "title": "Data"
+            },
+            "FilteredCar": {
+                "properties": {
+                    "title": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Title"
+                    },
+                    "sh_price": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Sh Price"
+                    },
+                    "image": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Image"
+                    },
+                    "car_year": {
+                        "anyOf": [
+                            {
+                                "type": "integer"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Car Year"
+                    },
+                    "car_mileage": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Car Mileage"
+                    },
+                    "car_source_city_name": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Car Source City Name"
+                    },
+                    "brand_name": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Brand Name"
+                    },
+                    "series_name": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Series Name"
+                    },
+                    "car_name": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Car Name"
+                    },
+                    "car_source_type": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Car Source Type"
+                    },
+                    "transfer_cnt": {
+                        "anyOf": [
+                            {
+                                "type": "integer"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Transfer Cnt"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "title",
+                    "sh_price",
+                    "image",
+                    "car_year",
+                    "car_mileage",
+                    "car_source_city_name",
+                    "brand_name",
+                    "series_name",
+                    "car_name",
+                    "car_source_type",
+                    "transfer_cnt"
+                ],
+                "title": "FilteredCar"
+            }
+        }
+    }
+}

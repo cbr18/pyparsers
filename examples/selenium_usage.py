@@ -57,4 +57,4 @@ def main():
         print("3. Скачан chromedriver и добавлен в PATH")
 
 if __name__ == "__main__":
-    main() 
+    main()

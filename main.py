@@ -1,6 +1,5 @@
 import asyncio
 from api.parser_factory import ParserFactory
-from translate import translate_text
 from converters import decode_sh_price
 
 async def print_car_info(car, source_name="Unknown"):
@@ -12,15 +11,15 @@ async def print_car_info(car, source_name="Unknown"):
     
     # Основная информация
     if car.brand_name:
-        output.append(f"Марка: {await translate_text(car.brand_name)}")
+        output.append(f"Марка: {car.brand_name}")
     if car.car_name:
-        output.append(f"Модель: {await translate_text(car.car_name)}")
+        output.append(f"Модель: {car.car_name}")
     if car.series_name:
-        output.append(f"Серия: {await translate_text(car.series_name)}")
+        output.append(f"Серия: {car.series_name}")
     if car.car_year:
         output.append(f"Год: {car.car_year}")
     if car.car_source_city_name:
-        output.append(f"Город: {await translate_text(car.car_source_city_name)}")
+        output.append(f"Город: {car.car_source_city_name}")
     if car.car_mileage:
         output.append(f"Пробег: {car.car_mileage} км")
     
@@ -31,7 +30,7 @@ async def print_car_info(car, source_name="Unknown"):
     
     # Заголовок
     if car.title:
-        output.append(f"Заголовок: {await translate_text(car.title)}")
+        output.append(f"Заголовок: {car.title}")
     
     # Ссылки
     if car.image:
@@ -48,7 +47,7 @@ async def print_car_info(car, source_name="Unknown"):
 
 async def main():
     """Основная функция для работы с парсерами"""
-    print("CarsParser - Парсер автомобилей с Selenium")
+    print("CarsParser - Парсер автомобилей (Dongchedi)")
     print("=" * 50)
     
     # Получаем доступные парсеры
@@ -56,49 +55,8 @@ async def main():
     print(f"Доступные парсеры: {available_parsers}")
     print()
     
-    # Тестируем Che168 парсер (без локального файла)
-    print("=== Парсинг Che168 ===")
-    try:
-        parser = ParserFactory.get_parser('che168')
-        response = parser.fetch_cars()  # Удалён параметр 'local', теперь используется стандартный парсинг
-        
-        if response.data and response.data.search_sh_sku_info_list:
-            cars = response.data.search_sh_sku_info_list
-            print(f"✅ Успешно найдено {len(cars)} машин")
-            
-            # Показываем первые 3 машины
-            for i, car in enumerate(cars[:3]):
-                await print_car_info(car, f"Che168 (машина {i+1})")
-                
-            # Статистика
-            print(f"\n📊 Статистика:")
-            years = {}
-            prices = []
-            
-            for car in cars:
-                if car.car_year:
-                    years[car.car_year] = years.get(car.car_year, 0) + 1
-                if car.sh_price:
-                    try:
-                        price = float(car.sh_price)
-                        prices.append(price)
-                    except:
-                        pass
-            
-            if years:
-                print(f"Годы выпуска: {sorted(years.keys())}")
-            if prices:
-                avg_price = sum(prices) / len(prices)
-                print(f"Средняя цена: {avg_price:.2f} млн юаней")
-                
-        else:
-            print("❌ Машины не найдены")
-            
-    except Exception as e:
-        print(f"❌ Ошибка при парсинге: {e}")
-    
     # Тестируем Dongchedi парсер
-    print("\n=== Парсинг Dongchedi ===")
+    print("=== Парсинг Dongchedi ===")
     try:
         dongchedi_parser = ParserFactory.get_parser('dongchedi')
         dongchedi_response = dongchedi_parser.fetch_cars()
@@ -117,11 +75,6 @@ async def main():
         print(f"❌ Ошибка при парсинге Dongchedi: {e}")
     
     print("\n" + "="*60)
-    print("💡 Для тестирования Selenium парсера:")
-    print("1. Убедитесь, что установлен Chrome браузер")
-    print("2. Скачайте ChromeDriver с https://chromedriver.chromium.org/")
-    print("3. Добавьте ChromeDriver в PATH")
-    print("4. Запустите: python examples/selenium_usage.py")
 
 if __name__ == "__main__":
     asyncio.run(main())

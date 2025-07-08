@@ -1,13 +1,11 @@
 from typing import Dict, Type
 from .base_parser import BaseCarParser
-from .che168fetch import Che168Parser
 from .dongchedifetch import DongchediParser
 
 class ParserFactory:
-    """Фабрика для создания парсеров"""
+    """Фабрика для создания парсеров (только Dongchedi)"""
     
     _parsers: Dict[str, Type[BaseCarParser]] = {
-        'che168': Che168Parser,
         'dongchedi': DongchediParser,
     }
     
@@ -17,7 +15,7 @@ class ParserFactory:
         Создает и возвращает парсер по имени
         
         Args:
-            parser_name: Название парсера ('che168', 'dongchedi')
+            parser_name: Название парсера ('dongchedi')
             
         Returns:
             BaseCarParser: Экземпляр парсера
@@ -35,8 +33,8 @@ class ParserFactory:
     def get_available_parsers(cls) -> list:
         """Возвращает список доступных парсеров"""
         return list(cls._parsers.keys())
-    
+
     @classmethod
     def register_parser(cls, name: str, parser_class: Type[BaseCarParser]):
         """Регистрирует новый парсер"""
-        cls._parsers[name] = parser_class 
+        cls._parsers[name] = parser_class

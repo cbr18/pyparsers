@@ -18,10 +18,9 @@ except ImportError:
     SELENIUM_AVAILABLE = False
     print("Selenium не установлен. Установите: pip install selenium")
 
-HTML_FILE = os.path.join(os.path.dirname(__file__), '..', '二手车_二手车之家.html')
 CHE168_URL = 'https://www.che168.com/china/a0_0msdgscncgpi1lto8csp3exx0/?pvareaid=102179#currengpostion'
 
-class Che168Parser(BaseCarParser):
+class DongchediParser(BaseCarParser):
     """Selenium парсер для сайта Che168"""
     
     def __init__(self, headless: bool = True):
@@ -264,7 +263,7 @@ class Che168Parser(BaseCarParser):
         return Car(**data)
 
 # Функция для обратной совместимости
-def fetch_che168_cars(source: Optional[str] = 'url') -> ApiResponse:
+def fetch_dongchedi_cars(source: Optional[str] = 'url') -> ApiResponse:
     """Функция для обратной совместимости"""
-    parser = Che168Parser()
+    parser = DongchediParser()
     return parser.fetch_cars(source)

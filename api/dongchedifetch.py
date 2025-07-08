@@ -33,3 +33,5 @@ def fetch_dongchedi_cars() -> ApiResponse:
     """Функция для обратной совместимости"""
     parser = DongchediParser()
     return parser.fetch_cars()
+
+

@@ -36,3 +36,40 @@
     transform: rotate(360deg);
   }
 }
+
+.car-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  justify-content: center;
+  padding: 20px;
+}
+
+.car-card {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  width: 320px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 20px;
+}
+
+.car-image {
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+  background: #f0f0f0;
+}
+
+.car-info {
+  padding: 16px;
+  text-align: left;
+}
+
+.loader {
+  text-align: center;
+  margin-top: 50px;
+  font-size: 24px;
+}

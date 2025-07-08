@@ -152,7 +152,7 @@ class Che168Parser(BaseCarParser):
                     self.driver.quit()
         else:
             # Для локального файла используем обычный парсинг
-            if source and source not in ('local', 'url'):
+            if source and source not in ('url',):  # убран 'local' из проверки
                 with open(source, 'r', encoding='utf-8') as f:
                     from bs4 import BeautifulSoup
                     soup = BeautifulSoup(f, 'html.parser')

@@ -11,7 +11,7 @@ class BaseCarParser(ABC):
         Основной метод для получения данных о машинах
         
         Args:
-            source: Источник данных (может быть 'url', 'local', путь к файлу и т.д.)
+            source: Источник данных (может быть 'url', путь к файлу и т.д.)  # убран 'local'
             
         Returns:
             ApiResponse: Унифицированный ответ с данными о машинах
@@ -20,4 +20,4 @@ class BaseCarParser(ABC):
     
     def get_parser_name(self) -> str:
         """Возвращает название парсера"""
-        return self.__class__.__name__ 
+        return self.__class__.__name__

@@ -1,8 +1,9 @@
+import asyncio
 from api.parser_factory import ParserFactory
 from translate import translate_text
 from converters import decode_sh_price
 
-def print_car_info(car, source_name="Unknown"):
+async def print_car_info(car, source_name="Unknown"):
     """Универсальная функция для вывода информации о машине"""
     output = []
     output.append("-" * 50)
@@ -11,15 +12,15 @@ def print_car_info(car, source_name="Unknown"):
     
     # Основная информация
     if car.brand_name:
-        output.append(f"Марка: {translate_text(car.brand_name)}")
+        output.append(f"Марка: {await translate_text(car.brand_name)}")
     if car.car_name:
-        output.append(f"Модель: {translate_text(car.car_name)}")
+        output.append(f"Модель: {await translate_text(car.car_name)}")
     if car.series_name:
-        output.append(f"Серия: {translate_text(car.series_name)}")
+        output.append(f"Серия: {await translate_text(car.series_name)}")
     if car.car_year:
         output.append(f"Год: {car.car_year}")
     if car.car_source_city_name:
-        output.append(f"Город: {translate_text(car.car_source_city_name)}")
+        output.append(f"Город: {await translate_text(car.car_source_city_name)}")
     if car.car_mileage:
         output.append(f"Пробег: {car.car_mileage} км")
     
@@ -30,7 +31,7 @@ def print_car_info(car, source_name="Unknown"):
     
     # Заголовок
     if car.title:
-        output.append(f"Заголовок: {translate_text(car.title)}")
+        output.append(f"Заголовок: {await translate_text(car.title)}")
     
     # Ссылки
     if car.image:
@@ -45,7 +46,7 @@ def print_car_info(car, source_name="Unknown"):
     output.append("")
     print("\n".join(output))
 
-def main():
+async def main():
     """Основная функция для работы с парсерами"""
     print("CarsParser - Парсер автомобилей с Selenium")
     print("=" * 50)
@@ -55,11 +56,11 @@ def main():
     print(f"Доступные парсеры: {available_parsers}")
     print()
     
-    # Тестируем Che168 парсер с локальным файлом (быстрое тестирование)
-    print("=== Парсинг Che168 с локального файла ===")
+    # Тестируем Che168 парсер (без локального файла)
+    print("=== Парсинг Che168 ===")
     try:
         parser = ParserFactory.get_parser('che168')
-        response = parser.fetch_cars('local')  # Используем локальный файл для быстрого тестирования
+        response = parser.fetch_cars()  # Удалён параметр 'local', теперь используется стандартный парсинг
         
         if response.data and response.data.search_sh_sku_info_list:
             cars = response.data.search_sh_sku_info_list
@@ -67,7 +68,7 @@ def main():
             
             # Показываем первые 3 машины
             for i, car in enumerate(cars[:3]):
-                print_car_info(car, f"Che168 Local (машина {i+1})")
+                await print_car_info(car, f"Che168 (машина {i+1})")
                 
             # Статистика
             print(f"\n📊 Статистика:")
@@ -108,7 +109,7 @@ def main():
             
             # Показываем первые 2 машины
             for i, car in enumerate(dongchedi_cars[:2]):
-                print_car_info(car, f"Dongchedi (машина {i+1})")
+                await print_car_info(car, f"Dongchedi (машина {i+1})")
         else:
             print("❌ Машины не найдены на Dongchedi")
             
@@ -123,4 +124,4 @@ def main():
     print("4. Запустите: python examples/selenium_usage.py")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

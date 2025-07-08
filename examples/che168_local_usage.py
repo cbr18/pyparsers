@@ -60,12 +60,12 @@ def example_1_factory_local():
     print("=== ПРИМЕР 1: Фабрика парсеров + локальный файл ===")
     
     parser = ParserFactory.get_parser('che168')
-    response = parser.fetch_cars('local')
+    response = parser.fetch_cars()
     
     if response.data and response.data.search_sh_sku_info_list:
         print(f"Найдено машин: {len(response.data.search_sh_sku_info_list)}")
         for i, car in enumerate(response.data.search_sh_sku_info_list[:2]):
-            print_car_info(car, "Фабрика + local")
+            print_car_info(car, "Фабрика")
     else:
         print("Машины не найдены")
 
@@ -74,7 +74,7 @@ def example_2_direct_parser():
     print("\n=== ПРИМЕР 2: Прямое использование парсера ===")
     
     parser = Che168Parser()
-    response = parser.fetch_cars('local')
+    response = parser.fetch_cars()
     
     if response.data and response.data.search_sh_sku_info_list:
         print(f"Найдено машин: {len(response.data.search_sh_sku_info_list)}")
@@ -105,7 +105,7 @@ def example_4_batch_processing():
     print("\n=== ПРИМЕР 4: Пакетная обработка ===")
     
     parser = Che168Parser()
-    response = parser.fetch_cars('local')
+    response = parser.fetch_cars()
     
     if response.data and response.data.search_sh_sku_info_list:
         cars = response.data.search_sh_sku_info_list
@@ -141,7 +141,7 @@ def example_5_filtering():
     print("\n=== ПРИМЕР 5: Фильтрация данных ===")
     
     parser = Che168Parser()
-    response = parser.fetch_cars('local')
+    response = parser.fetch_cars()
     
     if response.data and response.data.search_sh_sku_info_list:
         cars = response.data.search_sh_sku_info_list
@@ -173,4 +173,4 @@ def main():
     print("5. Запустите парсер снова")
 
 if __name__ == "__main__":
-    main() 
+    main()

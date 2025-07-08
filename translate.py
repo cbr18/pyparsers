@@ -1,7 +1,8 @@
 from googletrans import Translator
 import re
+import asyncio
 
-def translate_text(text: str, dest: str = 'ru') -> str:
+async def translate_text(text: str, dest: str = 'ru') -> str:
     if not text:
         return ''
     
@@ -10,8 +11,9 @@ def translate_text(text: str, dest: str = 'ru') -> str:
     
     translator = Translator()
     try:
-        # Используем синхронный метод перевода
-        result = translator.translate(text, dest=dest)
+        loop = asyncio.get_event_loop()
+        # Используем run_in_executor для совместимости с googletrans 4.x
+        result = await loop.run_in_executor(None, lambda: translator.translate(text, dest=dest))
         return result.text
     except Exception:
         return text

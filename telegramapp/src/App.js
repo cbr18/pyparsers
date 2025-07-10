@@ -12,6 +12,14 @@ function App() {
   const placeholder = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect width="100%" height="100%" fill="%23ccc"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%23666" font-size="16">Нет фото</text></svg>';
 
   useEffect(() => {
+    // Глобальный обработчик ошибок для диагностики
+    window.onerror = function (message, source, lineno, colno, error) {
+      alert('JS Error: ' + message);
+    };
+    window.onunhandledrejection = function (e) {
+      alert('Promise Error: ' + e.reason);
+    };
+
     fetch(`/cars`)
       .then(res => res.json())
       .then(data => {

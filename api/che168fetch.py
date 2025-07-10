@@ -1,10 +1,15 @@
 import os
 import time
 import random
+import logging
 from typing import Optional
 from models.car import Car
 from models.response import ApiResponse, Data
 from .base_parser import BaseCarParser
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 try:
     from selenium import webdriver
@@ -20,7 +25,7 @@ except ImportError:
 
 CHE168_URL = 'https://www.che168.com/china/a0_0msdgscncgpi1lto8csp3exx0/?pvareaid=102179#currengpostion'
 
-class DongchediParser(BaseCarParser):
+class Che168Parser(BaseCarParser):
     """Selenium парсер для сайта Che168"""
     
     def __init__(self, headless: bool = True):
@@ -123,10 +128,17 @@ class DongchediParser(BaseCarParser):
                 
                 # Парсим HTML
                 from bs4 import BeautifulSoup
+                import pprint
                 soup = BeautifulSoup(page_source, 'html.parser')
                 
                 cars_elements = soup.select('div.content.card-wrap ul.viewlist_ul li.cards-li')
                 cars = [self._parse_li_to_car(li) for li in cars_elements]
+                
+                # Логируем данные
+                logger.info("\n=== ПОЛУЧЕННЫЕ ДАННЫЕ ===")
+                logger.info(f"Найдено автомобилей: {len(cars)}")
+                logger.info("\nДетальная информация о автомобилях:")
+                logger.info(pprint.pformat(cars, indent=2, width=120))
                 
                 data = Data(
                     has_more=False,

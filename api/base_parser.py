@@ -1,12 +1,11 @@
 from abc import ABC, abstractmethod
-from typing import Optional
-from models.response import ApiResponse
+from typing import Optional, Any
 
 class BaseCarParser(ABC):
     """Базовый класс для всех парсеров автомобилей"""
     
     @abstractmethod
-    def fetch_cars(self, source: Optional[str] = None) -> ApiResponse:
+    def fetch_cars(self, source: Optional[str] = None) -> Any:
         """
         Основной метод для получения данных о машинах
         
@@ -14,7 +13,7 @@ class BaseCarParser(ABC):
             source: Источник данных (может быть 'url', путь к файлу и т.д.)  # убран 'local'
             
         Returns:
-            ApiResponse: Унифицированный ответ с данными о машинах
+            Any: Унифицированный ответ с данными о машинах
         """
         pass
     

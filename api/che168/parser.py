@@ -3,9 +3,9 @@ import time
 import random
 import logging
 from typing import Optional
-from models.car import Car
-from models.response import ApiResponse, Data
-from .base_parser import BaseCarParser
+from .models.car import Che168Car
+from .models.response import Che168ApiResponse, Che168Data
+from ..base_parser import BaseCarParser
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -79,6 +79,9 @@ class Che168Parser(BaseCarParser):
     
     def _wait_for_page_load(self, timeout: int = 30):
         """Ожидание загрузки страницы"""
+        if self.driver is None:
+            return False
+            
         try:
             # Ждем появления элементов с машинами
             WebDriverWait(self.driver, timeout).until(
@@ -90,6 +93,9 @@ class Che168Parser(BaseCarParser):
     
     def _scroll_page(self):
         """Прокрутка страницы для загрузки всего контента"""
+        if self.driver is None:
+            return
+            
         # Прокручиваем страницу несколько раз
         for i in range(3):
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
@@ -99,13 +105,20 @@ class Che168Parser(BaseCarParser):
             self.driver.execute_script("window.scrollTo(0, 0);")
             time.sleep(random.uniform(0.5, 1))
     
-    def fetch_cars(self, source: Optional[str] = 'url') -> ApiResponse:
+    def fetch_cars(self, source: Optional[str] = 'url') -> Che168ApiResponse:
         """
         Selenium парсер с полной имитацией браузера
         """
         if source == 'url':
             try:
                 self._setup_driver()
+                
+                if self.driver is None:
+                    return Che168ApiResponse(
+                        data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
+                        message="Не удалось создать драйвер",
+                        status=500
+                    )
                 
                 self.driver.get(CHE168_URL)
                 
@@ -114,8 +127,8 @@ class Che168Parser(BaseCarParser):
                 
                 # Ожидаем загрузки страницы
                 if not self._wait_for_page_load():
-                    return ApiResponse(
-                        data=Data(has_more=False, search_sh_sku_info_list=[], total=0),
+                    return Che168ApiResponse(
+                        data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
                         message="Страница не загрузилась",
                         status=404
                     )
@@ -140,21 +153,21 @@ class Che168Parser(BaseCarParser):
                 logger.info("\nДетальная информация о автомобилях:")
                 logger.info(pprint.pformat(cars, indent=2, width=120))
                 
-                data = Data(
+                data = Che168Data(
                     has_more=False,
                     search_sh_sku_info_list=cars,
                     total=len(cars)
                 )
                 
-                return ApiResponse(
+                return Che168ApiResponse(
                     data=data,
                     message="Success",
                     status=200
                 )
                 
             except Exception as e:
-                return ApiResponse(
-                    data=Data(has_more=False, search_sh_sku_info_list=[], total=0),
+                return Che168ApiResponse(
+                    data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
                     message=f"Ошибка: {str(e)}",
                     status=500
                 )
@@ -163,32 +176,41 @@ class Che168Parser(BaseCarParser):
                     self.driver.quit()
         else:
             # Для локального файла используем обычный парсинг
-            if source and source not in ('url',):  # убран 'local' из проверки
-                with open(source, 'r', encoding='utf-8') as f:
-                    from bs4 import BeautifulSoup
-                    soup = BeautifulSoup(f, 'html.parser')
-            else:
-                with open(HTML_FILE, 'r', encoding='utf-8') as f:
-                    from bs4 import BeautifulSoup
-                    soup = BeautifulSoup(f, 'html.parser')
-            
-            cars_elements = soup.select('div.content.card-wrap ul.viewlist_ul li.cards-li')
-            cars = [self._parse_li_to_car(li) for li in cars_elements]
-            
-            data = Data(
-                has_more=False,
-                search_sh_sku_info_list=cars,
-                total=len(cars)
-            )
-            
-            return ApiResponse(
-                data=data,
-                message="Success",
-                status=200
-            )
+            try:
+                if source and source not in ('url',):
+                    with open(source, 'r', encoding='utf-8') as f:
+                        from bs4 import BeautifulSoup
+                        soup = BeautifulSoup(f, 'html.parser')
+                else:
+                    return Che168ApiResponse(
+                        data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
+                        message="Не указан файл для парсинга",
+                        status=400
+                    )
+                
+                cars_elements = soup.select('div.content.card-wrap ul.viewlist_ul li.cards-li')
+                cars = [self._parse_li_to_car(li) for li in cars_elements]
+                
+                data = Che168Data(
+                    has_more=False,
+                    search_sh_sku_info_list=cars,
+                    total=len(cars)
+                )
+                
+                return Che168ApiResponse(
+                    data=data,
+                    message="Success",
+                    status=200
+                )
+            except Exception as e:
+                return Che168ApiResponse(
+                    data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
+                    message=f"Ошибка парсинга файла: {str(e)}",
+                    status=500
+                )
     
-    def _parse_li_to_car(self, li) -> Car:
-        """Приватный метод для парсинга элемента li в объект Car"""
+    def _parse_li_to_car(self, li) -> Che168Car:
+        """Приватный метод для парсинга элемента li в объект Che168Car"""
         attrs = li.attrs.copy()
         
         # Извлекаем основную информацию
@@ -253,7 +275,7 @@ class Che168Parser(BaseCarParser):
                 brand_name = title_parts[0]  # Первое слово - обычно марка
                 series_name = ' '.join(title_parts[1:3]) if len(title_parts) >= 3 else title_parts[1]
         
-        # Формируем данные для Car
+        # Формируем данные для Che168Car
         data = {
             'title': title,
             'sh_price': sh_price,
@@ -272,10 +294,4 @@ class Che168Parser(BaseCarParser):
             'tags_v2': ', '.join(tags) if tags else None,
         }
         
-        return Car(**data)
-
-# Функция для обратной совместимости
-def fetch_dongchedi_cars(source: Optional[str] = 'url') -> ApiResponse:
-    """Функция для обратной совместимости"""
-    parser = DongchediParser()
-    return parser.fetch_cars(source)
+        return Che168Car(**data) 

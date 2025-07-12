@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.dongchedi.parser import DongchediParser
@@ -5,14 +6,24 @@ from api.che168.parser import Che168Parser
 from converters import decode_sh_price
 from typing import List, Dict
 
+# Load environment variables
+from dotenv import load_dotenv
+load_dotenv()
+
 app = FastAPI()
+
+# CORS configuration from environment variables
+cors_origins = os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
+cors_credentials = os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() == "true"
+cors_methods = os.getenv("CORS_ALLOW_METHODS", "GET,POST,PUT,DELETE,OPTIONS").split(",")
+cors_headers = os.getenv("CORS_ALLOW_HEADERS", "*").split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=cors_origins,
+    allow_credentials=cors_credentials,
+    allow_methods=cors_methods,
+    allow_headers=cors_headers,
 )
 
 @app.get("/cars/dongchedi")

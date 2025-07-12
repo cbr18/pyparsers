@@ -1,6 +1,6 @@
 {
   "/cars": {
-    "target": "http://87.225.105.180:8000",
+    "target": "http://localhost:8000",
     "secure": false,
     "changeOrigin": true
   }

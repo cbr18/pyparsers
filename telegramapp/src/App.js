@@ -20,7 +20,7 @@ function App() {
       alert('Promise Error: ' + e.reason);
     };
 
-    fetch(`/cars`)
+    fetch(`/cars/che168`)
       .then(res => res.json())
       .then(data => {
         setCars(data.data && Array.isArray(data.data.search_sh_sku_info_list) ? data.data.search_sh_sku_info_list : []);

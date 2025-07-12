@@ -59,6 +59,87 @@ response = parser.fetch_cars('url')  # Selenium парсинг
 - **Che168Parser** - Selenium парсер для сайта Che168
 - **DongchediParser** - парсер для API Dongchedi
 
+## API Эндпоинты
+
+### Dongchedi API
+- `GET /cars/dongchedi` - Получить первую страницу данных
+- `GET /cars/dongchedi/page/{page}` - Получить данные конкретной страницы
+
+### Che168 API
+- `GET /cars/che168` - Получить первую страницу данных
+- `GET /cars/che168/page/{page}` - Получить данные конкретной страницы
+
+### Примеры использования API
+
+#### Получение первой страницы dongchedi
+```bash
+curl http://localhost:8000/cars/dongchedifetch
+```
+
+#### Получение конкретной страницы dongchedi
+```bash
+curl http://localhost:8000/cars/dongchedi/page/2
+```
+
+#### Получение конкретной страницы che168
+```bash
+curl http://localhost:8000/cars/che168/page/2
+```
+
+#### Загрузка всех страниц dongchedi
+```python
+import requests
+
+def fetch_all_pages():
+    page = 1
+    all_cars = []
+    
+    while True:
+        response = requests.get(f"http://localhost:8000/cars/dongchedi/page/{page}")
+        data = response.json()
+        
+        if data["status"] != 200:
+            break
+            
+        cars = data["data"]["search_sh_sku_info_list"]
+        all_cars.extend(cars)
+        
+        if not data["data"]["has_more"]:
+            break
+            
+        page += 1
+    
+    return all_cars
+```
+
+#### Загрузка всех страниц che168
+```python
+import requests
+import time
+
+def fetch_all_che168_pages(max_pages=5, delay=2.0):
+    all_cars = []
+    
+    for page in range(1, max_pages + 1):
+        response = requests.get(f"http://localhost:8000/cars/che168/page/{page}")
+        data = response.json()
+        
+        if data["status"] != 200:
+            break
+            
+        cars = data["data"]["search_sh_sku_info_list"]
+        all_cars.extend(cars)
+        
+        if not data["data"]["has_more"]:
+            break
+            
+        # Задержка между запросами для избежания блокировки
+        if page < max_pages:
+            time.sleep(delay)
+    
+    return all_cars
+```
+
 ## Использование
 
 ### Базовое использование
@@ -89,11 +170,14 @@ response = parser.fetch_cars('url')   # Парсим с сайта
 - Поддерживает прокрутку страницы для загрузки всего контента
 - Имитирует человеческое поведение (случайные задержки, движения мыши)
 - Работает как с URL, так и с локальными файлами
+- Поддерживает пагинацию через API эндпоинт `/cars/che168/page/{page}`
+- URL страниц: `https://www.che168.com/china/a0_0msdgscncgpi1lto8csp{pagenumber}exx0/`
 
 ### Dongchedi Parser
 - Использует официальное API
 - Работает стабильно и быстро
 - Возвращает структурированные данные
+- Поддерживает пагинацию через API эндпоинт `/cars/dongchedi/page/{page}`
 
 ## Модели данных
 

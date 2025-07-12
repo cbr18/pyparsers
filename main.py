@@ -1,5 +1,6 @@
 import asyncio
-from api.parser_factory import ParserFactory
+from api.che168.parser import Che168Parser
+from api.dongchedi.parser import DongchediParser
 from converters import decode_sh_price
 
 async def print_car_info(car, source_name="Unknown"):
@@ -47,18 +48,32 @@ async def print_car_info(car, source_name="Unknown"):
 
 async def main():
     """Основная функция для работы с парсерами"""
-    print("CarsParser - Парсер автомобилей (Dongchedi)")
+    print("CarsParser - Парсер автомобилей")
     print("=" * 50)
     
-    # Получаем доступные парсеры
-    available_parsers = ParserFactory.get_available_parsers()
-    print(f"Доступные парсеры: {available_parsers}")
-    print()
+    # Тестируем Che168 парсер
+    print("=== Парсинг Che168 ===")
+    try:
+        che168_parser = Che168Parser()
+        che168_response = che168_parser.fetch_cars()
+        
+        if che168_response.data and che168_response.data.search_sh_sku_info_list:
+            che168_cars = che168_response.data.search_sh_sku_info_list
+            print(f"✅ Найдено {len(che168_cars)} машин на Che168")
+            
+            # Показываем первые 2 машины
+            for i, car in enumerate(che168_cars[:2]):
+                await print_car_info(car, f"Che168 (машина {i+1})")
+        else:
+            print("❌ Машины не найдены на Che168")
+            
+    except Exception as e:
+        print(f"❌ Ошибка при парсинге Che168: {e}")
     
     # Тестируем Dongchedi парсер
-    print("=== Парсинг Dongchedi ===")
+    print("\n=== Парсинг Dongchedi ===")
     try:
-        dongchedi_parser = ParserFactory.get_parser('dongchedi')
+        dongchedi_parser = DongchediParser()
         dongchedi_response = dongchedi_parser.fetch_cars()
         
         if dongchedi_response.data and dongchedi_response.data.search_sh_sku_info_list:

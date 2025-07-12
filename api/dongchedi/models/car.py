@@ -16,4 +16,5 @@ class DongchediCar(BaseModel):
     series_id: Optional[int] = None
     shop_id: Optional[str] = None
     car_id: Optional[int] = None
-    tags_v2: Optional[str] = None 
+    tags_v2: Optional[str] = None
+    sku_id: Optional[int] = None 

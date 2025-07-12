@@ -23,14 +23,17 @@ except ImportError:
     SELENIUM_AVAILABLE = False
     print("Selenium не установлен. Установите: pip install selenium")
 
-CHE168_URL = 'https://www.che168.com/china/a0_0msdgscncgpi1lto8csp3exx0/?pvareaid=102179#currengpostion'
-
 class Che168Parser(BaseCarParser):
     """Selenium парсер для сайта Che168"""
     
     def __init__(self, headless: bool = True):
         self.headless = headless
         self.driver = None
+        
+    def _build_url(self, page: int = 1) -> str:
+        """Строит URL с номером страницы для che168"""
+        # Базовая ссылка: https://www.che168.com/china/a0_0msdgscncgpi1lto8csp{pagenumber}exx0/
+        return f'https://www.che168.com/china/a0_0msdgscncgpi1lto8csp{page}exx0/?pvareaid=102179#currengpostion'
         
     def _setup_driver(self):
         """Настройка Chrome драйвера"""
@@ -108,7 +111,25 @@ class Che168Parser(BaseCarParser):
     def fetch_cars(self, source: Optional[str] = 'url') -> Che168ApiResponse:
         """
         Selenium парсер с полной имитацией браузера
+        По умолчанию загружает первую страницу
         """
+        return self.fetch_cars_by_page(1, source)
+    
+    def fetch_cars_by_page(self, page: int, source: Optional[str] = 'url') -> Che168ApiResponse:
+        """
+        Selenium парсер для конкретной страницы
+        
+        Args:
+            page: Номер страницы (начиная с 1)
+            source: Источник данных ('url' или путь к файлу)
+        """
+        # Ограничение: максимум 100 страниц
+        if page > 100:
+            return Che168ApiResponse(
+                data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
+                message=f"Страница {page} не найдена",
+                status=404
+            )
         if source == 'url':
             try:
                 self._setup_driver()
@@ -120,7 +141,11 @@ class Che168Parser(BaseCarParser):
                         status=500
                     )
                 
-                self.driver.get(CHE168_URL)
+                # Строим URL с номером страницы
+                url = self._build_url(page)
+                logger.info(f"Загружаем страницу {page}: {url}")
+                
+                self.driver.get(url)
                 
                 # Случайная задержка для имитации человеческого поведения
                 time.sleep(random.uniform(2, 4))
@@ -129,7 +154,7 @@ class Che168Parser(BaseCarParser):
                 if not self._wait_for_page_load():
                     return Che168ApiResponse(
                         data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
-                        message="Страница не загрузилась",
+                        message=f"Страница {page} не найдена",
                         status=404
                     )
                 
@@ -147,14 +172,28 @@ class Che168Parser(BaseCarParser):
                 cars_elements = soup.select('div.content.card-wrap ul.viewlist_ul li.cards-li')
                 cars = [self._parse_li_to_car(li) for li in cars_elements]
                 
+                # Фильтруем рекламные блоки (car_id == None)
+                cars = [car for car in cars if car.car_id is not None]
+
+                # Если данных нет или список пуст, считаем что страницы не существует
+                if not cars:
+                    return Che168ApiResponse(
+                        data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
+                        message=f"Страница {page} не найдена",
+                        status=404
+                    )
+                
                 # Логируем данные
-                logger.info("\n=== ПОЛУЧЕННЫЕ ДАННЫЕ ===")
+                logger.info(f"\n=== ПОЛУЧЕННЫЕ ДАННЫЕ СТРАНИЦЫ {page} ===")
                 logger.info(f"Найдено автомобилей: {len(cars)}")
                 logger.info("\nДетальная информация о автомобилях:")
                 logger.info(pprint.pformat(cars, indent=2, width=120))
                 
+                # Проверяем, есть ли еще страницы (ищем пагинацию)
+                has_more = self._check_has_more_pages(soup)
+                
                 data = Che168Data(
-                    has_more=False,
+                    has_more=has_more,
                     search_sh_sku_info_list=cars,
                     total=len(cars)
                 )
@@ -168,8 +207,8 @@ class Che168Parser(BaseCarParser):
             except Exception as e:
                 return Che168ApiResponse(
                     data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
-                    message=f"Ошибка: {str(e)}",
-                    status=500
+                    message=f"Страница {page} не найдена",
+                    status=404
                 )
             finally:
                 if self.driver:
@@ -189,7 +228,19 @@ class Che168Parser(BaseCarParser):
                     )
                 
                 cars_elements = soup.select('div.content.card-wrap ul.viewlist_ul li.cards-li')
-                cars = [self._parse_li_to_car(li) for li in cars_elements]
+                cars = []
+                for li in cars_elements:
+                    car = self._parse_li_to_car(li)
+                    if car.car_id is not None:
+                        cars.append(car)
+
+                # Если данных нет или список пуст, считаем что страницы не существует
+                if not cars:
+                    return Che168ApiResponse(
+                        data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
+                        message=f"Страница {page} не найдена",
+                        status=404
+                    )
                 
                 data = Che168Data(
                     has_more=False,
@@ -205,9 +256,28 @@ class Che168Parser(BaseCarParser):
             except Exception as e:
                 return Che168ApiResponse(
                     data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
-                    message=f"Ошибка парсинга файла: {str(e)}",
-                    status=500
+                    message=f"Страница {page} не найдена",
+                    status=404
                 )
+    
+    def _check_has_more_pages(self, soup) -> bool:
+        """Проверяет, есть ли еще страницы"""
+        try:
+            # Ищем пагинацию
+            pagination = soup.select_one('div.pagination')
+            if pagination:
+                # Ищем кнопку "следующая страница"
+                next_button = pagination.select_one('a.next')
+                if next_button and not 'disabled' in next_button.get('class', []):
+                    return True
+            
+            # Альтернативный способ - проверяем количество элементов
+            cars_elements = soup.select('div.content.card-wrap ul.viewlist_ul li.cards-li')
+            return len(cars_elements) > 0  # Если есть машины, возможно есть еще страницы
+            
+        except Exception as e:
+            logger.warning(f"Ошибка при проверке пагинации: {e}")
+            return False
     
     def _parse_li_to_car(self, li) -> Che168Car:
         """Приватный метод для парсинга элемента li в объект Che168Car"""

@@ -8,15 +8,31 @@ class DongchediParser(BaseCarParser):
     """Парсер для сайта Dongchedi"""
     
     def __init__(self):
-        self.api_url = "https://www.dongchedi.com/motor/pc/sh/sh_sku_list?aid=1839&app_name=auto_web_pc&sh_city_name=北京&page=1&limit=30&sort_type=4"
+        self.base_url = "https://www.dongchedi.com/motor/pc/sh/sh_sku_list"
         self.headers = {
             "Content-Type": "application/json",
             "User-Agent": "Mozilla/5.0"
         }
     
+    def _build_url(self, page: int = 1) -> str:
+        """Строит URL с параметрами запроса"""
+        params = {
+            "aid": "1839",
+            "app_name": "auto_web_pc",
+            "sh_city_name": "北京",
+            "page": str(page),
+            "limit": "80",
+            "sort_type": "4"
+        }
+        
+        # Строим URL с параметрами
+        param_string = "&".join([f"{k}={v}" for k, v in params.items()])
+        return f"{self.base_url}?{param_string}"
+    
     def fetch_cars(self, source: Optional[str] = None) -> DongchediApiResponse:
         """
         Выполняет запрос к API dongchedi и возвращает распарсенный DongchediApiResponse.
+        По умолчанию загружает первую страницу.
         
         Args:
             source: Игнорируется для этого парсера, так как используется API
@@ -24,8 +40,21 @@ class DongchediParser(BaseCarParser):
         Returns:
             DongchediApiResponse: Унифицированный ответ с данными о машинах
         """
+        return self.fetch_cars_by_page(1)
+    
+    def fetch_cars_by_page(self, page: int) -> DongchediApiResponse:
+        """
+        Выполняет запрос к API dongchedi для конкретной страницы.
+        
+        Args:
+            page: Номер страницы (начиная с 1)
+            
+        Returns:
+            DongchediApiResponse: Унифицированный ответ с данными о машинах
+        """
         try:
-            response = requests.post(self.api_url, headers=self.headers)
+            url = self._build_url(page)
+            response = requests.post(url, headers=self.headers)
             response.raise_for_status()
             data = response.json()
             
@@ -35,6 +64,14 @@ class DongchediParser(BaseCarParser):
                 for car_data in data['data']['search_sh_sku_info_list']:
                     car = DongchediCar(**car_data)
                     cars.append(car)
+            
+            # Если данных нет или список пуст, считаем что страницы не существует
+            if not cars:
+                return DongchediApiResponse(
+                    data=DongchediData(has_more=False, search_sh_sku_info_list=[], total=0),
+                    message=f"Страница {page} не найдена",
+                    status=404
+                )
             
             dongchedi_data = DongchediData(
                 has_more=data.get('data', {}).get('has_more', False),
@@ -51,6 +88,6 @@ class DongchediParser(BaseCarParser):
         except Exception as e:
             return DongchediApiResponse(
                 data=DongchediData(has_more=False, search_sh_sku_info_list=[], total=0),
-                message=f"Ошибка: {str(e)}",
-                status=500
+                message=f"Страница {page} не найдена",
+                status=404
             ) 

@@ -17,9 +17,18 @@ datahub/
 ├── database/
 │   ├── connection.go       # Подключение к PostgreSQL
 │   └── migrations/         # SQL миграции
+├── interfaces/
+│   ├── parser.go          # Интерфейс для парсеров
+│   ├── car_repository.go  # Интерфейс для работы с БД
+│   └── sync_service.go    # Интерфейс для синхронизации
 ├── services/
 │   ├── car_service.go      # Бизнес-логика работы с машинами
-│   └── parser_service.go   # Интеграция с Python API
+│   ├── sync_service.go     # Сервис синхронизации
+│   └── parser_factory.go   # Фабрика для создания парсеров
+├── parsers/
+│   ├── dongchedi.go       # Реализация парсера Dongchedi
+│   ├── che168.go          # Реализация парсера Che168
+│   └── base.go            # Базовая структура парсера
 ├── handlers/
 │   └── api.go             # HTTP API endpoints
 ├── scheduler/
@@ -40,7 +49,8 @@ datahub/
 - **Источники данных**: 
   - Dongchedi (dongchedi.com) - endpoint `/cars/dongchedi/*`
   - Che168 (che168.com) - endpoint `/cars/che168/*`
-- **Поле источника**: В БД сохраняется источник данных (dongchedi/che168) в зависимости от используемого endpoint
+  - **Расширяемость**: Легкое добавление новых парсеров через интерфейсы
+- **Поле источника**: В БД сохраняется источник данных (dongchedi/che168/...) в зависимости от используемого парсера
 - **Обработка ошибок**: Retry логика при сбоях API с экспоненциальной задержкой
 - **Логирование**: Детальное логирование всех операций синхронизации с временными метками
 - **Мониторинг прогресса**: Отслеживание прогресса длительных операций синхронизации
@@ -80,6 +90,19 @@ CREATE INDEX idx_cars_year ON cars(car_year);
 CREATE INDEX idx_cars_price ON cars(sh_price);
 CREATE INDEX idx_cars_car_id ON cars(car_id);
 CREATE INDEX idx_cars_created_at ON cars(created_at);
+CREATE INDEX idx_cars_city ON cars(car_source_city_name);
+CREATE INDEX idx_cars_series ON cars(series_name);
+
+-- Индексы для поиска
+CREATE INDEX idx_cars_title_gin ON cars USING gin(to_tsvector('russian', title));
+CREATE INDEX idx_cars_car_name_gin ON cars USING gin(to_tsvector('russian', car_name));
+CREATE INDEX idx_cars_brand_name_gin ON cars USING gin(to_tsvector('russian', brand_name));
+CREATE INDEX idx_cars_series_name_gin ON cars USING gin(to_tsvector('russian', series_name));
+
+-- Составные индексы для фильтров
+CREATE INDEX idx_cars_brand_year ON cars(brand_name, car_year);
+CREATE INDEX idx_cars_brand_price ON cars(brand_name, sh_price);
+CREATE INDEX idx_cars_city_price ON cars(car_source_city_name, sh_price);
 ```
 
 ### 3. REST API
@@ -101,32 +124,84 @@ CREATE INDEX idx_cars_created_at ON cars(created_at);
   - `sort_by` (string) - поле для сортировки ('price', 'year', 'created_at')
   - `sort_order` (string) - порядок сортировки ('asc', 'desc')
 
+**GET /api/cars/search**
+- Поиск машин по текстовому запросу
+- Параметры запроса:
+  - `q` (string, required) - поисковый запрос
+  - `page` (int, default: 1) - номер страницы
+  - `limit` (int, default: 20, max: 100) - количество машин на странице
+  - `source` (string) - фильтр по источнику
+  - `sort_by` (string) - поле для сортировки
+  - `sort_order` (string) - порядок сортировки
+- Поиск осуществляется по полям: title, car_name, brand_name, series_name
+
+**GET /api/cars/filters**
+- Получение доступных фильтров и их значений
+- Возвращает:
+  - Список брендов с количеством машин
+  - Список городов с количеством машин
+  - Диапазон цен (min/max)
+  - Диапазон лет (min/max)
+  - Список источников с количеством машин
+
 **GET /api/cars/{id}**
 - Получение детальной информации о машине по ID
 
 **GET /api/cars/sources**
 - Получение статистики по источникам данных
-- Возвращает количество машин по каждому источнику
+- Возвращает:
+  - Количество машин по каждому источнику
+  - Список всех доступных источников
+  - Статус каждого источника (active/inactive)
 
 **GET /api/cars/brands**
 - Получение списка всех брендов с количеством машин
+- Параметры:
+  - `search` (string) - поиск по названию бренда
+  - `limit` (int, default: 50) - количество результатов
 
 **GET /api/cars/cities**
 - Получение списка всех городов с количеством машин
+- Параметры:
+  - `search` (string) - поиск по названию города
+  - `limit` (int, default: 50) - количество результатов
+
+**GET /api/cars/series**
+- Получение списка всех серий с количеством машин
+- Параметры:
+  - `brand` (string) - фильтр по бренду
+  - `search` (string) - поиск по названию серии
+  - `limit` (int, default: 50) - количество результатов
+
+**GET /api/cars/price-range**
+- Получение статистики по ценам
+- Возвращает:
+  - Минимальную и максимальную цену
+  - Медианную цену
+  - Среднюю цену
+  - Количество машин в разных ценовых диапазонах
+
+**GET /api/cars/year-range**
+- Получение статистики по годам
+- Возвращает:
+  - Минимальный и максимальный год
+  - Количество машин по годам
+  - Популярные годы
 
 #### Endpoints для управления синхронизацией
 
-**POST /api/sync/dongchedi**
-- Принудительная синхронизация данных с Dongchedi
+**POST /api/sync/{source}**
+- Принудительная синхронизация данных с указанным источником
 - Параметры:
+  - `source` (string) - источник данных (dongchedi, che168, ...)
   - `full_sync` (bool, default: false) - полная синхронизация или инкрементальная
   - `force` (bool, default: false) - принудительный запуск даже если уже выполняется
 
-**POST /api/sync/che168**
-- Принудительная синхронизация данных с Che168
+**POST /api/sync/all**
+- Синхронизация всех доступных источников
 - Параметры:
   - `full_sync` (bool, default: false) - полная синхронизация или инкрементальная
-  - `force` (bool, default: false) - принудительный запуск даже если уже выполняется
+  - `parallel` (bool, default: true) - параллельная или последовательная синхронизация
 
 **GET /api/sync/status**
 - Получение статуса синхронизации
@@ -271,6 +346,8 @@ CORS_ALLOW_ORIGINS=*
 #### Требования
 - Время ответа API: < 200ms для простых запросов
 - Время ответа API с пагинацией: < 500ms
+- Время ответа API поиска: < 300ms
+- Время ответа API фильтров: < 100ms
 - Поддержка до 1000 одновременных запросов
 - Эффективное использование памяти
 - Полная синхронизация: может занимать до 6 часов
@@ -278,12 +355,14 @@ CORS_ALLOW_ORIGINS=*
 
 #### Оптимизации
 - Использование connection pool для БД
-- Кэширование часто запрашиваемых данных
+- Кэширование часто запрашиваемых данных (фильтры, статистика)
 - Оптимизированные SQL запросы с индексами
+- Full-text поиск с использованием PostgreSQL GIN индексов
 - Асинхронная обработка синхронизации
 - Batch операции для массовой вставки/обновления данных
 - Параллельная обработка страниц при полной синхронизации
 - Graceful shutdown для длительных операций
+- Кэширование результатов поиска и фильтров
 
 ### 9. Безопасность
 
@@ -312,6 +391,21 @@ CORS_ALLOW_ORIGINS=*
 - Проверка подключения к БД
 - Проверка доступности Python API
 
+## Архитектурные принципы
+
+### Интерфейсы и расширяемость
+- **Интерфейс Parser**: Единый интерфейс для всех парсеров
+- **Интерфейс CarRepository**: Абстракция для работы с БД
+- **Интерфейс SyncService**: Абстракция для синхронизации
+- **Фабрика парсеров**: Динамическое создание парсеров по имени
+- **Dependency Injection**: Внедрение зависимостей через интерфейсы
+
+### Добавление нового парсера
+1. Реализовать интерфейс `Parser`
+2. Добавить конфигурацию в `config.go`
+3. Зарегистрировать в фабрике парсеров
+4. Добавить в планировщик (опционально)
+
 ## Технические требования
 
 ### Зависимости
@@ -325,6 +419,7 @@ require (
     github.com/sirupsen/logrus v1.9.3        // Logging
     github.com/gin-contrib/cors v1.4.0       // CORS middleware
     github.com/go-playground/validator/v10 v10.14.0 // Validation
+    github.com/google/wire v0.5.0            // Dependency injection
 )
 ```
 
@@ -338,15 +433,19 @@ require (
 
 ### Этап 1: Базовая структура
 1. Настройка проекта и зависимостей
-2. Конфигурация и подключение к БД
-3. Модели данных
-4. Базовые миграции
+2. Определение интерфейсов (Parser, CarRepository, SyncService)
+3. Конфигурация и подключение к БД
+4. Модели данных
+5. Базовые миграции
+6. Фабрика парсеров
 
 ### Этап 2: API и сервисы
 1. HTTP API с пагинацией
-2. Сервисы для работы с данными
-3. Интеграция с Python API
-4. Обработка ошибок и валидация
+2. Сервисы для работы с данными (через интерфейсы)
+3. Реализация парсеров (Dongchedi, Che168)
+4. Интеграция с Python API
+5. Обработка ошибок и валидация
+6. Dependency injection
 
 ### Этап 3: Синхронизация
 1. Планировщик задач (полная и инкрементальная синхронизация)

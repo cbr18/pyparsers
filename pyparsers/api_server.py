@@ -5,10 +5,29 @@ from api.dongchedi.parser import DongchediParser
 from api.che168.parser import Che168Parser
 from converters import decode_sh_price
 from typing import List, Dict
+from datetime import datetime
 
 # Load environment variables
 from dotenv import load_dotenv
 load_dotenv()
+
+def _get_next_sort_number(existing_cars: List[Dict], source: str) -> int:
+    """
+    Получает следующий номер для нумерации машин.
+    При инкрементальном обновлении берет максимальный номер из существующих машин + 1.
+    При полном парсинге начинает с 1.
+    Новые машины получают большие номера (для сортировки по убыванию).
+    """
+    if not existing_cars:
+        return 1
+    
+    # Ищем максимальный sort_number среди машин того же источника
+    max_number = 0
+    for car in existing_cars:
+        if car.get('source') == source and car.get('sort_number'):
+            max_number = max(max_number, car['sort_number'])
+    
+    return max_number + 1
 
 app = FastAPI()
 
@@ -32,8 +51,13 @@ def get_dongchedi_cars():
     response = parser.fetch_cars()
     # Преобразуем в формат для совместимости с фронтендом
     filtered_cars = []
-    for car in response.data.search_sh_sku_info_list:
+    total_cars = len(response.data.search_sh_sku_info_list)
+    for i, car in enumerate(response.data.search_sh_sku_info_list):
         car_dict = car.dict()
+        car_dict.update({
+            'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
+            'source': 'dongchedi'
+        })
         if car_dict.get('sh_price'):
             car_dict['sh_price'] = decode_sh_price(car_dict['sh_price'])
         filtered_cars.append(car_dict)
@@ -60,8 +84,13 @@ def get_dongchedi_cars_by_page(page: int):
     response = parser.fetch_cars_by_page(page)
     # Преобразуем в формат для совместимости с фронтендом
     filtered_cars = []
-    for car in response.data.search_sh_sku_info_list:
+    total_cars = len(response.data.search_sh_sku_info_list)
+    for i, car in enumerate(response.data.search_sh_sku_info_list):
         car_dict = car.dict()
+        car_dict.update({
+            'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
+            'source': 'dongchedi'
+        })
         if car_dict.get('sh_price'):
             car_dict['sh_price'] = decode_sh_price(car_dict['sh_price'])
         filtered_cars.append(car_dict)
@@ -82,10 +111,20 @@ def get_che168_cars():
     parser = Che168Parser()
     response = parser.fetch_cars()
     # Преобразуем в формат для совместимости с фронтендом
+    cars_with_metadata = []
+    total_cars = len(response.data.search_sh_sku_info_list)
+    for i, car in enumerate(response.data.search_sh_sku_info_list):
+        car_dict = car.dict()
+        car_dict.update({
+            'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
+            'source': 'che168'
+        })
+        cars_with_metadata.append(car_dict)
+    
     return {
         "data": {
             "has_more": response.data.has_more,
-            "search_sh_sku_info_list": [car.dict() for car in response.data.search_sh_sku_info_list],
+            "search_sh_sku_info_list": cars_with_metadata,
             "total": response.data.total
         },
         "message": response.message,
@@ -103,10 +142,20 @@ def get_che168_cars_by_page(page: int):
     parser = Che168Parser()
     response = parser.fetch_cars_by_page(page)
     # Преобразуем в формат для совместимости с фронтендом
+    cars_with_metadata = []
+    total_cars = len(response.data.search_sh_sku_info_list)
+    for i, car in enumerate(response.data.search_sh_sku_info_list):
+        car_dict = car.dict()
+        car_dict.update({
+            'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
+            'source': 'che168'
+        })
+        cars_with_metadata.append(car_dict)
+    
     return {
         "data": {
             "has_more": response.data.has_more,
-            "search_sh_sku_info_list": [car.dict() for car in response.data.search_sh_sku_info_list],
+            "search_sh_sku_info_list": cars_with_metadata,
             "total": response.data.total,
             "current_page": page
         },
@@ -161,7 +210,13 @@ def get_dongchedi_all_cars():
         else:
             continue
         break
+    
+    # Добавляем sort_number по убыванию (новые машины - большие номера)
     total = len(all_cars)
+    for i, car in enumerate(all_cars):
+        car['sort_number'] = total - i
+        car['source'] = 'dongchedi'
+    
     return {
         "data": {
             "search_sh_sku_info_list": all_cars,
@@ -188,6 +243,9 @@ def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
         car_id = car.get('car_id') or car.get('sku_id') or car.get('link')
         if car_id:
             existing_ids.add(car_id)
+    
+    # Получаем следующий номер для нумерации
+    next_sort_number = _get_next_sort_number(existing_cars, 'dongchedi')
     
     # Парсим до первого совпадения
     page = 1
@@ -217,6 +275,12 @@ def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
             break
         page += 1
     
+    # Добавляем sort_number по убыванию (новые машины - большие номера)
+    total_new_cars = len(new_cars)
+    for i, car in enumerate(new_cars):
+        car['sort_number'] = next_sort_number + total_new_cars - i - 1
+        car['source'] = 'dongchedi'
+    
     return {
         "data": {
             "search_sh_sku_info_list": new_cars,
@@ -245,6 +309,9 @@ def get_che168_incremental_cars(existing_cars: List[Dict]):
         if car_id:
             existing_ids.add(car_id)
     
+    # Получаем следующий номер для нумерации
+    next_sort_number = _get_next_sort_number(existing_cars, 'che168')
+    
     # Парсим до первого совпадения
     page = 1
     while True:
@@ -270,6 +337,12 @@ def get_che168_incremental_cars(existing_cars: List[Dict]):
         if not getattr(response.data, 'has_more', False):
             break
         page += 1
+    
+    # Добавляем sort_number по убыванию (новые машины - большие номера)
+    total_new_cars = len(new_cars)
+    for i, car in enumerate(new_cars):
+        car['sort_number'] = next_sort_number + total_new_cars - i - 1
+        car['source'] = 'che168'
     
     return {
         "data": {
@@ -324,7 +397,13 @@ def get_che168_all_cars():
         else:
             continue
         break
+    
+    # Добавляем sort_number по убыванию (новые машины - большие номера)
     total = len(all_cars)
+    for i, car in enumerate(all_cars):
+        car['sort_number'] = total - i
+        car['source'] = 'che168'
+    
     return {
         "data": {
             "search_sh_sku_info_list": all_cars,

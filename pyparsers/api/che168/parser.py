@@ -2,7 +2,7 @@ import os
 import time
 import random
 import logging
-from typing import Optional
+from typing import Optional, Tuple
 from .models.car import Che168Car
 from .models.response import Che168ApiResponse, Che168Data
 from ..base_parser import BaseCarParser
@@ -385,3 +385,282 @@ class Che168Parser(BaseCarParser):
         }
         
         return Che168Car(**data) 
+
+    def fetch_car_detail(self, car_url: str):
+        """
+        Парсит детальную информацию о машине по car_url через selenium/beautifulsoup.
+        Возвращает (Che168Car | None, meta: dict)
+        """
+        import time
+        import random
+        import json
+        from selenium import webdriver
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.chrome.options import Options
+        from selenium.common.exceptions import TimeoutException, WebDriverException
+        from bs4 import BeautifulSoup
+        clean_url = car_url.split('?')[0].split('#')[0]
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
+        prefs = {
+            "profile.managed_default_content_settings.images": 2,
+            "profile.managed_default_content_settings.media_stream": 2,
+            "profile.managed_default_content_settings.plugins": 2,
+        }
+        chrome_options.add_experimental_option("prefs", prefs)
+        chrome_options.add_argument("--disable-extensions")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--disable-web-security")
+        user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        ]
+        chrome_options.add_argument(f"--user-agent={random.choice(user_agents)}")
+        driver = None
+        soup = None
+        try:
+            driver = webdriver.Chrome(options=chrome_options)
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            driver.get(clean_url)
+            time.sleep(random.uniform(2, 3))
+            try:
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+            except TimeoutException:
+                pass
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(1)
+            driver.execute_script("window.scrollTo(0, 0);")
+            time.sleep(1)
+            page_source = driver.page_source
+            soup = BeautifulSoup(page_source, 'html.parser')
+        finally:
+            if driver:
+                driver.quit()
+        if soup is None:
+            return None, {"is_available": False, "error": "Не удалось загрузить страницу", "status": 500}
+        car_info = {
+            "title": None,
+            "sh_price": None,
+            "image": None,
+            "link": clean_url,
+            "car_name": None,
+            "car_year": None,
+            "car_mileage": None,
+            "car_source_city_name": None,
+            "brand_name": None,
+            "series_name": None,
+            "brand_id": None,
+            "series_id": None,
+            "shop_id": None,
+            "car_id": None,
+            "tags_v2": None,
+            "sku_id": None,
+            "sort_number": 1,
+            "source": "che168"
+        }
+        title_tag = soup.find('title')
+        if title_tag:
+            car_info['title'] = title_tag.get_text().strip()
+            car_info['car_name'] = title_tag.get_text().strip()
+        price_selectors = [
+            'b.num-price',
+            '.num-price',
+            '[class*="price"]',
+            '.price',
+            'span[class*="price"]',
+            'p[class*="price"]',
+            '.font-zmQZz5CrbrbHudeQ',
+            '[class*="font-zmQZz5CrbrbHudeQ"]'
+        ]
+        for selector in price_selectors:
+            price_elements = soup.select(selector)
+            if price_elements:
+                for elem in price_elements:
+                    price_text = elem.get_text().strip()
+                    if any(char in price_text for char in ['万', '元', '¥', '￥', '.']):
+                        car_info['sh_price'] = price_text
+                        break
+                if car_info['sh_price']:
+                    break
+        meta_description = soup.find('meta', attrs={'name': 'description'})
+        if meta_description and hasattr(meta_description, 'get'):
+            content = meta_description.get('content', '')
+            if content:
+                car_info['tags_v2'] = content
+        script_tags = soup.find_all('script')
+        for script in script_tags:
+            if script.string and '__NEXT_DATA__' in script.string:
+                try:
+                    json_start = script.string.find('{')
+                    if json_start != -1:
+                        json_data = script.string[json_start:]
+                        brace_count = 0
+                        json_end = 0
+                        for i, char in enumerate(json_data):
+                            if char == '{':
+                                brace_count += 1
+                            elif char == '}':
+                                brace_count -= 1
+                                if brace_count == 0:
+                                    json_end = i + 1
+                                    break
+                        if json_end > 0:
+                            json_str = json_data[:json_end]
+                            data = json.loads(json_str)
+                            if 'props' in data and 'pageProps' in data['props']:
+                                page_props = data['props']['pageProps']
+                                if 'skuDetail' in page_props:
+                                    sku_detail = page_props['skuDetail']
+                                    if 'car_info' in sku_detail:
+                                        car_data = sku_detail['car_info']
+                                        if 'car_name' in car_data:
+                                            car_info['car_name'] = car_data['car_name']
+                                        if 'car_price' in car_data:
+                                            car_info['sh_price'] = car_data['car_price']
+                                        if 'year' in car_data:
+                                            car_info['car_year'] = car_data['year']
+                                        if 'mileage' in car_data:
+                                            car_info['car_mileage'] = car_data['mileage']
+                                        if 'brand_name' in car_data:
+                                            car_info['brand_name'] = car_data['brand_name']
+                                        if 'series_name' in car_data:
+                                            car_info['series_name'] = car_data['series_name']
+                                        if 'brand_id' in car_data:
+                                            car_info['brand_id'] = car_data['brand_id']
+                                        if 'series_id' in car_data:
+                                            car_info['series_id'] = car_data['series_id']
+                                    if 'shop_info' in sku_detail:
+                                        shop_data = sku_detail['shop_info']
+                                        if 'shop_name' in shop_data:
+                                            car_info['car_source_city_name'] = shop_data['shop_name']
+                                        if 'shop_id' in shop_data:
+                                            car_info['shop_id'] = shop_data['shop_id']
+                                        if 'shop_address' in shop_data:
+                                            car_info['car_source_city_name'] = shop_data['shop_address']
+                                    if 'head_images' in sku_detail and sku_detail['head_images']:
+                                        car_info['image'] = sku_detail['head_images'][0]
+                                    if 'sh_car_desc' in sku_detail:
+                                        car_info['tags_v2'] = sku_detail['sh_car_desc']
+                                    if 'sku_id' in sku_detail:
+                                        car_info['car_id'] = sku_detail['sku_id']
+                                        car_info['sku_id'] = sku_detail['sku_id']
+                except Exception as e:
+                    continue
+        year_input = soup.find('input', {'id': 'hiddealerYear'})
+        if year_input and year_input.get('value'):
+            try:
+                car_info['car_year'] = int(year_input.get('value'))
+            except (ValueError, TypeError):
+                pass
+        mileage_input = soup.find('input', {'id': 'car_mileage'})
+        if mileage_input and mileage_input.get('value'):
+            try:
+                mileage_value = mileage_input.get('value')
+                car_info['car_mileage'] = f"{mileage_value}万公里"
+            except (ValueError, TypeError):
+                pass
+        brand_input = soup.find('input', {'id': 'car_brandid'})
+        if brand_input and brand_input.get('value'):
+            try:
+                car_info['brand_id'] = int(brand_input.get('value'))
+            except (ValueError, TypeError):
+                pass
+        series_input = soup.find('input', {'id': 'car_seriesid'})
+        if series_input and series_input.get('value'):
+            try:
+                car_info['series_id'] = int(series_input.get('value'))
+            except (ValueError, TypeError):
+                pass
+        dealer_input = soup.find('input', {'id': 'car_dealerid'})
+        if dealer_input and dealer_input.get('value'):
+            car_info['shop_id'] = dealer_input.get('value')
+        else:
+            url_parts = clean_url.split('/')
+            if len(url_parts) >= 4:
+                car_info['shop_id'] = url_parts[3]
+        img_elements = soup.find_all('img')
+        for img in img_elements:
+            src = img.get('src') or img.get('data-src')
+            if src and ('car' in src.lower() or 'auto' in src.lower() or '2sc' in src):
+                if src.startswith('//'):
+                    src = 'https:' + src
+                car_info['image'] = src
+                break
+        dealer_selectors = [
+            'span.merchant-name',
+            '.merchant-name',
+            '[class*="merchant"]',
+            '.dealer-name',
+            '[class*="dealer"]'
+        ]
+        for selector in dealer_selectors:
+            dealer_elem = soup.select_one(selector)
+            if dealer_elem:
+                dealer_text = dealer_elem.get_text().strip()
+                if dealer_text and len(dealer_text) < 100:
+                    car_info['car_source_city_name'] = dealer_text
+                    break
+        address_selectors = [
+            'div.merchant-address',
+            '.merchant-address',
+            '[class*="address"]',
+            '.dealer-address'
+        ]
+        for selector in address_selectors:
+            address_elem = soup.select_one(selector)
+            if address_elem:
+                address_text = address_elem.get_text().strip()
+                if address_text and len(address_text) < 200:
+                    car_info['car_source_city_name'] = address_text
+                    break
+        car_id = clean_url.split('/')[-1].replace('.html', '')
+        car_info['car_id'] = car_id
+        car_info['sku_id'] = car_id
+        if car_info['title']:
+            title_parts = car_info['title'].split()
+            if len(title_parts) >= 2:
+                for part in title_parts[:3]:
+                    if len(part) > 1 and not any(char in part for char in ['【', '】', '年', '款', 'km']):
+                        car_info['brand_name'] = part
+                        break
+                if car_info['brand_name']:
+                    brand_index = -1
+                    for i, part in enumerate(title_parts):
+                        if part == car_info['brand_name']:
+                            brand_index = i
+                            break
+                    if brand_index >= 0 and brand_index + 1 < len(title_parts):
+                        series_part = title_parts[brand_index + 1]
+                        if len(series_part) > 1 and not any(char in series_part for char in ['【', '】', '年', '款', 'km']):
+                            car_info['series_name'] = series_part
+        page_text = soup.get_text()
+        available_indicators = [
+            "我要询价", "查看电话", "询价", "联系", "电话", "咨询", 
+            "askprice", "phone", "contact", "inquiry"
+        ]
+        unavailable_indicators = [
+            "已售", "售出", "已卖出", "下架", "已下架", "已成交", 
+            "sold", "sale", "unavailable", "not available"
+        ]
+        is_available = False
+        if any(indicator in page_text for indicator in available_indicators):
+            is_available = True
+        elif any(indicator in page_text for indicator in unavailable_indicators):
+            is_available = False
+        else:
+            is_available = car_info['sh_price'] is not None and car_info['sh_price'] != ''
+        car_info['is_available'] = is_available
+        try:
+            car_obj = Che168Car(**{k: v for k, v in car_info.items() if k in Che168Car.__fields__})
+        except Exception as e:
+            return None, {"is_available": False, "error": str(e), "status": 500}
+        return car_obj, {"is_available": is_available, "status": 200, "link": clean_url} 

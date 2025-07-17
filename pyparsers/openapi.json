@@ -5,17 +5,300 @@
         "version": "0.1.0"
     },
     "paths": {
-        "/cars": {
+        "/cars/dongchedi": {
             "get": {
-                "summary": "Get Cars",
-                "operationId": "get_cars_cars_get",
+                "summary": "Get Dongchedi Cars",
+                "operationId": "get_dongchedi_cars_cars_dongchedi_get",
                 "responses": {
                     "200": {
                         "description": "Successful Response",
                         "content": {
                             "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cars/dongchedi/page/{page}": {
+            "get": {
+                "summary": "Get Dongchedi Cars By Page",
+                "description": "Получает данные о машинах с dongchedi для конкретной страницы\n\nArgs:\n    page: Номер страницы (начиная с 1)",
+                "operationId": "get_dongchedi_cars_by_page_cars_dongchedi_page__page__get",
+                "parameters": [
+                    {
+                        "name": "page",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "title": "Page"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/ApiResponse"
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cars/che168": {
+            "get": {
+                "summary": "Get Che168 Cars",
+                "operationId": "get_che168_cars_cars_che168_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cars/che168/page/{page}": {
+            "get": {
+                "summary": "Get Che168 Cars By Page",
+                "description": "Получает данные о машинах с che168 для конкретной страницы\n\nArgs:\n    page: Номер страницы (начиная с 1)",
+                "operationId": "get_che168_cars_by_page_cars_che168_page__page__get",
+                "parameters": [
+                    {
+                        "name": "page",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "title": "Page"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cars/dongchedi/all": {
+            "get": {
+                "summary": "Get Dongchedi All Cars",
+                "description": "Получает все машины со всех страниц dongchedi, затем повторно проверяет первые страницы и добавляет только новые машины до первого совпадения.\nЭкономит память: хранит только уникальные id машин.",
+                "operationId": "get_dongchedi_all_cars_cars_dongchedi_all_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cars/dongchedi/incremental": {
+            "post": {
+                "summary": "Get Dongchedi Incremental Cars",
+                "description": "Получает только новые машины с dongchedi до первого совпадения с существующими.\n\nArgs:\n    existing_cars: Список существующих машин с полями car_id/sku_id/link",
+                "operationId": "get_dongchedi_incremental_cars_cars_dongchedi_incremental_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "items": {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                },
+                                "type": "array",
+                                "title": "Existing Cars"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cars/che168/incremental": {
+            "post": {
+                "summary": "Get Che168 Incremental Cars",
+                "description": "Получает только новые машины с che168 до первого совпадения с существующими.\n\nArgs:\n    existing_cars: Список существующих машин с полями car_id/sku_id/link",
+                "operationId": "get_che168_incremental_cars_cars_che168_incremental_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "items": {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                },
+                                "type": "array",
+                                "title": "Existing Cars"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cars/che168/all": {
+            "get": {
+                "summary": "Get Che168 All Cars",
+                "description": "Получает все машины со всех страниц che168, затем повторно проверяет первые страницы и добавляет только новые машины до первого совпадения.\nЭкономит память: хранит только уникальные id машин.",
+                "operationId": "get_che168_all_cars_cars_che168_all_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cars/dongchedi/car/{car_id}": {
+            "get": {
+                "summary": "Get Dongchedi Car Detail",
+                "description": "Получает детальную информацию о конкретной машине с dongchedi по ID\n\nArgs:\n    car_id: ID машины в dongchedi\n    \nReturns:\n    Dict с информацией о машине, включая статус продажи",
+                "operationId": "get_dongchedi_car_detail_cars_dongchedi_car__car_id__get",
+                "parameters": [
+                    {
+                        "name": "car_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Car Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cars/che168/car": {
+            "post": {
+                "summary": "Get Che168 Car Detail",
+                "description": "Получает детальную информацию о конкретной машине с che168 по URL\n\nArgs:\n    car_url: URL страницы машины на che168\n    \nReturns:\n    Dict с информацией о машине, включая статус продажи",
+                "operationId": "get_che168_car_detail_cars_che168_car_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/CarUrlRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
                                 }
                             }
                         }
@@ -26,204 +309,64 @@
     },
     "components": {
         "schemas": {
-            "ApiResponse": {
+            "CarUrlRequest": {
                 "properties": {
-                    "data": {
-                        "$ref": "#/components/schemas/Data"
+                    "car_url": {
+                        "type": "string",
+                        "title": "Car Url"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "car_url"
+                ],
+                "title": "CarUrlRequest"
+            },
+            "HTTPValidationError": {
+                "properties": {
+                    "detail": {
+                        "items": {
+                            "$ref": "#/components/schemas/ValidationError"
+                        },
+                        "type": "array",
+                        "title": "Detail"
+                    }
+                },
+                "type": "object",
+                "title": "HTTPValidationError"
+            },
+            "ValidationError": {
+                "properties": {
+                    "loc": {
+                        "items": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "integer"
+                                }
+                            ]
+                        },
+                        "type": "array",
+                        "title": "Location"
                     },
-                    "message": {
+                    "msg": {
                         "type": "string",
                         "title": "Message"
                     },
-                    "prompts": {
-                        "anyOf": [
-                            {
-                                "type": "string"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ],
-                        "title": "Prompts"
-                    },
-                    "status": {
-                        "type": "integer",
-                        "title": "Status"
+                    "type": {
+                        "type": "string",
+                        "title": "Error Type"
                     }
                 },
                 "type": "object",
                 "required": [
-                    "data",
-                    "message",
-                    "status"
+                    "loc",
+                    "msg",
+                    "type"
                 ],
-                "title": "ApiResponse"
-            },
-            "Data": {
-                "properties": {
-                    "has_more": {
-                        "type": "boolean",
-                        "title": "Has More"
-                    },
-                    "search_sh_sku_info_list": {
-                        "items": {
-                            "$ref": "#/components/schemas/FilteredCar"
-                        },
-                        "type": "array",
-                        "title": "Search Sh Sku Info List"
-                    },
-                    "total": {
-                        "type": "integer",
-                        "title": "Total"
-                    }
-                },
-                "type": "object",
-                "required": [
-                    "has_more",
-                    "search_sh_sku_info_list",
-                    "total"
-                ],
-                "title": "Data"
-            },
-            "FilteredCar": {
-                "properties": {
-                    "title": {
-                        "anyOf": [
-                            {
-                                "type": "string"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ],
-                        "title": "Title"
-                    },
-                    "sh_price": {
-                        "anyOf": [
-                            {
-                                "type": "string"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ],
-                        "title": "Sh Price"
-                    },
-                    "image": {
-                        "anyOf": [
-                            {
-                                "type": "string"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ],
-                        "title": "Image"
-                    },
-                    "car_year": {
-                        "anyOf": [
-                            {
-                                "type": "integer"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ],
-                        "title": "Car Year"
-                    },
-                    "car_mileage": {
-                        "anyOf": [
-                            {
-                                "type": "string"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ],
-                        "title": "Car Mileage"
-                    },
-                    "car_source_city_name": {
-                        "anyOf": [
-                            {
-                                "type": "string"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ],
-                        "title": "Car Source City Name"
-                    },
-                    "brand_name": {
-                        "anyOf": [
-                            {
-                                "type": "string"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ],
-                        "title": "Brand Name"
-                    },
-                    "series_name": {
-                        "anyOf": [
-                            {
-                                "type": "string"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ],
-                        "title": "Series Name"
-                    },
-                    "car_name": {
-                        "anyOf": [
-                            {
-                                "type": "string"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ],
-                        "title": "Car Name"
-                    },
-                    "car_source_type": {
-                        "anyOf": [
-                            {
-                                "type": "string"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ],
-                        "title": "Car Source Type"
-                    },
-                    "transfer_cnt": {
-                        "anyOf": [
-                            {
-                                "type": "integer"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ],
-                        "title": "Transfer Cnt"
-                    }
-                },
-                "type": "object",
-                "required": [
-                    "title",
-                    "sh_price",
-                    "image",
-                    "car_year",
-                    "car_mileage",
-                    "car_source_city_name",
-                    "brand_name",
-                    "series_name",
-                    "car_name",
-                    "car_source_type",
-                    "transfer_cnt"
-                ],
-                "title": "FilteredCar"
+                "title": "ValidationError"
             }
         }
     }

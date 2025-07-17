@@ -1,7 +1,7 @@
 import asyncio
 from api.che168.parser import Che168Parser
 from api.dongchedi.parser import DongchediParser
-from converters import decode_sh_price
+from converters import decode_dongchedi_list_sh_price
 
 async def print_car_info(car, source_name="Unknown"):
     """Универсальная функция для вывода информации о машине"""
@@ -26,7 +26,7 @@ async def print_car_info(car, source_name="Unknown"):
     
     # Цена
     if car.sh_price:
-        decoded_price = decode_sh_price(car.sh_price)
+        decoded_price = decode_dongchedi_list_sh_price(car.sh_price)
         output.append(f"Цена: {decoded_price}")
     
     # Заголовок

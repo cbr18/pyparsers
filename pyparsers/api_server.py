@@ -3,12 +3,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.dongchedi.parser import DongchediParser
 from api.che168.parser import Che168Parser
-from converters import decode_sh_price
+from converters import decode_dongchedi_list_sh_price, decode_dongchedi_detail
 from typing import List, Dict
 from datetime import datetime
+from dotenv import load_dotenv
+from pydantic import BaseModel
+
+# Модель для запроса детального парсинга che168
+class CarUrlRequest(BaseModel):
+    car_url: str
 
 # Load environment variables
-from dotenv import load_dotenv
 load_dotenv()
 
 def _get_next_sort_number(existing_cars: List[Dict], source: str) -> int:
@@ -59,7 +64,7 @@ def get_dongchedi_cars():
             'source': 'dongchedi'
         })
         if car_dict.get('sh_price'):
-            car_dict['sh_price'] = decode_sh_price(car_dict['sh_price'])
+            car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
         filtered_cars.append(car_dict)
     
     return {
@@ -92,7 +97,7 @@ def get_dongchedi_cars_by_page(page: int):
             'source': 'dongchedi'
         })
         if car_dict.get('sh_price'):
-            car_dict['sh_price'] = decode_sh_price(car_dict['sh_price'])
+            car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
         filtered_cars.append(car_dict)
     
     return {
@@ -184,7 +189,7 @@ def get_dongchedi_all_cars():
             car_id = car_dict.get('car_id') or car_dict.get('sku_id') or car_dict.get('link')
             if car_id not in seen_ids:
                 if car_dict.get('sh_price'):
-                    car_dict['sh_price'] = decode_sh_price(car_dict['sh_price'])
+                    car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
                 all_cars.append(car_dict)
                 seen_ids.add(car_id)
         if not getattr(response.data, 'has_more', False):
@@ -201,7 +206,7 @@ def get_dongchedi_all_cars():
             car_id = car_dict.get('car_id') or car_dict.get('sku_id') or car_dict.get('link')
             if car_id not in seen_ids:
                 if car_dict.get('sh_price'):
-                    car_dict['sh_price'] = decode_sh_price(car_dict['sh_price'])
+                    car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
                 all_cars.append(car_dict)
                 seen_ids.add(car_id)
             else:
@@ -265,7 +270,7 @@ def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
                 break
                 
             if car_dict.get('sh_price'):
-                car_dict['sh_price'] = decode_sh_price(car_dict['sh_price'])
+                car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
             new_cars.append(car_dict)
         
         if found_existing:
@@ -412,3 +417,45 @@ def get_che168_all_cars():
         "message": f"Загружено {total} машин со всех страниц.",
         "status": 200
     }
+
+@app.get("/cars/dongchedi/car/{car_id}")
+def get_dongchedi_car_detail(car_id: str):
+    """
+    Получает детальную информацию о конкретной машине с dongchedi по ID
+    """
+    from api.dongchedi.parser import DongchediParser
+    parser = DongchediParser()
+    car_obj, meta = parser.fetch_car_detail(car_id)
+    if car_obj is not None:
+        return {
+            "data": car_obj.dict(),
+            "message": "Success",
+            "status": meta.get("status", 200)
+        }
+    else:
+        return {
+            "data": {"car_id": car_id, "is_available": False, "source": "dongchedi", "error": meta.get("error")},
+            "message": f"Ошибка при парсинге: {meta.get('error')}",
+            "status": meta.get("status", 500)
+        }
+
+@app.post("/cars/che168/car")
+def get_che168_car_detail(request: CarUrlRequest):
+    """
+    Получает детальную информацию о конкретной машине с che168 по URL
+    """
+    from api.che168.parser import Che168Parser
+    parser = Che168Parser()
+    car_obj, meta = parser.fetch_car_detail(request.car_url)
+    if car_obj is not None:
+        return {
+            "data": car_obj.dict(),
+            "message": "Success",
+            "status": meta.get("status", 200)
+        }
+    else:
+        return {
+            "data": {"car_id": None, "is_available": False, "source": "che168", "error": meta.get("error")},
+            "message": f"Ошибка при парсинге: {meta.get('error')}",
+            "status": meta.get("status", 500)
+        }

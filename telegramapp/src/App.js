@@ -1,59 +1,167 @@
 import React, { useEffect, useState } from 'react';
 import './App.css';
-
-// Используем относительный путь для API
-const API_URL = '';
+import CarCard from './components/CarCard';
+import Filters from './components/Filters';
+import Pagination from './components/Pagination';
+import { fetchCars } from './services/api';
 
 function App() {
   const [cars, setCars] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(10);
+  const [total, setTotal] = useState(0);
+  const [filters, setFilters] = useState({
+    source: '',
+    brand: '',
+    city: '',
+    year: '',
+    search: ''
+  });
+  const [showFilters, setShowFilters] = useState(false);
+  const [tempFilters, setTempFilters] = useState({
+    source: '',
+    brand: '',
+    city: '',
+    year: '',
+    search: ''
+  });
 
-  // Заглушка для картинок
-  const placeholder = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect width="100%" height="100%" fill="%23ccc"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%23666" font-size="16">Нет фото</text></svg>';
+  // Sources for dropdown
+  const sources = ['dongchedi', 'che168'];
 
+  // Load cars data
+  const loadCars = async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const data = await fetchCars(page, limit, filters);
+      setCars(data.data || []);
+      setTotal(data.total || 0);
+    } catch (err) {
+      setError(`Ошибка загрузки данных: ${err.message}`);
+      console.error('Error loading cars:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Apply filters and reset to page 1
+  const applyFilters = () => {
+    setFilters(tempFilters);
+    setPage(1);
+    setShowFilters(false);
+  };
+
+  // Reset filters
+  const resetFilters = () => {
+    const emptyFilters = {
+      source: '',
+      brand: '',
+      city: '',
+      year: '',
+      search: ''
+    };
+    setTempFilters(emptyFilters);
+    setFilters(emptyFilters);
+    setPage(1);
+  };
+
+  // Handle pagination
+  const handlePageChange = (newPage) => {
+    if (newPage >= 1 && newPage <= Math.ceil(total / limit)) {
+      setPage(newPage);
+    }
+  };
+
+  // Fetch cars when page, limit, or filters change
   useEffect(() => {
-    // Глобальный обработчик ошибок для диагностики
+    loadCars();
+  }, [page, limit, filters]);
+
+  // Set up global error handlers
+  useEffect(() => {
     window.onerror = function (message, source, lineno, colno, error) {
-      alert('JS Error: ' + message);
+      console.error('JS Error:', message);
     };
     window.onunhandledrejection = function (e) {
-      alert('Promise Error: ' + e.reason);
+      console.error('Promise Error:', e.reason);
     };
-
-    fetch(`/cars/che168`)
-      .then(res => res.json())
-      .then(data => {
-        setCars(data.data && Array.isArray(data.data.search_sh_sku_info_list) ? data.data.search_sh_sku_info_list : []);
-        setLoading(false);
-      });
   }, []);
 
-  if (loading) return <div className="loader">Загрузка...</div>;
-
   return (
-    <div className="car-list">
-      {cars.map((car, idx) => (
-        <div className="car-card" key={idx}>
-          <img
-            src={car && car.image ? car.image : placeholder}
-            alt={car && car.title ? car.title : 'Без названия'}
-            className="car-image"
-            onError={e => { e.target.onerror = null; e.target.src = placeholder; }}
-          />
-          <div className="car-info">
-            <h2>{car && car.title ? car.title : 'Без названия'}</h2>
-            <p><b>Цена:</b> {car && car.sh_price ? car.sh_price : '—'}</p>
-            <p><b>Год:</b> {car && car.car_year ? car.car_year : '—'}</p>
-            <p><b>Пробег:</b> {car && car.car_mileage ? car.car_mileage : '—'}</p>
-            <p><b>Город:</b> {car && car.car_source_city_name ? car.car_source_city_name : '—'}</p>
-            <p><b>Бренд:</b> {car && car.brand_name ? car.brand_name : '—'}</p>
-            <p><b>Серия:</b> {car && car.series_name ? car.series_name : '—'}</p>
-            <p><b>Модель:</b> {car && car.car_name ? car.car_name : '—'}</p>
-            <p><b>Тип источника:</b> {car && car.car_source_type ? car.car_source_type : '—'}</p>
-            <p><b>Кол-во владельцев:</b> {car && car.transfer_cnt ? car.transfer_cnt : '—'}</p>
-          </div>
+    <div className="app-container">
+      <header className="app-header">
+        <h1>Автомобили</h1>
+        <div className="header-actions">
+          <button
+            className="filter-button"
+            onClick={() => {
+              setTempFilters({...filters});
+              setShowFilters(!showFilters);
+            }}
+          >
+            {showFilters ? 'Скрыть фильтры' : 'Показать фильтры'}
+          </button>
+          <select
+            className="limit-select"
+            value={limit}
+            onChange={(e) => {
+              setLimit(Number(e.target.value));
+              setPage(1);
+            }}
+          >
+            <option value={5}>5 на странице</option>
+            <option value={10}>10 на странице</option>
+            <option value={20}>20 на странице</option>
+            <option value={50}>50 на странице</option>
+          </select>
         </div>
-      ))}
+      </header>
+
+      {/* Filters panel */}
+      {showFilters && (
+        <Filters
+          tempFilters={tempFilters}
+          setTempFilters={setTempFilters}
+          applyFilters={applyFilters}
+          resetFilters={resetFilters}
+          sources={sources}
+        />
+      )}
+
+      {/* Error message */}
+      {error && <div className="error-message">{error}</div>}
+
+      {/* Loading indicator */}
+      {loading ? (
+        <div className="loader">Загрузка...</div>
+      ) : (
+        <>
+          {/* Car list */}
+          {cars.length > 0 ? (
+            <div className="car-list">
+              {cars.map((car) => (
+                <CarCard key={car.uuid || car.id} car={car} />
+              ))}
+            </div>
+          ) : (
+            <div className="no-results">Нет доступных автомобилей</div>
+          )}
+
+          {/* Pagination */}
+          {total > 0 && (
+            <Pagination
+              page={page}
+              limit={limit}
+              total={total}
+              handlePageChange={handlePageChange}
+            />
+          )}
+        </>
+      )}
     </div>
   );
 }

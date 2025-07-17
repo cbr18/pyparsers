@@ -3,10 +3,23 @@ name = "rest_parser"
 version = "0.1.0"
 dependencies = [
   "requests",
+  "aiohttp",
   "beautifulsoup4",
   "selenium",
+  "playwright",
   "pydantic",
   "googletrans==4.0.2",
   "fastapi",
   "uvicorn[standard]"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-benchmark",
+  "pytest-asyncio",
+  "pytest-cov",
+  "mock",
+  "responses",
+  "psutil"
 ]

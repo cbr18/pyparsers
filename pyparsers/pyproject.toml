@@ -10,7 +10,8 @@ dependencies = [
   "pydantic",
   "googletrans==4.0.2",
   "fastapi",
-  "uvicorn[standard]"
+  "uvicorn[standard]",
+  "aiohttp"
 ]
 
 [project.optional-dependencies]

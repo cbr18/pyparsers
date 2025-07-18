@@ -7,7 +7,7 @@ import "time"
 type Car struct {
 	UUID              string    `json:"uuid" gorm:"primaryKey"`
 	Source            string    `json:"source"`
-	CarID             string    `json:"car_id"`
+	CarID             int64     `json:"car_id"`
 	SkuID             string    `json:"sku_id"`
 	Title             string    `json:"title"`
 	CarName           string    `json:"car_name"`

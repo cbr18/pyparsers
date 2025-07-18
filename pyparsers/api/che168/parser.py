@@ -25,33 +25,34 @@ except ImportError:
 
 class Che168Parser(BaseCarParser):
     """Selenium парсер для сайта Che168"""
-    
+
     def __init__(self, headless: bool = True):
         self.headless = headless
         self.driver = None
-        
+
     def _build_url(self, page: int = 1) -> str:
         """Строит URL с номером страницы для che168"""
         # Базовая ссылка: https://www.che168.com/china/a0_0msdgscncgpi1lto8csp{pagenumber}exx0/
-        return f'https://www.che168.com/china/a0_0msdgscncgpi1lto8csp{page}exx0/?pvareaid=102179#currengpostion'
-        
+        logger.info(f"Формирование URL для страницы {page}")
+        return f'https://www.che168.com/china/a0_0msdgscncgpi1lto8csp{page}exx0/?pvareaid=102179'
+
     def _setup_driver(self):
         """Настройка Chrome драйвера"""
         if not SELENIUM_AVAILABLE:
             raise ImportError("Selenium не установлен")
-            
+
         chrome_options = Options()
-        
+
         if self.headless:
             chrome_options.add_argument("--headless")
-        
+
         # Настройки для обхода обнаружения
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
-        
+
         # ОТКЛЮЧАЕМ ЗАГРУЗКУ ИЗОБРАЖЕНИЙ И МЕДИА (значительно ускоряет)
         prefs = {
             "profile.managed_default_content_settings.images": 2,  # Блокировать изображения
@@ -59,7 +60,7 @@ class Che168Parser(BaseCarParser):
             "profile.managed_default_content_settings.plugins": 2,  # Блокировать плагины
         }
         chrome_options.add_experimental_option("prefs", prefs)
-        
+
         # ДОПОЛНИТЕЛЬНЫЕ ОПТИМИЗАЦИИ
         chrome_options.add_argument("--disable-extensions")
         chrome_options.add_argument("--disable-gpu")
@@ -69,11 +70,11 @@ class Che168Parser(BaseCarParser):
         chrome_options.add_argument("--disable-background-timer-throttling")
         chrome_options.add_argument("--disable-backgrounding-occluded-windows")
         chrome_options.add_argument("--disable-renderer-backgrounding")
-        
+
         # Случайное разрешение экрана
         resolutions = ["1920x1080", "1366x768", "1440x900", "1536x864"]
         chrome_options.add_argument(f"--window-size={random.choice(resolutions)}")
-        
+
         # User-Agent
         user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -81,28 +82,28 @@ class Che168Parser(BaseCarParser):
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         ]
         chrome_options.add_argument(f"--user-agent={random.choice(user_agents)}")
-        
+
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
-            
+
             # Скрываем признаки автоматизации
             self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            
+
             # Устанавливаем случайные размеры окна
             width = random.randint(1200, 1920)
             height = random.randint(800, 1080)
             self.driver.set_window_size(width, height)
-            
+
         except WebDriverException as e:
             print(f"Ошибка создания драйвера: {e}")
             print("Убедитесь, что Chrome установлен и chromedriver доступен")
             raise
-    
+
     def _wait_for_page_load(self, timeout: int = 20):  # Уменьшаем timeout с 30 до 20
         """Ожидание загрузки страницы"""
         if self.driver is None:
             return False
-            
+
         try:
             # Ждем появления элементов с машинами
             WebDriverWait(self.driver, timeout).until(
@@ -111,32 +112,32 @@ class Che168Parser(BaseCarParser):
             return True
         except TimeoutException:
             return False
-    
+
     def _scroll_page(self):
         """Прокрутка страницы для загрузки всего контента"""
         if self.driver is None:
             return
-            
+
         # УМЕНЬШАЕМ КОЛИЧЕСТВО ПРОКРУТОК И ЗАДЕРЖЕК
         for i in range(2):  # Было 3, стало 2
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(random.uniform(0.5, 1))  # Было 1-2, стало 0.5-1
-            
+
             # Прокручиваем обратно
             self.driver.execute_script("window.scrollTo(0, 0);")
             time.sleep(random.uniform(0.3, 0.5))  # Было 0.5-1, стало 0.3-0.5
-    
+
     def fetch_cars(self, source: Optional[str] = 'url') -> Che168ApiResponse:
         """
         Selenium парсер с полной имитацией браузера
         По умолчанию загружает первую страницу
         """
         return self.fetch_cars_by_page(1, source)
-    
+
     def fetch_cars_by_page(self, page: int, source: Optional[str] = 'url') -> Che168ApiResponse:
         """
         Selenium парсер для конкретной страницы
-        
+
         Args:
             page: Номер страницы (начиная с 1)
             source: Источник данных ('url' или путь к файлу)
@@ -151,23 +152,23 @@ class Che168Parser(BaseCarParser):
         if source == 'url':
             try:
                 self._setup_driver()
-                
+
                 if self.driver is None:
                     return Che168ApiResponse(
                         data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
                         message="Не удалось создать драйвер",
                         status=500
                     )
-                
+
                 # Строим URL с номером страницы
                 url = self._build_url(page)
                 logger.info(f"Загружаем страницу {page}: {url}")
-                
+
                 self.driver.get(url)
-                
+
                 # УМЕНЬШАЕМ ЗАДЕРЖКУ ДЛЯ УСКОРЕНИЯ
                 time.sleep(random.uniform(1, 2))  # Было 2-4, стало 1-2
-                
+
                 # Ожидаем загрузки страницы
                 if not self._wait_for_page_load():
                     return Che168ApiResponse(
@@ -175,23 +176,23 @@ class Che168Parser(BaseCarParser):
                         message=f"Страница {page} не найдена",
                         status=404
                     )
-                
+
                 # Прокручиваем страницу
                 self._scroll_page()
-                
+
                 # Получаем HTML после полной загрузки
                 page_source = self.driver.page_source
-                
+
                 # Парсим HTML (используем lxml для ускорения, fallback на html.parser)
                 from bs4 import BeautifulSoup
                 try:
                     soup = BeautifulSoup(page_source, 'lxml')
                 except:
                     soup = BeautifulSoup(page_source, 'html.parser')
-                
+
                 cars_elements = soup.select('div.content.card-wrap ul.viewlist_ul li.cards-li')
                 cars = [self._parse_li_to_car(li) for li in cars_elements]
-                
+
                 # Фильтруем рекламные блоки (car_id == None)
                 cars = [car for car in cars if car.car_id is not None]
 
@@ -202,25 +203,25 @@ class Che168Parser(BaseCarParser):
                         message=f"Страница {page} не найдена",
                         status=404
                     )
-                
+
                 # МИНИМИЗИРУЕМ ЛОГИ ДЛЯ УСКОРЕНИЯ
                 logger.info(f"Страница {page}: найдено {len(cars)} автомобилей")
-                
+
                 # Проверяем, есть ли еще страницы (ищем пагинацию)
                 has_more = self._check_has_more_pages(soup)
-                
+
                 data = Che168Data(
                     has_more=has_more,
                     search_sh_sku_info_list=cars,
                     total=len(cars)
                 )
-                
+
                 return Che168ApiResponse(
                     data=data,
                     message="Success",
                     status=200
                 )
-                
+
             except Exception as e:
                 return Che168ApiResponse(
                     data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
@@ -246,7 +247,7 @@ class Che168Parser(BaseCarParser):
                         message="Не указан файл для парсинга",
                         status=400
                     )
-                
+
                 cars_elements = soup.select('div.content.card-wrap ul.viewlist_ul li.cards-li')
                 cars = []
                 for li in cars_elements:
@@ -261,13 +262,13 @@ class Che168Parser(BaseCarParser):
                         message=f"Страница {page} не найдена",
                         status=404
                     )
-                
+
                 data = Che168Data(
                     has_more=False,
                     search_sh_sku_info_list=cars,
                     total=len(cars)
                 )
-                
+
                 return Che168ApiResponse(
                     data=data,
                     message="Success",
@@ -279,7 +280,7 @@ class Che168Parser(BaseCarParser):
                     message=f"Страница {page} не найдена",
                     status=404
                 )
-    
+
     def _check_has_more_pages(self, soup) -> bool:
         """Проверяет, есть ли еще страницы"""
         try:
@@ -289,26 +290,45 @@ class Che168Parser(BaseCarParser):
                 # Ищем кнопку "следующая страница"
                 next_button = pagination.select_one('a.next')
                 if next_button and not 'disabled' in next_button.get('class', []):
-                    return True
-            
-            # Альтернативный способ - проверяем количество элементов
-            cars_elements = soup.select('div.content.card-wrap ul.viewlist_ul li.cards-li')
-            return len(cars_elements) > 0  # Если есть машины, возможно есть еще страницы
-            
+                    # Проверяем, что это действительно кнопка "следующая страница", а не другой элемент
+                    if next_button.get_text(strip=True) in ['下一页', '>', 'Next', '下一頁']:
+                        logger.info(f"Найдена кнопка следующей страницы: {next_button.get_text(strip=True)}")
+                        return True
+
+                # Проверяем наличие других индикаторов пагинации
+                page_links = pagination.select('a')
+                for link in page_links:
+                    # Если есть ссылка на страницу с номером больше текущей, значит есть еще страницы
+                    link_text = link.get_text(strip=True)
+                    if link_text.isdigit() and int(link_text) > 1:
+                        logger.info(f"Найдена ссылка на страницу {link_text}")
+                        return True
+
+            # Если не нашли явных признаков пагинации, проверяем альтернативные элементы
+            # Например, может быть кнопка "загрузить еще" или другие элементы пагинации
+            load_more = soup.select_one('[class*="load-more"], [class*="loadMore"], .more, .next-page')
+            if load_more:
+                logger.info(f"Найдена кнопка 'загрузить еще': {load_more.get_text(strip=True)}")
+                return True
+
+            # Если не нашли никаких признаков пагинации, считаем что это последняя страница
+            logger.info("Не найдено признаков наличия следующих страниц")
+            return False
+
         except Exception as e:
             logger.warning(f"Ошибка при проверке пагинации: {e}")
             return False
-    
+
     def _parse_li_to_car(self, li) -> Che168Car:
         """Приватный метод для парсинга элемента li в объект Che168Car"""
         attrs = li.attrs.copy()
-        
+
         # Извлекаем основную информацию
         a = li.select_one('a.carinfo')
         link = a['href'] if a and a.has_attr('href') else None
         if link and link.startswith('/'):
             link = 'https://www.che168.com' + link
-        
+
         # Извлекаем изображение
         img = li.select_one('img')
         image = None
@@ -316,19 +336,19 @@ class Che168Parser(BaseCarParser):
             image = img.get('src2') or img.get('src')
             if image and image.startswith('//'):
                 image = 'https:' + image
-        
+
         # Извлекаем заголовок
         h4 = li.select_one('h4.card-name')
         title = h4.get_text(strip=True) if h4 else attrs.get('carname')
-        
+
         # Извлекаем цену
         price_tag = li.select_one('span.pirce em')
         sh_price = price_tag.get_text(strip=True) if price_tag else attrs.get('price')
-        
+
         # Извлекаем информацию о пробеге, дате регистрации и городе
         unit = li.select_one('p.cards-unit')
         milage, regdate, city, car_year = None, None, None, None
-        
+
         if unit:
             unit_text = unit.get_text(strip=True)
             parts = unit_text.split('／')
@@ -336,14 +356,14 @@ class Che168Parser(BaseCarParser):
                 milage = parts[0].replace('万公里', '').strip()
                 regdate = parts[1].strip()
                 city = parts[2].strip()
-        
+
         # Извлекаем год из даты регистрации
         if regdate:
             try:
                 car_year = int(regdate.split('-')[0])
             except (ValueError, IndexError):
                 car_year = None
-        
+
         # Извлекаем теги
         tags = []
         tags_box = li.select_one('div.cards-tags-box')
@@ -352,19 +372,19 @@ class Che168Parser(BaseCarParser):
                 tag_text = tag.get_text(strip=True)
                 if tag_text:
                     tags.append(tag_text)
-        
+
         # Извлекаем название модели из заголовка
         car_name = title
         brand_name = None
         series_name = None
-        
+
         if title:
             # Пытаемся извлечь марку и модель из заголовка
             title_parts = title.split()
             if len(title_parts) >= 2:
                 brand_name = title_parts[0]  # Первое слово - обычно марка
                 series_name = ' '.join(title_parts[1:3]) if len(title_parts) >= 3 else title_parts[1]
-        
+
         # Формируем данные для Che168Car
         data = {
             'title': title,
@@ -383,8 +403,8 @@ class Che168Parser(BaseCarParser):
             'car_id': int(attrs.get('infoid')) if attrs.get('infoid') and attrs.get('infoid').isdigit() else None,
             'tags_v2': ', '.join(tags) if tags else None,
         }
-        
-        return Che168Car(**data) 
+
+        return Che168Car(**data)
 
     def fetch_car_detail(self, car_url: str):
         """
@@ -644,11 +664,11 @@ class Che168Parser(BaseCarParser):
                             car_info['series_name'] = series_part
         page_text = soup.get_text()
         available_indicators = [
-            "我要询价", "查看电话", "询价", "联系", "电话", "咨询", 
+            "我要询价", "查看电话", "询价", "联系", "电话", "咨询",
             "askprice", "phone", "contact", "inquiry"
         ]
         unavailable_indicators = [
-            "已售", "售出", "已卖出", "下架", "已下架", "已成交", 
+            "已售", "售出", "已卖出", "下架", "已下架", "已成交",
             "sold", "sale", "unavailable", "not available"
         ]
         is_available = False
@@ -663,4 +683,4 @@ class Che168Parser(BaseCarParser):
             car_obj = Che168Car(**{k: v for k, v in car_info.items() if k in Che168Car.__fields__})
         except Exception as e:
             return None, {"is_available": False, "error": str(e), "status": 500}
-        return car_obj, {"is_available": is_available, "status": 200, "link": clean_url} 
+        return car_obj, {"is_available": is_available, "status": 200, "link": clean_url}

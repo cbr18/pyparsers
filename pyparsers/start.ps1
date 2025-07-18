@@ -20,4 +20,4 @@ $API_RELOAD = $env:API_RELOAD
 if (-not $API_RELOAD) { $API_RELOAD = "true" }
 
 # Start the server
-uvicorn api_server:app --host $API_HOST --port $API_PORT --reload
+uvicorn async_api_server:app --host $API_HOST --port $API_PORT --reload

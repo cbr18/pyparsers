@@ -40,7 +40,7 @@ func createTestCar() domain.Car {
 	return domain.Car{
 		UUID:              uuid.New().String(),
 		Source:            "benchmark",
-		CarID:             "test-car-id",
+		CarID:             999999998,
 		SkuID:             "test-sku-id",
 		Title:             "Test Car",
 		CarName:           "Test Car Model",

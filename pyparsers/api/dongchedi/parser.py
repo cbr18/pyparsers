@@ -20,6 +20,7 @@ class DongchediParser(BaseCarParser):
         }
 
     def _build_url(self, page: int = 1) -> str:
+        print(page)
         """Строит URL с параметрами запроса"""
         params = {
             "aid": "1839",  # Важный параметр для API

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"datahub/internal/domain"
 	"datahub/internal/infrastructure/database"
@@ -22,8 +23,13 @@ func NewCarRepository() *CarRepository {
 	}
 }
 
-// Create - создает новую запись Car в базе данных
+// Create - создаёт новую запись Car в базе данных
 func (r *CarRepository) Create(ctx context.Context, car *domain.Car) error {
+	now := time.Now()
+	if car.CreatedAt.IsZero() {
+		car.CreatedAt = now
+	}
+	car.UpdatedAt = now
 	return r.db.WithContext(ctx).Create(car).Error
 }
 
@@ -42,6 +48,7 @@ func (r *CarRepository) GetByUUID(ctx context.Context, uuid string) (*domain.Car
 
 // Update - обновляет запись Car
 func (r *CarRepository) Update(ctx context.Context, car *domain.Car) error {
+	car.UpdatedAt = time.Now()
 	return r.db.WithContext(ctx).Save(car).Error
 }
 
@@ -100,10 +107,17 @@ func (r *CarRepository) DeleteBySource(ctx context.Context, source string) error
 	return r.db.WithContext(ctx).Where("source = ?", source).Delete(&domain.Car{}).Error
 }
 
-// CreateMany - создает множество записей Car в базе данных
+// CreateMany - создаёт множество записей Car в базе данных
 func (r *CarRepository) CreateMany(ctx context.Context, cars []domain.Car) error {
 	if len(cars) == 0 {
 		return nil
+	}
+	now := time.Now()
+	for i := range cars {
+		if cars[i].CreatedAt.IsZero() {
+			cars[i].CreatedAt = now
+		}
+		cars[i].UpdatedAt = now
 	}
 	return r.db.WithContext(ctx).Create(&cars).Error
 }

@@ -7,12 +7,32 @@
 - `migrations/` - директория с файлами миграций
   - `*.up.sql` - SQL-скрипты для применения миграций
   - `*.down.sql` - SQL-скрипты для отката миграций
-  - `migrate.ps1` - PowerShell скрипт для управления миграциями
+  - `migrate.ps1` - PowerShell скрипт для управления миграциями через golang-migrate
+  - `generate.ps1` - PowerShell скрипт для генерации миграций через Atlas на основе моделей GORM
+  - `apply.ps1` - PowerShell скрипт для применения миграций через Atlas
+  - `schema/` - директория для хранения схемы базы данных
 - `cmd/atlas/main.go` - интеграция Atlas с GORM для генерации схемы
 
 ## Использование миграций
 
-### Применение миграций
+### Автоматическая генерация миграций на основе моделей GORM
+
+```powershell
+# Генерация новой миграции на основе изменений в моделях GORM
+./migrations/generate.ps1 -Name add_new_fields
+```
+
+### Применение миграций с помощью Atlas
+
+```powershell
+# Проверка миграций (dry-run)
+./migrations/apply.ps1 -DryRun
+
+# Применение миграций
+./migrations/apply.ps1
+```
+
+### Применение миграций с помощью golang-migrate
 
 ```powershell
 # Применить все миграции
@@ -32,7 +52,7 @@
 ./migrations/migrate.ps1 -Command down -Steps 2
 ```
 
-### Создание новой миграции
+### Создание новой миграции вручную
 
 ```powershell
 # Создать новую миграцию
@@ -80,7 +100,7 @@ atlas migrate diff --to "file://./migrations/schema.hcl" --dir "file://./migrati
 1. Модели определены в пакете `internal/domain`
 2. Репозитории используют GORM для работы с базой данных
 3. Для автоматической миграции в разработке можно использовать `database.AutoMigrate()`
-4. Для продакшена рекомендуется использовать миграции через golang-migrate
+4. Для продакшена рекомендуется использовать миграции через golang-migrate или Atlas
 
 ## Рекомендации
 

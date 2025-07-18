@@ -27,15 +27,19 @@ func NewUpdateService(repo repository.CarRepository, client ExternalSourceClient
 }
 
 // FullUpdate — полное обновление: очищает старые записи, сохраняет новые
-func (s *UpdateService) FullUpdate(ctx context.Context) error {
+// Возвращает количество обновленных машин
+func (s *UpdateService) FullUpdate(ctx context.Context) (int, error) {
 	cars, err := s.client.FetchAll(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if err := s.repo.DeleteBySource(ctx, s.sourceName); err != nil {
-		return err
+		return 0, err
 	}
-	return s.repo.CreateMany(ctx, cars)
+	if err := s.repo.CreateMany(ctx, cars); err != nil {
+		return 0, err
+	}
+	return len(cars), nil
 }
 
 // IncrementalUpdate — инкрементальное обновление: добавляет только новые

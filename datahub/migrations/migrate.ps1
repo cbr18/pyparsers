@@ -17,7 +17,7 @@ param (
 
 # Настройки подключения к базе данных
 $DB_URL = "postgres://postgres:3iop4r459u8988@localhost:5432/carsdb?sslmode=disable"
-$MIGRATIONS_DIR = "migrations"
+$MIGRATIONS_DIR = "."
 
 # Функция для выполнения миграций
 function Run-Migration {

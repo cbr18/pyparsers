@@ -23,7 +23,7 @@ func init() {
 	}
 
 	// Инициализируем подключение к базе данных
-	if err := database.InitDB(); err != nil {
+	if _, err := database.InitDB(os.Getenv("DATABASE_URL")); err != nil {
 		panic(err)
 	}
 }
@@ -34,7 +34,7 @@ func createTestCar() domain.Car {
 	return domain.Car{
 		UUID:              uuid.New().String(),
 		Source:            "test",
-		CarID:             "test-car-id",
+		CarID:             99999999,
 		SkuID:             "test-sku-id",
 		Title:             "Test Car",
 		CarName:           "Test Car Model",

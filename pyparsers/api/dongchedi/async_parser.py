@@ -420,6 +420,16 @@ class AsyncDongchediParser(BaseCarParser):
         import gc
 
         logger = logging.getLogger(__name__)
+        logger.setLevel(logging.DEBUG)  # Устанавливаем уровень логирования DEBUG
+
+        # Добавляем обработчик для вывода в консоль, если его еще нет
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+            logger.addHandler(handler)
+
+        logger.info("Starting async_fetch_all_cars")
+
         # Используем оптимизированный список для хранения машин
         all_cars = MemoryOptimizedList()
         seen_ids = set()
@@ -427,8 +437,13 @@ class AsyncDongchediParser(BaseCarParser):
         # Функция для получения страницы с машинами
         async def fetch_page(page_num: int) -> List[Dict[str, Any]]:
             try:
+                logger.info(f"Fetching page {page_num}")
                 response = await self.async_fetch_cars_by_page(page_num)
+                logger.info(f"Response status: {response.status}")
+
                 cars_list = getattr(response.data, 'search_sh_sku_info_list', [])
+                logger.info(f"Found {len(cars_list)} cars on page {page_num}")
+
                 # Преобразуем объекты в словари и сразу освобождаем память
                 result = [car.dict() for car in cars_list]
                 # Принудительно очищаем память после преобразования
@@ -436,11 +451,14 @@ class AsyncDongchediParser(BaseCarParser):
                 return result
             except Exception as e:
                 logger.error(f"Error fetching page {page_num}: {str(e)}")
+                logger.exception("Full traceback:")
                 return []
 
         # 1. Получаем первую страницу для определения общего количества страниц
+        logger.info("Fetching first page")
         first_page_cars = await fetch_page(1)
         if not first_page_cars:
+            logger.error("Failed to get data from first page")
             return DongchediApiResponse(
                 data=DongchediData(has_more=False, search_sh_sku_info_list=[], total=0),
                 message="Не удалось получить данные с первой страницы",

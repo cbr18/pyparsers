@@ -52,7 +52,7 @@ func (h *Handler) GetCars(c *gin.Context) {
 	if search := c.Query("search"); search != "" {
 		filter.Search = &search
 	}
-cars, total, err := h.carService.ListCars(c.Request.Context(), filter, page, limit, "sort_number DESC")
+	cars, total, err := h.carService.ListCars(c.Request.Context(), filter, page, limit, "sort_number DESC")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -120,11 +120,12 @@ func (h *Handler) FullUpdate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown source"})
 		return
 	}
-	if err := service.FullUpdate(c.Request.Context()); err != nil {
+	count, err := service.FullUpdate(c.Request.Context())
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "count": count})
 }
 
 // POST /update/{source}

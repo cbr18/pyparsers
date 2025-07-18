@@ -149,8 +149,14 @@ class StructuredLogger:
                 return message
 
         # Создаем структуру для JSON
+        # Форматируем timestamp с микросекундами (time.strftime не поддерживает %f)
+        current_time = time.time()
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(current_time))
+        microseconds = int((current_time - int(current_time)) * 1000000)
+        timestamp = f"{timestamp}.{microseconds:06d}Z"
+
         log_data = {
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.%fZ", time.gmtime()),
+            "timestamp": timestamp,
             "level": level,
             "message": message,
             "logger": self.name,

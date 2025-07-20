@@ -16,19 +16,17 @@
 package main
 
 import (
-	"database/sql"
 	"log"
 	"os"
-	"time"
 
 	_ "datahub/docs"
 
 	"github.com/joho/godotenv"
-	_ "github.com/lib/pq"
 
 	httpdelivery "datahub/internal/delivery/http"
-	"datahub/internal/infrastructure/db"
+	"datahub/internal/infrastructure/database"
 	"datahub/internal/infrastructure/external"
+	"datahub/internal/infrastructure/repository"
 	"datahub/internal/usecase"
 )
 
@@ -45,15 +43,15 @@ func main() {
 		pgHost = "localhost"
 	}
 	dsn := "postgres://" + pgUser + ":" + pgPass + "@" + pgHost + ":" + pgPort + "/" + pgDB + "?sslmode=disable"
-	dbConn, err := sql.Open("postgres", dsn)
+
+	// Инициализация GORM
+	_, err := database.InitDB(dsn)
 	if err != nil {
 		log.Fatalf("failed to connect to db: %v", err)
 	}
-	defer dbConn.Close()
-	dbConn.SetMaxOpenConns(10)
-	dbConn.SetConnMaxLifetime(time.Hour)
+	// database.DB теперь глобально доступен
 
-	repo := db.NewCarPostgres(dbConn)
+	repo := repository.NewCarRepository()
 	carService := usecase.NewCarService(repo)
 
 	dongchediClient := external.NewDongchediClient(apiBaseURL)

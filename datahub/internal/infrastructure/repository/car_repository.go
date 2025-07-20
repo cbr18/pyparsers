@@ -4,14 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	"log"
 	"time"
 
 	"datahub/internal/domain"
 	"datahub/internal/infrastructure/database"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // CarRepository - репозиторий для работы с моделью Car
@@ -28,7 +28,7 @@ func NewCarRepository() *CarRepository {
 
 // Create - создаёт новую запись Car в базе данных
 // Также проверяет наличие бренда в таблице Brands и создает его при необходимости
-func (r *CarRepository) Create(ctx context.Context, car *domain.Car) error {
+func (r *CarRepository) Create(ctx context.Context, car domain.Car) error {
 	now := time.Now()
 	if car.CreatedAt.IsZero() {
 		car.CreatedAt = now
@@ -85,7 +85,7 @@ func (r *CarRepository) Create(ctx context.Context, car *domain.Car) error {
 	}
 
 	// Создаем машину
-	if err := tx.Create(car).Error; err != nil {
+	if err := tx.Create(&car).Error; err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -121,9 +121,9 @@ func (r *CarRepository) GetByID(ctx context.Context, id int64) (*domain.Car, err
 }
 
 // Update - обновляет запись Car
-func (r *CarRepository) Update(ctx context.Context, car *domain.Car) error {
+func (r *CarRepository) Update(ctx context.Context, car domain.Car) error {
 	car.UpdatedAt = time.Now()
-	return r.db.WithContext(ctx).Save(car).Error
+	return r.db.WithContext(ctx).Save(&car).Error
 }
 
 // Delete - удаляет запись Car по UUID
@@ -194,18 +194,47 @@ func (r *CarRepository) DeleteBySource(ctx context.Context, source string) error
 // CreateMany - создаёт множество записей Car в базе данных
 // Также проверяет наличие бренда в таблице Brands и создает его при необходимости
 func (r *CarRepository) CreateMany(ctx context.Context, cars []domain.Car) error {
-	// Добавляем явное логирование в начале метода
-	fmt.Println("=== CreateMany called with", len(cars), "cars ===")
-	
-	// Запись в файл для отладки
-	f, _ := os.OpenFile("debug_log.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if f != nil {
-		defer f.Close()
-		fmt.Fprintf(f, "=== CreateMany called with %d cars ===\n", len(cars))
-	}
-	
 	if len(cars) == 0 {
-		fmt.Println("No cars to create, returning")
+		return nil
+	}
+
+	now := time.Now()
+	// Собираем уникальные пары (source, car_id) из вставляемых машин
+	type carKey struct {
+		Source string
+		CarID  int64
+	}
+	carKeySet := make(map[carKey]struct{})
+	for _, car := range cars {
+		carKeySet[carKey{Source: car.Source, CarID: car.CarID}] = struct{}{}
+	}
+
+	// Получаем уже существующие машины с такими ключами
+	var existing []domain.Car
+	var sources []string
+	var carIDs []int64
+	for k := range carKeySet {
+		sources = append(sources, k.Source)
+		carIDs = append(carIDs, k.CarID)
+	}
+	if len(sources) > 0 && len(carIDs) > 0 {
+		r.db.WithContext(ctx).
+			Where("source IN ? AND car_id IN ?", sources, carIDs).
+			Find(&existing)
+	}
+	existingMap := make(map[carKey]struct{})
+	for _, car := range existing {
+		existingMap[carKey{Source: car.Source, CarID: car.CarID}] = struct{}{}
+	}
+
+	// Оставляем только новые машины
+	filtered := make([]domain.Car, 0, len(cars))
+	for _, car := range cars {
+		if _, found := existingMap[carKey{Source: car.Source, CarID: car.CarID}]; !found {
+			filtered = append(filtered, car)
+		}
+	}
+	if len(filtered) == 0 {
 		return nil
 	}
 
@@ -214,94 +243,54 @@ func (r *CarRepository) CreateMany(ctx context.Context, cars []domain.Car) error
 	if tx.Error != nil {
 		return tx.Error
 	}
-
-	// Откатываем транзакцию в случае ошибки
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
 		}
 	}()
 
-	now := time.Now()
-
-	// Обрабатываем каждую машину
-	for i := range cars {
-		if cars[i].CreatedAt.IsZero() {
-			cars[i].CreatedAt = now
+	// Обрабатываем каждую машину (бренд)
+	for i := range filtered {
+		if filtered[i].CreatedAt.IsZero() {
+			filtered[i].CreatedAt = now
 		}
-		cars[i].UpdatedAt = now
+		filtered[i].UpdatedAt = now
 
-		// Проверяем наличие бренда по brand_name
-		if cars[i].BrandName != "" {
-			fmt.Printf("Processing car with BrandName: %s\n", cars[i].BrandName)
-			
-			// Ищем бренд в рамках транзакции
+		if filtered[i].BrandName != "" {
 			var brand domain.Brand
-			// Ищем по полю name или orig_name
-			err := tx.Debug().Where("name = ? OR orig_name = ?", cars[i].BrandName, cars[i].BrandName).First(&brand).Error
-
-			if err != nil {
-				fmt.Printf("Search result for brand '%s': %v\n", cars[i].BrandName, err)
-			} else {
-				fmt.Printf("Found existing brand: ID=%s, Name=%s\n", brand.ID, *brand.Name)
-			}
-
-			// Если бренд не найден, создаем его
+			err := tx.Where("name = ? OR orig_name = ?", filtered[i].BrandName, filtered[i].BrandName).First(&brand).Error
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				brandName := cars[i].BrandName
+				brandName := filtered[i].BrandName
 				newBrand := &domain.Brand{
 					Name:      &brandName,
-					OrigName:  &brandName, // Устанавливаем оригинальное имя бренда
+					OrigName:  &brandName,
 					CreatedAt: now,
 					UpdatedAt: now,
 				}
-
-				// Логируем создание бренда
-				fmt.Printf("Creating brand: %s\n", brandName)
-
-				// Пробуем создать бренд напрямую через SQL
-				brandID := uuid.New().String()
-				sqlResult := tx.Exec(`
-					INSERT INTO brands (id, name, orig_name, created_at, updated_at)
-					VALUES (?, ?, ?, ?, ?)
-				`, brandID, brandName, brandName, now, now)
-				
-				if sqlResult.Error != nil {
-					// Логируем ошибку SQL
-					fmt.Printf("SQL Error creating brand: %v\n", sqlResult.Error)
+				if err := tx.Create(newBrand).Error; err != nil {
 					tx.Rollback()
-					return sqlResult.Error
+					log.Printf("ERROR: failed to create brand '%s': %v", brandName, err)
+					return err
 				}
-				
-				// Устанавливаем ID для нового бренда
-				newBrand.ID = brandID
-
-				// Логируем успешное создание бренда
-				fmt.Printf("Brand created successfully with ID: %s\n", newBrand.ID)
-
-				// Устанавливаем связь с новым брендом
-				cars[i].MybrandID = &newBrand.ID
-				fmt.Printf("Set MybrandID for car to: %s\n", *cars[i].MybrandID)
+				log.Printf("Created new brand: %s (ID=%s)", brandName, newBrand.ID)
+				filtered[i].MybrandID = &newBrand.ID
 			} else if err != nil {
-				// Если произошла другая ошибка
-				fmt.Printf("Error searching for brand: %v\n", err)
 				tx.Rollback()
+				log.Printf("ERROR: failed to find brand '%s': %v", filtered[i].BrandName, err)
 				return err
 			} else {
-				// Устанавливаем связь с существующим брендом
-				cars[i].MybrandID = &brand.ID
-				fmt.Printf("Set MybrandID for car to existing brand: %s\n", *cars[i].MybrandID)
+				filtered[i].MybrandID = &brand.ID
 			}
 		}
 	}
 
-	// Создаем все машины
-	if err := tx.Create(&cars).Error; err != nil {
+	// Вставляем все машины, пропуская дубликаты на уровне базы
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&filtered).Error; err != nil {
 		tx.Rollback()
+		log.Printf("ERROR: failed to insert cars (possible duplicate): %v", err)
 		return err
 	}
 
-	// Фиксируем транзакцию
 	return tx.Commit().Error
 }
 

@@ -1,7 +1,8 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 COPY . .
-RUN npm install && npm run build
+RUN npm install
+RUN npm run build
 
 FROM nginx:1.25-alpine
 RUN mkdir -p /usr/share/nginx/html/podbortg

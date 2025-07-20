@@ -24,6 +24,30 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/brands": {
+            "get": {
+                "description": "Список всех брендов",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "brands"
+                ],
+                "summary": "Получить список брендов",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/cars": {
             "get": {
                 "description": "Список машин с фильтрами и пагинацией",

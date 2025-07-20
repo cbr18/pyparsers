@@ -153,7 +153,8 @@ class DongchediParser(BaseCarParser):
                                 pass
 
                         if 'car_source_city_name' in filtered_car_data and filtered_car_data['car_source_city_name'] is not None:
-                            filtered_car_data['city'] = filtered_car_data['car_source_city_name']
+                            from converters import decode_dongchedi_detail
+                            filtered_car_data['city'] = decode_dongchedi_detail(filtered_car_data['car_source_city_name'])
 
                         # Устанавливаем is_available по умолчанию в True
                         filtered_car_data['is_available'] = True
@@ -419,6 +420,11 @@ class DongchediParser(BaseCarParser):
             for key in ["title", "car_name", "sh_price"]:
                 if car_info.get(key):
                     car_info[key] = decode_dongchedi_detail(car_info[key])
+                # Декодируем город
+                if car_info.get("city"):
+                    car_info["city"] = decode_dongchedi_detail(car_info["city"])
+                if car_info.get("car_source_city_name"):
+                    car_info["car_source_city_name"] = decode_dongchedi_detail(car_info["car_source_city_name"])
 
             # Преобразуем списки в строки для полей tags и tags_v2
             for key in ["tags", "tags_v2"]:

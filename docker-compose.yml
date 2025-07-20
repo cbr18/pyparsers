@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:17.5
+    container_name: cars-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+
+  telegrambot:
+    build: ./telegrambot
+    env_file:
+      - .env
+    ports:
+      - "3001:3001"
+    restart: unless-stopped
+    depends_on:
+      - datahub
+
+  datahub:
+    build: ./datahub
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  pg_data:

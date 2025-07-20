@@ -20,6 +20,7 @@ func (r *Router) Setup() *gin.Engine {
    e.POST("/checkcar", r.handler.CheckCar)
    e.GET("/update/:source/full", r.handler.FullUpdate)
    e.POST("/update/:source", r.handler.IncrementalUpdate)
+   e.GET("/brands", r.handler.GetBrands)
    // Swagger UI
    e.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
    return e

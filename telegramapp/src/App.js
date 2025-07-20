@@ -3,7 +3,7 @@ import './App.css';
 import CarCard from './components/CarCard';
 import Filters from './components/Filters';
 import Pagination from './components/Pagination';
-import { fetchCars } from './services/api';
+import { fetchCars, fetchBrands } from './services/api';
 
 function App() {
   const [cars, setCars] = useState([]);
@@ -27,6 +27,7 @@ function App() {
     year: '',
     search: ''
   });
+  const [brands, setBrands] = useState([]);
 
   // Sources for dropdown
   const sources = ['dongchedi', 'che168'];
@@ -81,6 +82,19 @@ function App() {
     loadCars();
   }, [page, limit, filters]);
 
+  // Load brands data
+  useEffect(() => {
+    const loadBrands = async () => {
+      try {
+        const data = await fetchBrands();
+        setBrands(data.data || []);
+      } catch (err) {
+        console.error('Error loading brands:', err);
+      }
+    };
+    loadBrands();
+  }, []);
+
   // Set up global error handlers
   useEffect(() => {
     window.onerror = function (message, source, lineno, colno, error) {
@@ -129,6 +143,7 @@ function App() {
           applyFilters={applyFilters}
           resetFilters={resetFilters}
           sources={sources}
+          brands={brands}
         />
       )}
 

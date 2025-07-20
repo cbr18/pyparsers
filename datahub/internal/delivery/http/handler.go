@@ -13,10 +13,11 @@ import (
 type Handler struct {
 	carService    *usecase.CarService
 	updateService map[string]*usecase.UpdateService // ключ: source ("dongchedi", "che168")
+	brandService  *usecase.BrandService
 }
 
-func NewHandler(carService *usecase.CarService, updateService map[string]*usecase.UpdateService) *Handler {
-	return &Handler{carService: carService, updateService: updateService}
+func NewHandler(carService *usecase.CarService, updateService map[string]*usecase.UpdateService, brandService *usecase.BrandService) *Handler {
+	return &Handler{carService: carService, updateService: updateService, brandService: brandService}
 }
 
 // GetCars godoc
@@ -184,4 +185,21 @@ func (h *Handler) IncrementalUpdate(c *gin.Context) {
 	}
 	
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// GetBrands godoc
+// @Summary      Получить список брендов
+// @Description  Список всех брендов
+// @Tags         brands
+// @Accept       json
+// @Produce      json
+// @Success      200    {object}  map[string]interface{}
+// @Router       /brands [get]
+func (h *Handler) GetBrands(c *gin.Context) {
+	brands, err := h.brandService.ListAllBrands(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": brands})
 }

@@ -46,3 +46,13 @@ func (r *BrandRepository) Create(ctx context.Context, brand *domain.Brand) error
 	brand.UpdatedAt = now
 	return r.db.WithContext(ctx).Create(brand).Error
 }
+
+// ListAll - возвращает все бренды
+func (r *BrandRepository) ListAll(ctx context.Context) ([]domain.Brand, error) {
+	var brands []domain.Brand
+	err := r.db.WithContext(ctx).Find(&brands).Error
+	if err != nil {
+		return nil, err
+	}
+	return brands, nil
+}

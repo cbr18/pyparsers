@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.dongchedi.parser import DongchediParser
 from api.che168.parser import Che168Parser
 from converters import decode_dongchedi_list_sh_price, decode_dongchedi_detail
+from car_filter import filter_cars_by_year
 from typing import List, Dict
 from datetime import datetime
 from dotenv import load_dotenv
@@ -59,6 +60,16 @@ def get_dongchedi_cars():
     total_cars = len(response.data.search_sh_sku_info_list)
     for i, car in enumerate(response.data.search_sh_sku_info_list):
         car_dict = car.dict()
+        
+        # Фильтруем машины с годом выпуска меньше 2017
+        year = car_dict.get('year')
+        if year is not None:
+            try:
+                if int(year) < 2017:
+                    continue
+            except (ValueError, TypeError):
+                pass
+                
         car_dict.update({
             'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
             'source': 'dongchedi'
@@ -101,6 +112,16 @@ def get_dongchedi_cars_by_page(page: int):
     total_cars = len(response.data.search_sh_sku_info_list)
     for i, car in enumerate(response.data.search_sh_sku_info_list):
         car_dict = car.dict()
+        
+        # Фильтруем машины с годом выпуска меньше 2017
+        year = car_dict.get('year')
+        if year is not None:
+            try:
+                if int(year) < 2017:
+                    continue
+            except (ValueError, TypeError):
+                pass
+                
         car_dict.update({
             'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
             'source': 'dongchedi'
@@ -138,6 +159,16 @@ def get_che168_cars():
     total_cars = len(response.data.search_sh_sku_info_list)
     for i, car in enumerate(response.data.search_sh_sku_info_list):
         car_dict = car.dict()
+        
+        # Фильтруем машины с годом выпуска меньше 2017
+        year = car_dict.get('year')
+        if year is not None:
+            try:
+                if int(year) < 2017:
+                    continue
+            except (ValueError, TypeError):
+                pass
+                
         car_dict.update({
             'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
             'source': 'che168'
@@ -169,6 +200,16 @@ def get_che168_cars_by_page(page: int):
     total_cars = len(response.data.search_sh_sku_info_list)
     for i, car in enumerate(response.data.search_sh_sku_info_list):
         car_dict = car.dict()
+        
+        # Фильтруем машины с годом выпуска меньше 2017
+        year = car_dict.get('year')
+        if year is not None:
+            try:
+                if int(year) < 2017:
+                    continue
+            except (ValueError, TypeError):
+                pass
+                
         car_dict.update({
             'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
             'source': 'che168'
@@ -202,7 +243,11 @@ def get_dongchedi_all_cars():
         cars_list = getattr(response.data, 'search_sh_sku_info_list', None)
         if not cars_list:
             break
-        for car in cars_list:
+        
+        # Фильтруем машины по году (не меньше 2017)
+        filtered_cars_list = filter_cars_by_year(cars_list, min_year=2017)
+        
+        for car in filtered_cars_list:
             car_dict = car.dict()
             car_id = car_dict.get('car_id') or car_dict.get('sku_id') or car_dict.get('link')
             if car_id not in seen_ids:
@@ -316,6 +361,15 @@ def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
                 found_existing = True
                 break
 
+            # Фильтруем машины с годом выпуска меньше 2017
+            year = car_dict.get('year')
+            if year is not None:
+                try:
+                    if int(year) < 2017:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+                    
             if car_dict.get('sh_price'):
                 car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
 

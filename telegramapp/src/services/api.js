@@ -36,3 +36,43 @@ export const fetchCars = async (page = 1, limit = 10, filters = {}) => {
     throw error;
   }
 };
+
+/**
+ * Fetch brands from backend
+ * @returns {Promise} - Promise with brands data
+ */
+export const fetchBrands = async () => {
+  try {
+    const response = await fetch('/brands');
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching brands:', error);
+    throw error;
+  }
+};
+
+/**
+ * Send a lead request to the telegram bot
+ * @param {object} car - Car object
+ * @param {string} user - Optional user info
+ * @returns {Promise}
+ */
+export const sendLeadRequest = async (car, user = '') => {
+  try {
+    const response = await fetch('/lead', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ car, user })
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Error sending lead:', error);
+    throw error;
+  }
+};

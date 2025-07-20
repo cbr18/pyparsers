@@ -26,11 +26,6 @@ func (r *CarPostgres) List(ctx context.Context, filter domain.CarFilter, page, l
 	q := "SELECT uuid, source, car_id, sku_id, title, car_name, year, mileage, price, image, link, brand_name, series_name, city, shop_id, tags, is_available, sort_number, brand_id, series_id, car_source_city_name, tags_v2, description, color, transmission, fuel_type, engine_volume, body_type, drive_type, condition, created_at, updated_at FROM cars"
 
 	paramCount := 1
-	// Добавляем ограничение по году (не меньше 2017)
-	where = append(where, fmt.Sprintf("year >= $%d", paramCount))
-	paramCount++
-	args = append(args, 2017)
-	
 	if filter.Source != nil {
 		where = append(where, fmt.Sprintf("source = $%d", paramCount))
 		paramCount++

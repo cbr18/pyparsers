@@ -15,6 +15,7 @@ from api.che168.parser import Che168Parser
 from api.dongchedi.models.response import DongchediApiResponse
 from api.dongchedi.models.car import DongchediCar
 from converters import decode_dongchedi_list_sh_price, decode_dongchedi_detail
+from car_filter import filter_cars_by_year
 from typing import List, Dict, Optional, Any, Union
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
@@ -240,10 +241,13 @@ async def get_dongchedi_cars():
     """
     response = await dongchedi_parser.async_fetch_cars()
 
+    # Фильтруем машины по году (не меньше 2017)
+    filtered_cars_list = filter_cars_by_year(response.data.search_sh_sku_info_list, min_year=2017)
+    
     # Преобразуем в формат для совместимости с фронтендом
     filtered_cars = []
-    total_cars = len(response.data.search_sh_sku_info_list)
-    for i, car in enumerate(response.data.search_sh_sku_info_list):
+    total_cars = len(filtered_cars_list)
+    for i, car in enumerate(filtered_cars_list):
         car_dict = car.dict()
         car_dict.update({
             'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
@@ -273,10 +277,13 @@ async def get_dongchedi_cars_by_page(page: int):
     """
     response = await dongchedi_parser.async_fetch_cars_by_page(page)
 
+    # Фильтруем машины по году (не меньше 2017)
+    filtered_cars_list = filter_cars_by_year(response.data.search_sh_sku_info_list, min_year=2017)
+    
     # Преобразуем в формат для совместимости с фронтендом
     filtered_cars = []
-    total_cars = len(response.data.search_sh_sku_info_list)
-    for i, car in enumerate(response.data.search_sh_sku_info_list):
+    total_cars = len(filtered_cars_list)
+    for i, car in enumerate(filtered_cars_list):
         car_dict = car.dict()
         car_dict.update({
             'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
@@ -312,7 +319,11 @@ async def get_dongchedi_all_cars():
         cars_list = getattr(response.data, 'search_sh_sku_info_list', None)
         if not cars_list:
             break
-        for car in cars_list:
+        
+        # Фильтруем машины по году (не меньше 2017)
+        filtered_cars_list = filter_cars_by_year(cars_list, min_year=2017)
+        
+        for car in filtered_cars_list:
             car_dict = car.dict()
             car_id = car_dict.get('car_id') or car_dict.get('sku_id') or car_dict.get('link')
             if car_id not in seen_ids:
@@ -397,6 +408,15 @@ async def get_dongchedi_incremental_cars(request: IncrementalRequest):
             if car_id in existing_ids:
                 found_existing = True
                 break
+                
+            # Фильтруем машины с годом выпуска меньше 2017
+            year = car_dict.get('year')
+            if year is not None:
+                try:
+                    if int(year) < 2017:
+                        continue
+                except (ValueError, TypeError):
+                    pass
 
             if car_dict.get('sh_price'):
                 car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
@@ -506,10 +526,14 @@ async def get_che168_cars():
     Получает данные о машинах с che168.
     """
     response = await che168_parser.async_fetch_cars()
+    
+    # Фильтруем машины по году (не меньше 2017)
+    filtered_cars_list = filter_cars_by_year(response.data.search_sh_sku_info_list, min_year=2017)
+    
     # Преобразуем в формат для совместимости с фронтендом
     cars_with_metadata = []
-    total_cars = len(response.data.search_sh_sku_info_list)
-    for i, car in enumerate(response.data.search_sh_sku_info_list):
+    total_cars = len(filtered_cars_list)
+    for i, car in enumerate(filtered_cars_list):
         car_dict = car.dict()
         car_dict.update({
             'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
@@ -536,10 +560,14 @@ async def get_che168_cars_by_page(page: int):
         page: Номер страницы (начиная с 1)
     """
     response = await che168_parser.async_fetch_cars_by_page(page)
+    
+    # Фильтруем машины по году (не меньше 2017)
+    filtered_cars_list = filter_cars_by_year(response.data.search_sh_sku_info_list, min_year=2017)
+    
     # Преобразуем в формат для совместимости с фронтендом
     cars_with_metadata = []
-    total_cars = len(response.data.search_sh_sku_info_list)
-    for i, car in enumerate(response.data.search_sh_sku_info_list):
+    total_cars = len(filtered_cars_list)
+    for i, car in enumerate(filtered_cars_list):
         car_dict = car.dict()
         car_dict.update({
             'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
@@ -595,6 +623,15 @@ async def get_che168_incremental_cars(request: IncrementalRequest):
             if car_id in existing_ids:
                 found_existing = True
                 break
+                
+            # Фильтруем машины с годом выпуска меньше 2017
+            year = car_dict.get('year')
+            if year is not None:
+                try:
+                    if int(year) < 2017:
+                        continue
+                except (ValueError, TypeError):
+                    pass
 
             new_cars.append(car_dict)
 
@@ -638,6 +675,16 @@ async def get_che168_all_cars():
             break
         for car in cars_list:
             car_dict = car.dict()
+            
+            # Фильтруем машины с годом выпуска меньше 2017
+            year = car_dict.get('year')
+            if year is not None:
+                try:
+                    if int(year) < 2017:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+                    
             car_id = car_dict.get('car_id') or car_dict.get('sku_id') or car_dict.get('link')
             if car_id not in seen_ids:
                 all_cars.append(car_dict)

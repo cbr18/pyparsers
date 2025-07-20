@@ -9,4 +9,5 @@ import (
 type BrandRepository interface {
 	GetByOrigName(ctx context.Context, origName string) (*domain.Brand, error)
 	Create(ctx context.Context, brand *domain.Brand) error
+	ListAll(ctx context.Context) ([]domain.Brand, error)
 }

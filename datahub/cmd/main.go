@@ -52,7 +52,9 @@ func main() {
 	// database.DB теперь глобально доступен
 
 	repo := repository.NewCarRepository()
+	brandRepo := repository.NewBrandRepository()
 	carService := usecase.NewCarService(repo)
+	brandService := usecase.NewBrandService(brandRepo)
 
 	dongchediClient := external.NewDongchediClient(apiBaseURL)
 	che168Client := external.NewChe168Client(apiBaseURL)
@@ -61,7 +63,7 @@ func main() {
 		"che168":    usecase.NewUpdateService(repo, che168Client, "che168"),
 	}
 
-	handler := httpdelivery.NewHandler(carService, updateService)
+	handler := httpdelivery.NewHandler(carService, updateService, brandService)
 	router := httpdelivery.NewRouter(handler)
 
 	if err := router.Setup().Run(":8080"); err != nil {

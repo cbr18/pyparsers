@@ -13,6 +13,22 @@ info:
   title: Cars API
   version: "1.0"
 paths:
+  /brands:
+    get:
+      consumes:
+      - application/json
+      description: Список всех брендов
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Получить список брендов
+      tags:
+      - brands
   /cars:
     get:
       consumes:

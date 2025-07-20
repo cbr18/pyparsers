@@ -1,6 +1,6 @@
 import React from 'react';
 
-const Filters = ({ tempFilters, setTempFilters, applyFilters, resetFilters, sources }) => {
+const Filters = ({ tempFilters, setTempFilters, applyFilters, resetFilters, sources, brands }) => {
   return (
     <div className="filters-panel">
       <div className="filter-group">
@@ -18,12 +18,15 @@ const Filters = ({ tempFilters, setTempFilters, applyFilters, resetFilters, sour
 
       <div className="filter-group">
         <label>Бренд:</label>
-        <input
-          type="text"
+        <select
           value={tempFilters.brand}
           onChange={(e) => setTempFilters({...tempFilters, brand: e.target.value})}
-          placeholder="Введите бренд"
-        />
+        >
+          <option value="">Все бренды</option>
+          {brands && brands.length > 0 && brands.map(brand => (
+            <option key={brand.id} value={brand.name || brand.orig_name}>{brand.name || brand.orig_name}</option>
+          ))}
+        </select>
       </div>
 
       <div className="filter-group">

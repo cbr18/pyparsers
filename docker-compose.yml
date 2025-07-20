@@ -42,10 +42,34 @@ services:
       - "80:80"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./telegramapp/build:/usr/share/nginx/html/podbortg:ro
     depends_on:
       - datahub
       - telegrambot
+      - pyparsers
+      - telegramapp
+    restart: unless-stopped
+
+  pyparsers:
+    build: ./pyparsers
+    env_file:
+      - .env
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+
+  telegramapp:
+    build: ./telegramapp
+    restart: unless-stopped
+    ports:
+      - "3002:80"
+
+  cron-updater:
+    build: ./init-scripts
+    volumes:
+      - ./init-scripts:/init-scripts
+      - /var/log/car-updater.log:/var/log/car-updater.log
+    depends_on:
+      - datahub
     restart: unless-stopped
 
 volumes:

@@ -1,0 +1,17 @@
+h1:qeKplKSmVim7AueovWcEUFj64VXuopPIsFfSQY8elds=
+000001_create_cars_table.down.sql h1:gpRbNRA3N+NkI6ORHUOmwhaNJx/wFEcFAQdhO+FYkIQ=
+000001_create_cars_table.up.sql h1:hFgzzEDX6cC1+HynQc3xoBalRJWzPKQ3jOiEAHMPRgU=
+000002_add_new_column.down.sql h1:1CSnKUpXmkvly5U9cYdWCU0ZHG6IoX39Lkcj4Xdt0gw=
+000002_add_new_column.up.sql h1:/We4ctpygSwKfNW6k3UmIEu97XLAZwl0ZoThdJJUll4=
+000003_update_cars_table_structure.down.sql h1:94jPmJByQWfhWpCzr42ZcqVQ6+ltT45SVf6U6JJsNsE=
+000003_update_cars_table_structure.up.sql h1:NNvQURcs6SjjSgdRRTGu/liXZY/+i4OKtvh1CX2LbRo=
+000004_update_year_type.down.sql h1:XDQcCxbOj9PTZj3vWTlTE+vuJ3hvXg8mpRhTiicwOXw=
+000004_update_year_type.up.sql h1:VkI+fZmtfQwOmH96WWronTAls4uqNSiTpT6mL71eNFc=
+000005_add_optimization_indexes.down.sql h1:rDrBMBVlL0r4IggiREnF/NY70RH7PGa5q936YmTt5Fw=
+000005_add_optimization_indexes.up.sql h1:N9dWGnaijha4IKxO3ddSDfM7fo1Z8epBceW9pbzo5IU=
+000006_change_car_id_to_int64.down.sql h1:kgJ41QRUEnaZFmvfecLvuBEGtIiwm5Ga1KPkegJwJWg=
+000006_change_car_id_to_int64.up.sql h1:d3MRvQbUfbzJbtBYI4DQ1U+MLz8akxnyDetSku6dDBk=
+000007_create_brands_table.down.sql h1:qhSP956dk/INkuVGGQuYA5ZlcGYrm/XY6uumvOPzRYY=
+000007_create_brands_table.up.sql h1:1r/rO2WCsSRd6v3aIcDfXYp0L466pBGJh93wan/cLb4=
+000008_add_mybrand_id_to_cars.down.sql h1:qC1NVQwmGBle7eeimd6F2fdZvgcgrUAydWdnDezPJXw=
+000008_add_mybrand_id_to_cars.up.sql h1:aPDq5sPP4mKwLSYkuT1aiP4Q0VAyjqmnoaSXYmV7Wlo=

@@ -5,6 +5,7 @@ import (
 	"datahub/internal/usecase"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -128,6 +129,14 @@ func (h *Handler) FullUpdate(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "count": count})
 }
 
+// isDuplicateKeyError проверяет, является ли ошибка нарушением ограничения уникальности
+func isDuplicateKeyError(err error) bool {
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "duplicate key value violates unique constraint") ||
+		strings.Contains(errMsg, "UNIQUE constraint failed") ||
+		strings.Contains(errMsg, "Duplicate entry")
+}
+
 // POST /update/{source}
 // @Summary      Инкрементальное обновление источника
 // @Description  Запускает обновление последних N записей для источника (dongchedi/che168)
@@ -153,9 +162,26 @@ func (h *Handler) IncrementalUpdate(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil || req.LastN <= 0 {
 		req.LastN = 5 // по умолчанию
 	}
-	if err := service.IncrementalUpdate(c.Request.Context(), req.LastN); err != nil {
+	
+	// Вызываем метод инкрементального обновления
+	err := service.IncrementalUpdate(c.Request.Context(), req.LastN)
+	if err != nil {
+		// Проверяем, является ли ошибка нарушением ограничения уникальности
+		if isDuplicateKeyError(err) {
+			// Возвращаем более дружественный ответ с кодом 200 вместо 500
+			c.JSON(http.StatusOK, gin.H{
+				"status": "warning",
+				"message": "Некоторые записи уже существуют в базе данных",
+				"error": "Обнаружены дубликаты записей",
+				"details": err.Error(),
+			})
+			return
+		}
+		
+		// Для других ошибок возвращаем стандартный ответ с ошибкой
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }

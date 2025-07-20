@@ -65,6 +65,7 @@ func AutoMigrate() error {
 	// Регистрируем модели для миграции
 	return DB.AutoMigrate(
 		&domain.Car{},
+		&domain.Brand{},
 		// Добавьте здесь другие модели по мере необходимости
 	)
 }

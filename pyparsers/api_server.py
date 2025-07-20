@@ -279,13 +279,17 @@ def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
     parser = DongchediParser()
     new_cars = []
     existing_ids = set()
+    existing_sku_ids = set()
 
     # Собираем ID существующих машин
     for car in existing_cars:
-        car_id = car.get('car_id') or car.get('sku_id') or car.get('link')
+        car_id = car.get('car_id')
+        sku_id=car.get('sku_id')
         if car_id:
             existing_ids.add(car_id)
-
+        if sku_id:
+            existing_sku_ids.add(sku_id)
+    print(existing_ids)
     # Получаем следующий номер для нумерации
     next_sort_number = _get_next_sort_number(existing_cars, 'dongchedi')
 
@@ -300,16 +304,22 @@ def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
         found_existing = False
         for car in cars_list:
             car_dict = car.dict()
-            car_id = car_dict.get('car_id') or car_dict.get('sku_id') or car_dict.get('link')
+            car_id = car_dict.get('car_id')
 
             if car_id in existing_ids:
+                found_existing = True
+                break
+            
+            sku_id = car_dict.get('sku_id')
+            if sku_id in existing_sku_ids:
+                print(car_id)
                 found_existing = True
                 break
 
             if car_dict.get('sh_price'):
                 car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
 
-            # Преобразуем car_id в int64 для совместимости с Go
+            # Преобразуем car_id в int64
             if 'car_id' in car_dict and car_dict['car_id'] is not None:
                 try:
                     car_dict['car_id'] = int(car_dict['car_id'])
@@ -319,7 +329,7 @@ def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
 
             new_cars.append(car_dict)
 
-        if found_existing:
+        if found_existing or page==10:
             break
 
         if not getattr(response.data, 'has_more', False):
@@ -382,7 +392,7 @@ def get_che168_incremental_cars(existing_cars: List[Dict]):
 
             new_cars.append(car_dict)
 
-        if found_existing:
+        if found_existing or page==10:
             break
 
         if not getattr(response.data, 'has_more', False):

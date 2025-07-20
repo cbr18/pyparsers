@@ -81,7 +81,7 @@ func (c *Che168Client) FetchAll(ctx context.Context) ([]domain.Car, error) {
 
 	// Устанавливаем увеличенный таймаут для клиента, так как парсинг всех страниц может занять время
 	client := &http.Client{
-		Timeout: 5 * time.Minute, // Увеличиваем таймаут до 5 минут
+		Timeout: time.Hour, // Увеличиваем таймаут до 25 минут
 	}
 
 	// Выполняем запрос

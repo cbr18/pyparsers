@@ -4,6 +4,7 @@ import (
 	"context"
 	"datahub/internal/domain"
 	"datahub/internal/repository"
+	"fmt"
 )
 
 // ExternalSourceClient — интерфейс для клиента внешнего источника (dongchedi, che168)
@@ -52,7 +53,34 @@ func (s *UpdateService) IncrementalUpdate(ctx context.Context, lastN int) error 
 	if err != nil {
 		return err
 	}
-	return s.repo.CreateMany(ctx, newCars)
+	
+	// Если нет новых машин, просто возвращаем nil
+	if len(newCars) == 0 {
+		return nil
+	}
+	
+	// Используем CreateMany вместо Create для каждой машины отдельно
+	// Это позволит создать бренды в рамках одной транзакции
+	err = s.repo.CreateMany(ctx, newCars)
+	if err != nil {
+		// Если произошла ошибка, возвращаем ее
+		return err
+	}
+	
+	return nil
+}
+
+// PartialUpdateError - ошибка, которая содержит информацию о частичном успехе обновления
+type PartialUpdateError struct {
+	OriginalError error
+	SuccessCount  int
+	TotalCount    int
+}
+
+// Error реализует интерфейс error
+func (e *PartialUpdateError) Error() string {
+	return fmt.Sprintf("частично успешное обновление: добавлено %d из %d записей, ошибка: %v", 
+		e.SuccessCount, e.TotalCount, e.OriginalError)
 }
 
 // CheckCar — проверка машины по ID или URL

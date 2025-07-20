@@ -35,6 +35,7 @@ type Car struct {
 	BodyType          string    `json:"body_type"`
 	DriveType         string    `json:"drive_type"`
 	Condition         string    `json:"condition"`
+	MybrandID         *string   `json:"mybrand_id" gorm:"type:uuid;index"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }

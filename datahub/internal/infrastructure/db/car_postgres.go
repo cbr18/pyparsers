@@ -185,6 +185,20 @@ func (r *CarPostgres) CreateMany(ctx context.Context, cars []domain.Car) error {
 	return tx.Commit()
 }
 
+func (r *CarPostgres) Create(ctx context.Context, car domain.Car) error {
+	uuidVal := car.UUID
+	if uuidVal == "" {
+		uuidVal = uuid.New().String()
+	}
+
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO cars (uuid, source, car_id, sku_id, title, car_name, year, mileage, price, image, link, brand_name, series_name, city, shop_id, tags, is_available, sort_number, brand_id, series_id, car_source_city_name, tags_v2, description, color, transmission, fuel_type, engine_volume, body_type, drive_type, condition, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)
+	`, uuidVal, car.Source, car.CarID, car.SkuID, car.Title, car.CarName, car.Year, car.Mileage, car.Price, car.Image, car.Link, car.BrandName, car.SeriesName, car.City, car.ShopID, car.Tags, car.IsAvailable, car.SortNumber, car.BrandID, car.SeriesID, car.CarSourceCityName, car.TagsV2, car.Description, car.Color, car.Transmission, car.FuelType, car.EngineVolume, car.BodyType, car.DriveType, car.Condition, car.CreatedAt, car.UpdatedAt)
+	
+	return err
+}
+
 func (r *CarPostgres) DeleteBySource(ctx context.Context, source string) error {
 	_, err := r.db.ExecContext(ctx, "DELETE FROM cars WHERE source = $1", source)
 	return err

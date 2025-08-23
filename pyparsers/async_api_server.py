@@ -10,7 +10,6 @@ import json
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware        
 from fastapi.responses import JSONResponse
-from api.dongchedi.async_parser import AsyncDongchediParser
 from api.che168.parser import Che168Parser
 from api.dongchedi.models.response import DongchediApiResponse
 from api.dongchedi.models.car import DongchediCar

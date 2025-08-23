@@ -8,7 +8,18 @@ app.use(express.json());
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
 // /start command
-bot.start((ctx) => ctx.reply('Бот для заявок CarCatch активен!'));
+bot.start((ctx) => {
+  ctx.reply(
+    'Бот для заявок CarCatch активен!\n\nОткрыть веб-приложение:',
+    {
+      reply_markup: {
+        inline_keyboard: [[
+          { text: '🚗 Открыть подбор авто', url: 'https://car-catch.ru/podbortg' }
+        ]]
+      }
+    }
+  );
+});
 
 // Endpoint to receive lead requests from frontend
 app.post('/lead', async (req, res) => {
@@ -35,13 +46,15 @@ app.post('/lead', async (req, res) => {
   }
 });
 
+// Включаем webhook-режим
+app.use(bot.webhookCallback('/bot'));
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Express server listening on port ${PORT}`);
-  bot.launch();
-  console.log('Telegram bot started');
+  console.log('Telegram bot started in webhook mode');
 });
 
-// Graceful stop
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM')); 
+// // Graceful stop
+// process.once('SIGINT', () => bot.stop('SIGINT'));
+// process.once('SIGTERM', () => bot.stop('SIGTERM')); 

@@ -1,11 +1,14 @@
-FROM node:20-alpine AS build
+FROM node:18-alpine as build
 WORKDIR /app
 COPY . .
 RUN npm install
 RUN npm run build
+# Вот здесь!
+RUN echo "=== BUILD DIR ===" && ls -l /app/build || true
+RUN echo "=== APP DIR ===" && ls -l /app || true
+RUN echo "=== BUILD FILES ===" && find /app/build || true
 
 FROM nginx:1.25-alpine
 RUN mkdir -p /usr/share/nginx/html/podbortg
 COPY --from=build /app/build/ /usr/share/nginx/html/podbortg/
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"] 
+COPY nginx.conf /etc/nginx/conf.d/default.conf

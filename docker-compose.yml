@@ -1,30 +1,26 @@
-version: '3.8'
-
 services:
   # Database
   postgres:
-    image: postgres:17.5
-    container_name: cars-postgres
+    image: postgres:17.5-alpine
+    container_name: carcatch-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    # Uncomment for production to hide database port
-    # ports: []
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    expose:
+      - "5432"
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      - carsparser_pg_data:/var/lib/postgresql/data
       - ./init-scripts:/docker-entrypoint-initdb.d
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
     networks:
       - carcatch-network
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
 
   # Core API Services
   datahub:
@@ -36,21 +32,27 @@ services:
       - .env
     environment:
       - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
       - API_BASE_URL=http://pyparsers:5000
-    ports:
-      - "8080:8080"
+      - NODE_ENV=production
+    expose:
+      - "8080"
     depends_on:
       postgres:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/cars"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/cars"]
+      interval: 15s
+      timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 40s
     networks:
       - carcatch-network
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
 
   pyparsers:
     build:
@@ -59,17 +61,21 @@ services:
     container_name: carcatch-pyparsers
     env_file:
       - .env
-    ports:
-      - "5000:5000"
+    expose:
+      - "5000"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health"]
+      interval: 15s
+      timeout: 5s
       retries: 3
       start_period: 30s
     networks:
       - carcatch-network
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
 
   # Telegram Services
   telegrambot:
@@ -79,20 +85,26 @@ services:
     container_name: carcatch-telegrambot
     env_file:
       - .env
-    ports:
-      - "3001:3001"
+    environment:
+      - DATAHUB_URL=http://datahub:8080
+    expose:
+      - "3001"
     restart: unless-stopped
     depends_on:
       datahub:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/health"]
+      interval: 15s
+      timeout: 5s
       retries: 3
       start_period: 30s
     networks:
       - carcatch-network
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
 
   # Frontend Applications
   telegramapp:
@@ -101,37 +113,23 @@ services:
       dockerfile: Dockerfile
     container_name: carcatch-telegramapp
     restart: unless-stopped
-    ports:
-      - "3002:80"
+    expose:
+      - "80"
     depends_on:
-      - datahub
+      datahub:
+        condition: service_started
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 15s
+      timeout: 5s
       retries: 3
       start_period: 30s
     networks:
       - carcatch-network
-
-  telegramngapp:
-    build:
-      context: ./telegramngapp
-      dockerfile: Dockerfile
-    container_name: carcatch-telegramngapp
-    restart: unless-stopped
-    ports:
-      - "3003:80"
-    depends_on:
-      - datahub
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    networks:
-      - carcatch-network
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
 
   # Reverse Proxy
   nginx:
@@ -142,28 +140,38 @@ services:
       - "443:443"
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
       - ./logs/nginx:/var/log/nginx
+      - nginx_cache:/var/cache/nginx
+      - nginx_temp:/var/cache/nginx/temp
     depends_on:
       datahub:
-        condition: service_healthy
+        condition: service_started
       pyparsers:
-        condition: service_healthy
+        condition: service_started
       telegrambot:
-        condition: service_healthy
+        condition: service_started
       telegramapp:
-        condition: service_healthy
-      telegramngapp:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 15s
+      timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 15s
     networks:
       - carcatch-network
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    tmpfs:
+      - /var/run
 
   # Background Services
   cron-updater:
@@ -172,37 +180,36 @@ services:
       dockerfile: Dockerfile
     container_name: carcatch-cron-updater
     volumes:
-      - ./init-scripts:/init-scripts
-      - ./logs:/logs
+      - ./init-scripts:/init-scripts:ro
+      - ./logs/cron:/logs
+    environment:
+      - DATAHUB_URL=http://datahub:8080
+      - PYPARSERS_URL=http://pyparsers:5000
     depends_on:
-      datahub:
-        condition: service_healthy
+      - datahub
+      - pyparsers
     restart: unless-stopped
     networks:
       - carcatch-network
-
-  # Optional: ASP.NET DataHub (if needed)
-  # aspdatahub:
-  #   build:
-  #     context: ./aspdatahub
-  #     dockerfile: Dockerfile
-  #   container_name: carcatch-aspdatahub
-  #   ports:
-  #     - "5001:80"
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #   restart: unless-stopped
-  #   networks:
-  #     - carcatch-network
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
-  pg_data:
+  carsparser_pg_data:
+    driver: local
+  nginx_cache:
+    driver: local
+  nginx_temp:
     driver: local
 
 networks:
   carcatch-network:
     driver: bridge
     ipam:
+      driver: default
       config:
         - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+    driver_opts:
+      com.docker.network.bridge.name: carcatch0
+      com.docker.network.driver.mtu: 1500

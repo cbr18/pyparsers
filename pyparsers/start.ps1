@@ -19,5 +19,5 @@ if (-not $API_PORT) { $API_PORT = "8000" }
 $API_RELOAD = $env:API_RELOAD
 if (-not $API_RELOAD) { $API_RELOAD = "true" }
 
-# Start the server
-uvicorn api_server:app --host $API_HOST --port $API_PORT --reload
+# Start the server with increased timeout for long-running requests
+uvicorn api_server:app --host $API_HOST --port $API_PORT --reload --timeout-keep-alive 3600

@@ -64,7 +64,7 @@ class HTTPClient:
     def __init__(self,
                  base_url: str = "",
                  headers: Optional[Dict[str, str]] = None,
-                 timeout: float = 10.0,
+                 timeout: float = 3600.0,  # Увеличиваем таймаут до часа по умолчанию
                  max_retries: int = 3,
                  retry_delay: float = 1.0,
                  backoff_factor: float = 2.0,

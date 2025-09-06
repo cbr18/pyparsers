@@ -65,11 +65,11 @@ class DongchediParser(BaseCarParser):
 
             # Попробуем использовать GET вместо POST, если POST не работает
             try:
-                response = requests.post(url, headers=self.headers)
+                response = requests.post(url, headers=self.headers, timeout=3600)
                 if response.status_code != 200:
-                    response = requests.get(url, headers=self.headers)
+                    response = requests.get(url, headers=self.headers, timeout=3600)
             except Exception:
-                response = requests.get(url, headers=self.headers)
+                response = requests.get(url, headers=self.headers, timeout=3600)
 
             response.raise_for_status()
 

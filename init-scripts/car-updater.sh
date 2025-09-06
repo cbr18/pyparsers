@@ -10,7 +10,7 @@ log() {
 make_get() {
   url="$1"
   log "GET $url"
-  curl -s -X GET "$url" >/dev/null 2>&1
+  curl -s -X GET --max-time 3600 "$url" >/dev/null 2>&1
   log "GET $url finished"
 }
 
@@ -18,7 +18,7 @@ make_post() {
   url="$1"
   data="$2"
   log "POST $url"
-  curl -s -X POST -H "Content-Type: application/json" -d "$data" "$url" >/dev/null 2>&1
+  curl -s -X POST -H "Content-Type: application/json" -d "$data" --max-time 3600 "$url" >/dev/null 2>&1
   log "POST $url finished"
 }
 

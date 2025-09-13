@@ -210,3 +210,4 @@ atlas.hcl
 .kiro/
 node_modules/
 .envcopy
+/nginx/ssl/

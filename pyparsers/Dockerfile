@@ -6,4 +6,4 @@ RUN pip install --no-cache-dir fastapi uvicorn[standard] requests aiohttp beauti
 
 COPY . .
 
-CMD ["uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--timeout-keep-alive", "3600"]
+CMD ["uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "5000", "--reload", "--timeout-keep-alive", "3600"]

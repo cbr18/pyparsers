@@ -44,7 +44,7 @@ func main() {
 	}
 	dsn := "postgres://" + pgUser + ":" + pgPass + "@" + pgHost + ":" + pgPort + "/" + pgDB + "?sslmode=disable"
 
-	// Инициализация GORM
+	// Инициализация GORM (миграции выполняются отдельным контейнером)
 	_, err := database.InitDB(dsn)
 	if err != nil {
 		log.Fatalf("failed to connect to db: %v", err)

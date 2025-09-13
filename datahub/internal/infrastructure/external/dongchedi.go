@@ -104,7 +104,7 @@ func (c *DongchediClient) CheckCar(ctx context.Context, carIDorURL string) (*dom
 
 	// Устанавливаем таймаут для клиента
 	client := &http.Client{
-		Timeout: 30 * time.Second, // Таймаут для проверки одной машины
+		Timeout: 3600 * time.Second, // Таймаут для проверки одной машины
 	}
 
 	// Выполняем запрос

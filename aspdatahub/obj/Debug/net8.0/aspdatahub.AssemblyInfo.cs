@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("aspdatahub")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+f845a9f969f1f4b9d594227d29e30a78ea3afff5")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+f9d9fbc312ceff3dc774973438e9c4edd695953e")]
 [assembly: System.Reflection.AssemblyProductAttribute("aspdatahub")]
 [assembly: System.Reflection.AssemblyTitleAttribute("aspdatahub")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

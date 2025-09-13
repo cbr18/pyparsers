@@ -61,6 +61,8 @@ services:
     container_name: carcatch-pyparsers
     env_file:
       - .env
+    environment:
+      - DATAHUB_URL=http://datahub:8080   # URL для push результатов
     expose:
       - "5000"
     restart: unless-stopped

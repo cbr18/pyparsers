@@ -26,6 +26,7 @@ import (
 	httpdelivery "datahub/internal/delivery/http"
 	"datahub/internal/infrastructure/database"
 	"datahub/internal/infrastructure/external"
+	"datahub/internal/infrastructure/migration"
 	"datahub/internal/infrastructure/repository"
 	"datahub/internal/usecase"
 )
@@ -44,7 +45,14 @@ func main() {
 	}
 	dsn := "postgres://" + pgUser + ":" + pgPass + "@" + pgHost + ":" + pgPort + "/" + pgDB + "?sslmode=disable"
 
-	// Инициализация GORM (миграции выполняются отдельным контейнером)
+	// Применяем миграции перед инициализацией GORM
+	migrationsPath := "./migrations"
+	if err := migration.RunMigrations(dsn, migrationsPath); err != nil {
+		log.Printf("Warning: failed to run migrations: %v", err)
+		log.Println("Continuing without migrations - make sure database schema is up to date")
+	}
+
+	// Инициализация GORM
 	_, err := database.InitDB(dsn)
 	if err != nil {
 		log.Fatalf("failed to connect to db: %v", err)

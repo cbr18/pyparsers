@@ -87,3 +87,17 @@ func (e *PartialUpdateError) Error() string {
 func (s *UpdateService) CheckCar(ctx context.Context, carIDorURL string) (*domain.Car, error) {
 	return s.client.CheckCar(ctx, carIDorURL)
 }
+
+// SaveCars — сохраняет машин в БД
+func (s *UpdateService) SaveCars(ctx context.Context, cars []domain.Car) error {
+	if len(cars) == 0 {
+		return nil
+	}
+	
+	// Устанавливаем source для всех машин
+	for i := range cars {
+		cars[i].Source = s.sourceName
+	}
+	
+	return s.repo.CreateMany(ctx, cars)
+}

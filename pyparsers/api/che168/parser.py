@@ -17,6 +17,7 @@ try:
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
     from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
     from selenium.common.exceptions import TimeoutException, WebDriverException
     SELENIUM_AVAILABLE = True
 except ImportError:
@@ -44,7 +45,8 @@ class Che168Parser(BaseCarParser):
         chrome_options = Options()
 
         if self.headless:
-            chrome_options.add_argument("--headless")
+            # Use new headless for modern Chromium
+            chrome_options.add_argument("--headless=new")
 
         # Настройки для обхода обнаружения
         chrome_options.add_argument("--no-sandbox")
@@ -84,7 +86,17 @@ class Che168Parser(BaseCarParser):
         chrome_options.add_argument(f"--user-agent={random.choice(user_agents)}")
 
         try:
-            self.driver = webdriver.Chrome(options=chrome_options)
+            # Respect CHROME_BIN and CHROMEDRIVER_PATH if provided
+            import os
+            chrome_bin = os.environ.get("CHROME_BIN")
+            if chrome_bin:
+                chrome_options.binary_location = chrome_bin
+
+            driver_path = os.environ.get("CHROMEDRIVER_PATH")
+            if driver_path:
+                self.driver = webdriver.Chrome(service=Service(driver_path), options=chrome_options)
+            else:
+                self.driver = webdriver.Chrome(options=chrome_options)
 
             # Скрываем признаки автоматизации
             self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
@@ -208,7 +220,11 @@ class Che168Parser(BaseCarParser):
                 logger.info(f"Страница {page}: найдено {len(cars)} автомобилей")
 
                 # Проверяем, есть ли еще страницы (ищем пагинацию)
-                has_more = self._check_has_more_pages(soup)
+                try:
+                    has_more = self._check_has_more_pages(soup)
+                except Exception as e:
+                    logger.warning(f"Ошибка при анализе пагинации: {e}")
+                    has_more = False
 
                 data = Che168Data(
                     has_more=has_more,
@@ -223,11 +239,24 @@ class Che168Parser(BaseCarParser):
                 )
 
             except Exception as e:
-                return Che168ApiResponse(
-                    data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
-                    message=f"Страница {page} не найдена",
-                    status=404
-                )
+                logger.error(f"Ошибка при парсинге страницы {page}: {e}")
+                try:
+                    # Если успели распарсить хотя бы часть данных, вернем их
+                    cars_elements = soup.select('div.content.card-wrap ul.viewlist_ul li.cards-li') if 'soup' in locals() else []
+                    cars = [self._parse_li_to_car(li) for li in cars_elements] if cars_elements else []
+                    cars = [car for car in cars if getattr(car, 'car_id', None) is not None]
+                    return Che168ApiResponse(
+                        data=Che168Data(has_more=False, search_sh_sku_info_list=cars, total=len(cars)),
+                        message=f"Partial success on page {page}: returned {len(cars)} cars; error: {e}",
+                        status=200 if cars else 404
+                    )
+                except Exception as inner:
+                    logger.error(f"Ошибка при формировании частичного ответа: {inner}")
+                    return Che168ApiResponse(
+                        data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
+                        message=f"Страница {page} не найдена",
+                        status=404
+                    )
             finally:
                 if self.driver:
                     self.driver.quit()

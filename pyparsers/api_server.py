@@ -1,4 +1,6 @@
 import os
+import asyncio
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.dongchedi.parser import DongchediParser
@@ -9,6 +11,8 @@ from typing import List, Dict
 from datetime import datetime
 from dotenv import load_dotenv
 from pydantic import BaseModel
+from models import TaskCreateRequest, TaskCreateResponse
+from task_service import task_service
 
 # Модель для запроса детального парсинга che168
 class CarUrlRequest(BaseModel):
@@ -634,5 +638,44 @@ def get_che168_car_detail(request: CarUrlRequest):
             "message": f"Ошибка при парсинге: {meta.get('error')}",
             "status": meta.get("status", 500)
         }
+
+@app.post("/tasks", response_model=TaskCreateResponse)
+async def create_task(request: TaskCreateRequest):
+    """
+    Создать новую задачу парсинга
+    """
+    if request.source not in ["dongchedi", "che168"]:
+        return {"error": "Invalid source. Must be 'dongchedi' or 'che168'"}
+    
+    task = task_service.create_task(request.source)
+    
+    # Запускаем обработку задачи в фоне
+    asyncio.create_task(task_service.process_task(task.id))
+    
+    return TaskCreateResponse(task_id=task.id)
+
+@app.get("/tasks/{task_id}")
+def get_task_status(task_id: str):
+    """
+    Получить статус задачи
+    """
+    if task_id not in task_service.tasks:
+        return {"error": "Task not found"}
+    
+    task = task_service.tasks[task_id]
+    return {
+        "task_id": task.id,
+        "source": task.source,
+        "status": task.status,
+        "created_at": task.created_at,
+        "updated_at": task.updated_at
+    }
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """
+    Закрыть HTTP сессию при завершении работы
+    """
+    await task_service.close_session()
 
 

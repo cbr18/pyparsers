@@ -235,12 +235,13 @@ class DongchediParser(BaseCarParser):
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
         from selenium.common.exceptions import TimeoutException, WebDriverException
         from bs4 import BeautifulSoup
 
         url = f"https://www.dongchedi.com/usedcar/{car_id}"
         chrome_options = Options()
-        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
@@ -262,7 +263,15 @@ class DongchediParser(BaseCarParser):
         chrome_options.add_argument(f"--user-agent={random.choice(user_agents)}")
         driver = None
         try:
-            driver = webdriver.Chrome(options=chrome_options)
+            import os
+            chrome_bin = os.environ.get("CHROME_BIN")
+            if chrome_bin:
+                chrome_options.binary_location = chrome_bin
+            driver_path = os.environ.get("CHROMEDRIVER_PATH")
+            if driver_path:
+                driver = webdriver.Chrome(service=Service(driver_path), options=chrome_options)
+            else:
+                driver = webdriver.Chrome(options=chrome_options)
             driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             driver.get(url)
             time.sleep(random.uniform(2, 3))

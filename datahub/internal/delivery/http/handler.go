@@ -2,6 +2,7 @@ package http
 
 import (
 	"datahub/internal/domain"
+	"datahub/internal/infrastructure/external"
 	"datahub/internal/usecase"
 	"net/http"
 	"strconv"
@@ -11,13 +12,15 @@ import (
 )
 
 type Handler struct {
-	carService    *usecase.CarService
-	updateService map[string]*usecase.UpdateService // ключ: source ("dongchedi", "che168")
-	brandService  *usecase.BrandService
+	carService      *usecase.CarService
+	updateService   map[string]*usecase.UpdateService // ключ: source ("dongchedi", "che168")
+	brandService    *usecase.BrandService
+	taskService     *usecase.TaskService
+	pyparsersClient *external.PyparsersClient
 }
 
-func NewHandler(carService *usecase.CarService, updateService map[string]*usecase.UpdateService, brandService *usecase.BrandService) *Handler {
-	return &Handler{carService: carService, updateService: updateService, brandService: brandService}
+func NewHandler(carService *usecase.CarService, updateService map[string]*usecase.UpdateService, brandService *usecase.BrandService, taskService *usecase.TaskService, pyparsersClient *external.PyparsersClient) *Handler {
+	return &Handler{carService: carService, updateService: updateService, brandService: brandService, taskService: taskService, pyparsersClient: pyparsersClient}
 }
 
 // GetCars godoc
@@ -107,7 +110,7 @@ func (h *Handler) CheckCar(c *gin.Context) {
 
 // GET /update/{source}/full
 // @Summary      Полное обновление источника
-// @Description  Запускает полное обновление данных для источника (dongchedi/che168)
+// @Description  Создает задачу полного обновления данных для источника (dongchedi/che168) в pyparsers
 // @Tags         update
 // @Produce      json
 // @Param        source path string true "Источник"
@@ -117,17 +120,23 @@ func (h *Handler) CheckCar(c *gin.Context) {
 // @Router       /update/{source}/full [get]
 func (h *Handler) FullUpdate(c *gin.Context) {
 	source := c.Param("source")
-	service, ok := h.updateService[source]
-	if !ok {
+	if source != "dongchedi" && source != "che168" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown source"})
 		return
 	}
-	count, err := service.FullUpdate(c.Request.Context())
+	
+	// Создаем задачу в pyparsers
+	response, err := h.pyparsersClient.CreateTask(c.Request.Context(), source)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "count": count})
+	
+	c.JSON(http.StatusOK, gin.H{
+		"status": "ok", 
+		"message": "Task created successfully",
+		"task_id": response.TaskID,
+	})
 }
 
 // isDuplicateKeyError проверяет, является ли ошибка нарушением ограничения уникальности
@@ -140,51 +149,43 @@ func isDuplicateKeyError(err error) bool {
 
 // POST /update/{source}
 // @Summary      Инкрементальное обновление источника
-// @Description  Запускает обновление последних N записей для источника (dongchedi/che168)
+// @Description  Создает задачу инкрементального обновления для источника (dongchedi/che168) в pyparsers
 // @Tags         update
 // @Accept       json
 // @Produce      json
 // @Param        source path string true "Источник"
-// @Param        request body object{last_n=int} true "Сколько последних обновить"
+// @Param        request body object{last_n=int} true "Сколько последних обновить (игнорируется в push-модели)"
 // @Success      200 {object} map[string]string
 // @Failure      400 {object} map[string]string
 // @Failure      500 {object} map[string]string
 // @Router       /update/{source} [post]
 func (h *Handler) IncrementalUpdate(c *gin.Context) {
 	source := c.Param("source")
-	service, ok := h.updateService[source]
-	if !ok {
+	if source != "dongchedi" && source != "che168" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown source"})
 		return
 	}
+	
+	// Игнорируем last_n в push-модели, так как pyparsers сам определяет что парсить
 	var req struct {
 		LastN int `json:"last_n"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.LastN <= 0 {
-		req.LastN = 5 // по умолчанию
+	if err := c.ShouldBindJSON(&req); err != nil {
+		// Если не удалось распарсить JSON, продолжаем без ошибки
 	}
 	
-	// Вызываем метод инкрементального обновления
-	err := service.IncrementalUpdate(c.Request.Context(), req.LastN)
+	// Создаем задачу в pyparsers
+	response, err := h.pyparsersClient.CreateTask(c.Request.Context(), source)
 	if err != nil {
-		// Проверяем, является ли ошибка нарушением ограничения уникальности
-		if isDuplicateKeyError(err) {
-			// Возвращаем более дружественный ответ с кодом 200 вместо 500
-			c.JSON(http.StatusOK, gin.H{
-				"status": "warning",
-				"message": "Некоторые записи уже существуют в базе данных",
-				"error": "Обнаружены дубликаты записей",
-				"details": err.Error(),
-			})
-			return
-		}
-		
-		// Для других ошибок возвращаем стандартный ответ с ошибкой
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	c.JSON(http.StatusOK, gin.H{
+		"status": "ok", 
+		"message": "Task created successfully",
+		"task_id": response.TaskID,
+	})
 }
 
 // GetBrands godoc
@@ -202,4 +203,67 @@ func (h *Handler) GetBrands(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": brands})
+}
+
+// CompleteTask godoc
+// @Summary      Завершить задачу парсинга
+// @Description  Принимает результаты парсинга от pyparsers и сохраняет их в БД
+// @Tags         tasks
+// @Accept       json
+// @Produce      json
+// @Param        id   path      string                    true  "ID задачи"
+// @Param        request body   object{task_id=string,source=string,status=string,data=array} true "Данные для завершения задачи"
+// @Success      200   {object} map[string]string
+// @Failure      400   {object} map[string]string
+// @Failure      500   {object} map[string]string
+// @Router       /api/tasks/{id}/complete [post]
+func (h *Handler) CompleteTask(c *gin.Context) {
+	taskID := c.Param("id")
+	
+	var req struct {
+		TaskID string      `json:"task_id" binding:"required"`
+		Source string      `json:"source" binding:"required"`
+		Status string      `json:"status" binding:"required"`
+		Data   []domain.Car `json:"data" binding:"required"`
+	}
+	
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	
+	// Проверяем, что ID в пути совпадает с ID в теле запроса
+	if req.TaskID != taskID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "task ID mismatch"})
+		return
+	}
+	
+	// Создаем задачу в сервисе задач
+	task, err := h.taskService.CreateTask(req.Source, "full")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	
+	// Обновляем статус задачи на "done"
+	h.taskService.UpdateTaskStatus(task.ID, "done", &domain.TaskResult{
+		Count:   len(req.Data),
+		Message: "Data received from pyparsers",
+	}, nil)
+	
+	// Сохраняем данные машин в базу через существующий сервис
+	service, ok := h.updateService[req.Source]
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown source"})
+		return
+	}
+	
+	// Используем существующий метод для сохранения данных
+	err = service.SaveCars(c.Request.Context(), req.Data)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }

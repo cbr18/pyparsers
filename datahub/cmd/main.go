@@ -61,17 +61,19 @@ func main() {
 
 	repo := repository.NewCarRepository()
 	brandRepo := repository.NewBrandRepository()
+	taskService := usecase.NewTaskService()
 	carService := usecase.NewCarService(repo)
 	brandService := usecase.NewBrandService(brandRepo)
 
 	dongchediClient := external.NewDongchediClient(apiBaseURL)
 	che168Client := external.NewChe168Client(apiBaseURL)
+	pyparsersClient := external.NewPyparsersClient(apiBaseURL)
 	updateService := map[string]*usecase.UpdateService{
 		"dongchedi": usecase.NewUpdateService(repo, dongchediClient, "dongchedi"),
 		"che168":    usecase.NewUpdateService(repo, che168Client, "che168"),
 	}
 
-	handler := httpdelivery.NewHandler(carService, updateService, brandService)
+	handler := httpdelivery.NewHandler(carService, updateService, brandService, taskService, pyparsersClient)
 	router := httpdelivery.NewRouter(handler)
 
 	if err := router.Setup().Run(":8080"); err != nil {

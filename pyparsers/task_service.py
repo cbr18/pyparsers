@@ -58,6 +58,7 @@ class TaskService:
         try:
             session = await self.get_session()
             url = f"{self.datahub_url}/api/tasks/{task_id}/complete"
+            logger.info(f"POST to datahub: {url} with {len(data)} items")
             
             payload = {
                 "task_id": task_id,
@@ -71,11 +72,12 @@ class TaskService:
                     logger.info(f"Successfully sent data to datahub for task {task_id}")
                     return True
                 else:
-                    logger.error(f"Failed to send data to datahub for task {task_id}: {response.status}")
+                    text = await response.text()
+                    logger.error(f"Failed to send data to datahub for task {task_id}: {response.status} body={text[:500]}")
                     return False
                     
         except Exception as e:
-            logger.error(f"Error sending data to datahub for task {task_id}: {e}")
+            logger.exception(f"Error sending data to datahub for task {task_id}: {e}")
             return False
     
     async def retry_send_to_datahub(self, task_id: str, source: str, data: list):
@@ -112,15 +114,23 @@ class TaskService:
                 self.update_task_status(task_id, TaskStatus.FAILED)
                 return
             
+            # Уникальность по car_id
+            ids = [d.get('car_id') for d in data]
+            unique_ids = set(ids)
+            dup_count = len(ids) - len(unique_ids)
+            logger.info(f"Collected {len(data)} cars for source {task.source} (task {task_id}); unique car_id={len(unique_ids)}, duplicates={dup_count}")
+
             if data:
                 # Запускаем отправку в фоне с повторными попытками
                 asyncio.create_task(self.retry_send_to_datahub(task_id, task.source, data))
-                self.update_task_status(task_id, TaskStatus.DONE)
+                # Пока отправляем, держим задачу IN_PROGRESS; DONE поставит отправка при очистке
+                return
             else:
+                logger.warning(f"No data collected for task {task_id} source {task.source}")
                 self.update_task_status(task_id, TaskStatus.FAILED)
                 
         except Exception as e:
-            logger.error(f"Error processing task {task_id}: {e}")
+            logger.exception(f"Error processing task {task_id}: {e}")
             self.update_task_status(task_id, TaskStatus.FAILED)
     
     async def _parse_dongchedi(self) -> list:
@@ -174,9 +184,12 @@ class TaskService:
                 return []
             
             cars_list = response.data.search_sh_sku_info_list
-            filtered_cars = filter_cars_by_year(cars_list, min_year=2017)
+            # В che168 часто нет поля year — временно не фильтруем по году
+            filtered_cars = cars_list
+            logger.info(f"che168: fetched {len(cars_list)} cars, using {len(filtered_cars)} after filtering")
             
             data = []
+            missing_id_count = 0
             for i, car in enumerate(filtered_cars):
                 car_dict = car.dict()
                 
@@ -185,9 +198,32 @@ class TaskService:
                     'sort_number': len(filtered_cars) - i,
                     'source': 'che168'
                 })
-                
+                # Гарантируем уникальный int64 car_id: если нет car_id, используем хеш от link
+                try:
+                    if 'car_id' in car_dict and car_dict['car_id'] is not None:
+                        car_dict['car_id'] = int(car_dict['car_id'])
+                    else:
+                        raise ValueError('missing car_id')
+                except Exception:
+                    missing_id_count += 1
+                    link = car_dict.get('link') or ''
+                    import hashlib
+                    h = hashlib.md5(link.encode('utf-8')).digest()
+                    # берем первые 8 байт как беззнаковое целое и вписываем в диапазон int64
+                    car_dict['car_id'] = int.from_bytes(h[:8], byteorder='big', signed=False)
+
                 data.append(car_dict)
             
+            if missing_id_count:
+                logger.info(f"che168: {missing_id_count} cars had no car_id; generated from link hash")
+
+            # Логируем первые 5 ссылок для отладки
+            try:
+                sample_links = [d.get('link') for d in data[:5]]
+                logger.info(f"che168 sample links: {sample_links}")
+            except Exception:
+                pass
+
             return data
             
         except Exception as e:

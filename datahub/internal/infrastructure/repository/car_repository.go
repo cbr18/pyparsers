@@ -12,6 +12,7 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"github.com/google/uuid"
 )
 
 // CarRepository - репозиторий для работы с моделью Car
@@ -34,6 +35,10 @@ func (r *CarRepository) Create(ctx context.Context, car domain.Car) error {
 		car.CreatedAt = now
 	}
 	car.UpdatedAt = now
+	// Ensure UUID is set
+	if car.UUID == "" {
+		car.UUID = uuid.NewString()
+	}
 
 	// Начинаем транзакцию
 	tx := r.db.WithContext(ctx).Begin()
@@ -255,6 +260,10 @@ func (r *CarRepository) CreateMany(ctx context.Context, cars []domain.Car) error
 			filtered[i].CreatedAt = now
 		}
 		filtered[i].UpdatedAt = now
+		// Ensure UUID is set for batch create
+		if filtered[i].UUID == "" {
+			filtered[i].UUID = uuid.NewString()
+		}
 
 		if filtered[i].BrandName != "" {
 			var brand domain.Brand

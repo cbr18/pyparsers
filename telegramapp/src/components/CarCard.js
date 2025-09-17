@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { sendLeadRequest } from '../services/api';
+import { getProxiedImageUrl, shouldUseProxy } from '../utils/imageProxy';
 
 const CarCard = ({ car }) => {
   // Placeholder for missing images
@@ -15,13 +16,19 @@ const CarCard = ({ car }) => {
     }
   };
 
+  // Get proxied image URL
+  const proxiedUrl = getProxiedImageUrl(car.image);
+
   return (
     <div className="car-card">
       <img
-        src={car.image || placeholder}
+        src={proxiedUrl || placeholder}
         alt={car.title || 'Без названия'}
         className="car-image"
-        onError={(e) => { e.target.onerror = null; e.target.src = placeholder; }}
+        onError={(e) => { 
+          e.target.onerror = null; 
+          e.target.src = placeholder; 
+        }}
       />
       <div className="car-info">
         <h2>{car.title || 'Без названия'}</h2>

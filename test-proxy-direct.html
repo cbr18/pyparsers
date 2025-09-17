@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Тест прокси изображений</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .test-image { max-width: 300px; height: auto; border: 1px solid #ccc; margin: 10px 0; }
+        .url-info { background: #f5f5f5; padding: 10px; margin: 10px 0; border-radius: 4px; font-family: monospace; word-break: break-all; }
+        .error { color: red; }
+        .success { color: green; }
+    </style>
+</head>
+<body>
+    <h1>Тест прокси изображений</h1>
+    
+    <div>
+        <h3>Тест с che168 (через прокси)</h3>
+        <div class="url-info">
+            URL: /proxy-image/https%3A%2F%2F2sc2.autoimg.cn%2Fescimg%2Fg33%2FM04%2F0C%2FD3%2F440x330_q87_c42_autohomecar__ChxpVmjHzBmAInVKAAj3gChXpqs500.jpg
+        </div>
+        <img 
+            src="/proxy-image/https%3A%2F%2F2sc2.autoimg.cn%2Fescimg%2Fg33%2FM04%2F0C%2FD3%2F440x330_q87_c42_autohomecar__ChxpVmjHzBmAInVKAAj3gChXpqs500.jpg" 
+            alt="Test Image via Proxy" 
+            class="test-image"
+            onload="showStatus(this, 'success')"
+            onerror="showStatus(this, 'error')"
+        />
+        <div id="status1"></div>
+    </div>
+    
+    <div>
+        <h3>Тест с простым изображением (через прокси)</h3>
+        <div class="url-info">
+            URL: /proxy-image/https%3A%2F%2Fvia.placeholder.com%2F300x200%2F0066CC%2FFFFFF%3Ftext%3DTest
+        </div>
+        <img 
+            src="/proxy-image/https%3A%2F%2Fvia.placeholder.com%2F300x200%2F0066CC%2FFFFFF%3Ftext%3DTest" 
+            alt="Test Image via Proxy" 
+            class="test-image"
+            onload="showStatus(this, 'success')"
+            onerror="showStatus(this, 'error')"
+        />
+        <div id="status2"></div>
+    </div>
+
+    <script>
+        function showStatus(img, type) {
+            const statusDiv = img.nextElementSibling;
+            if (type === 'success') {
+                statusDiv.innerHTML = '<span class="success">✓ Изображение загружено успешно</span>';
+            } else {
+                statusDiv.innerHTML = '<span class="error">✗ Ошибка загрузки изображения</span>';
+            }
+        }
+        
+        // Проверяем заголовки ответа
+        fetch('/proxy-image/https%3A%2F%2Fvia.placeholder.com%2F300x200%2F0066CC%2FFFFFF%3Ftext%3DTest')
+            .then(response => {
+                console.log('Response status:', response.status);
+                console.log('Response headers:', [...response.headers.entries()]);
+                if (response.headers.get('X-Proxy-Error')) {
+                    console.log('Proxy error detected');
+                }
+                if (response.headers.get('X-Debug-Target-URL')) {
+                    console.log('Target URL:', response.headers.get('X-Debug-Target-URL'));
+                }
+            })
+            .catch(error => {
+                console.error('Fetch error:', error);
+            });
+    </script>
+</body>
+</html>

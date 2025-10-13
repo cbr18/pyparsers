@@ -1,9 +1,10 @@
 import asyncio
 import aiohttp
 import logging
+import re
 from datetime import datetime
-from typing import Dict, Optional
-from models import Task, TaskStatus, TaskCompleteRequest
+from typing import Dict, Optional, List
+from models import Task, TaskStatus, TaskCompleteRequest, TaskType
 from api.dongchedi.parser import DongchediParser
 from api.che168.parser import Che168Parser
 from converters import decode_dongchedi_list_sh_price
@@ -29,7 +30,7 @@ class TaskService:
         if self.session and not self.session.closed:
             await self.session.close()
     
-    def create_task(self, source: str) -> Task:
+    def create_task(self, source: str, task_type: TaskType = TaskType.FULL, id_field: Optional[str] = None, existing_ids: Optional[List[str]] = None) -> Task:
         """Создать новую задачу"""
         task_id = str(uuid.uuid4())
         now = datetime.now()
@@ -37,6 +38,9 @@ class TaskService:
         task = Task(
             id=task_id,
             source=source,
+            task_type=task_type,
+            id_field=id_field,
+            existing_ids=existing_ids,
             status=TaskStatus.PENDING,
             created_at=now,
             updated_at=now
@@ -53,7 +57,7 @@ class TaskService:
             self.tasks[task_id].updated_at = datetime.now()
             logger.info(f"Updated task {task_id} status to {status}")
     
-    async def send_to_datahub(self, task_id: str, source: str, data: list) -> bool:
+    async def send_to_datahub(self, task_id: str, source: str, task_type: TaskType, data: list) -> bool:
         """Отправить данные в datahub"""
         try:
             session = await self.get_session()
@@ -63,6 +67,7 @@ class TaskService:
             payload = {
                 "task_id": task_id,
                 "source": source,
+                "task_type": task_type,
                 "status": "done",
                 "data": data
             }
@@ -80,10 +85,10 @@ class TaskService:
             logger.exception(f"Error sending data to datahub for task {task_id}: {e}")
             return False
     
-    async def retry_send_to_datahub(self, task_id: str, source: str, data: list):
+    async def retry_send_to_datahub(self, task_id: str, source: str, task_type: TaskType, data: list):
         """Повторять отправку в datahub каждые 30 секунд до успеха"""
         while True:
-            success = await self.send_to_datahub(task_id, source, data)
+            success = await self.send_to_datahub(task_id, source, task_type, data)
             if success:
                 # Удаляем данные из памяти после успешной отправки
                 if task_id in self.tasks:
@@ -105,10 +110,17 @@ class TaskService:
         try:
             data = []
             
+            # Обработка по типу задачи
             if task.source == "dongchedi":
-                data = await self._parse_dongchedi()
+                if task.task_type == TaskType.FULL:
+                    data = await self._parse_dongchedi_full()
+                else:
+                    data = await self._parse_dongchedi_incremental(task.existing_ids or [], task.id_field or "sku_id")
             elif task.source == "che168":
-                data = await self._parse_che168()
+                if task.task_type == TaskType.FULL:
+                    data = await self._parse_che168_full()
+                else:
+                    data = await self._parse_che168_incremental(task.existing_ids or [], task.id_field or "car_id")
             else:
                 logger.error(f"Unknown source: {task.source}")
                 self.update_task_status(task_id, TaskStatus.FAILED)
@@ -122,7 +134,7 @@ class TaskService:
 
             if data:
                 # Запускаем отправку в фоне с повторными попытками
-                asyncio.create_task(self.retry_send_to_datahub(task_id, task.source, data))
+                asyncio.create_task(self.retry_send_to_datahub(task_id, task.source, task.task_type, data))
                 # Пока отправляем, держим задачу IN_PROGRESS; DONE поставит отправка при очистке
                 return
             else:
@@ -133,11 +145,37 @@ class TaskService:
             logger.exception(f"Error processing task {task_id}: {e}")
             self.update_task_status(task_id, TaskStatus.FAILED)
     
-    async def _parse_dongchedi(self) -> list:
-        """Парсинг dongchedi"""
+    async def _parse_dongchedi_full(self) -> list:
+        """Полный парсинг dongchedi (все страницы)"""
         try:
             parser = DongchediParser()
-            response = parser.fetch_cars()
+            # Собираем все страницы
+            all_data = []
+            page = 1
+            while True:
+                response = parser.fetch_cars_by_page(page)
+                if not response.data or not response.data.search_sh_sku_info_list:
+                    break
+                cars_list = response.data.search_sh_sku_info_list
+                filtered_cars = filter_cars_by_year(cars_list, min_year=2017)
+                for i, car in enumerate(filtered_cars):
+                    car_dict = car.dict()
+                    car_dict.update({
+                        'sort_number': len(filtered_cars) - i,
+                        'source': 'dongchedi'
+                    })
+                    if car_dict.get('sh_price'):
+                        car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
+                    if 'car_id' in car_dict and car_dict['car_id'] is not None:
+                        try:
+                            car_dict['car_id'] = int(car_dict['car_id'])
+                        except (ValueError, TypeError):
+                            car_dict['car_id'] = 0
+                    all_data.append(car_dict)
+                if not getattr(response.data, 'has_more', False):
+                    break
+                page += 1
+            return all_data
             
             if not response.data or not response.data.search_sh_sku_info_list:
                 return []
@@ -174,60 +212,210 @@ class TaskService:
             logger.error(f"Error parsing dongchedi: {e}")
             return []
     
-    async def _parse_che168(self) -> list:
-        """Парсинг che168"""
+    async def _parse_dongchedi_incremental(self, existing_ids: List[str], id_field: str) -> list:
+        """Инкрементальный парсинг dongchedi (первые страницы до первого совпадения)"""
+        try:
+            parser = DongchediParser()
+            data = []
+            existing_set = set(str(x) for x in existing_ids if x)
+
+            for page in range(1, 101):
+                response = parser.fetch_cars_by_page(page)
+                if not response.data or not response.data.search_sh_sku_info_list:
+                    break
+                cars_list = response.data.search_sh_sku_info_list
+                filtered_cars = filter_cars_by_year(cars_list, min_year=2017)
+                found_existing = False
+                for i, car in enumerate(filtered_cars):
+                    car_dict = car.dict()
+                    # Остановка при первом совпадении по нужному полю
+                    key_val = car_dict.get(id_field)
+                    key_val = str(key_val) if key_val is not None else None
+                    if key_val and key_val in existing_set:
+                        found_existing = True
+                        break
+                    car_dict.update({
+                        'sort_number': len(filtered_cars) - i,
+                        'source': 'dongchedi'
+                    })
+                    if car_dict.get('sh_price'):
+                        car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
+                    if 'car_id' in car_dict and car_dict['car_id'] is not None:
+                        try:
+                            car_dict['car_id'] = int(car_dict['car_id'])
+                        except (ValueError, TypeError):
+                            car_dict['car_id'] = 0
+                    data.append(car_dict)
+                if found_existing:
+                    break
+                if not getattr(response.data, 'has_more', False):
+                    break
+            return data
+        except Exception as e:
+            logger.error(f"Error parsing dongchedi incremental: {e}")
+            return []
+
+    async def _parse_che168_full(self) -> list:
+        """Полный парсинг che168 (все страницы до 100)"""
         try:
             parser = Che168Parser()
-            response = parser.fetch_cars()
-            
-            if not response.data or not response.data.search_sh_sku_info_list:
-                return []
-            
-            cars_list = response.data.search_sh_sku_info_list
-            # В che168 часто нет поля year — временно не фильтруем по году
-            filtered_cars = cars_list
-            logger.info(f"che168: fetched {len(cars_list)} cars, using {len(filtered_cars)} after filtering")
-            
             data = []
             missing_id_count = 0
-            for i, car in enumerate(filtered_cars):
-                car_dict = car.dict()
-                
-                # Добавляем метаданные
-                car_dict.update({
-                    'sort_number': len(filtered_cars) - i,
-                    'source': 'che168'
-                })
-                # Гарантируем уникальный int64 car_id: если нет car_id, используем хеш от link
-                try:
-                    if 'car_id' in car_dict and car_dict['car_id'] is not None:
-                        car_dict['car_id'] = int(car_dict['car_id'])
-                    else:
-                        raise ValueError('missing car_id')
-                except Exception:
-                    missing_id_count += 1
-                    link = car_dict.get('link') or ''
-                    import hashlib
-                    h = hashlib.md5(link.encode('utf-8')).digest()
-                    # берем первые 8 байт как беззнаковое целое и вписываем в диапазон int64
-                    car_dict['car_id'] = int.from_bytes(h[:8], byteorder='big', signed=False)
-
-                data.append(car_dict)
-            
+            # Собираем страницы 1..100 или до конца
+            for page in range(1, 101):
+                response = parser.fetch_cars_by_page(page)
+                if not response.data or not response.data.search_sh_sku_info_list:
+                    break
+                cars_list = response.data.search_sh_sku_info_list
+                for i, car in enumerate(cars_list):
+                    car_dict = car.dict()
+                    car_dict.update({
+                        'sort_number': len(cars_list) - i,
+                        'source': 'che168'
+                    })
+                    if car_dict.get('sh_price') is not None and car_dict.get('sh_price') != '':
+                        car_dict['price'] = str(car_dict['sh_price'])
+                    year_val = car_dict.get('car_year')
+                    if year_val is not None:
+                        try:
+                            car_dict['year'] = int(year_val)
+                        except (ValueError, TypeError):
+                            car_dict['year'] = None
+                    if car_dict.get('year') in (None, 0):
+                        title_text = car_dict.get('title') or ''
+                    if car_dict.get('year') in (None, 0):
+                        title_text = car_dict.get('title') or ''
+                        m = re.search(r'(19|20)\d{2}', title_text)
+                        if m:
+                            try:
+                                y = int(m.group(0))
+                                if 1990 <= y <= 2030:
+                                    car_dict['year'] = y
+                            except Exception:
+                                pass
+                    if car_dict.get('car_source_city_name'):
+                        car_dict['city'] = car_dict.get('car_source_city_name')
+                    mileage_raw = car_dict.get('car_mileage')
+                    if isinstance(mileage_raw, str) and mileage_raw.strip() != '':
+                        text = mileage_raw.strip()
+                        num_match = re.search(r"[0-9]+(?:\.[0-9]+)?", text)
+                        if num_match:
+                            num_str = num_match.group(0)
+                            try:
+                                if '万' in text:
+                                    km_val = int(float(num_str) * 10000.0)
+                                else:
+                                    km_val = int(float(num_str))
+                                if km_val >= 0:
+                                    car_dict['mileage'] = km_val
+                            except Exception:
+                                pass
+                    try:
+                        if 'car_id' in car_dict and car_dict['car_id'] is not None:
+                            car_dict['car_id'] = int(car_dict['car_id'])
+                        else:
+                            raise ValueError('missing car_id')
+                    except Exception:
+                        missing_id_count += 1
+                        link = car_dict.get('link') or ''
+                        import hashlib
+                        h = hashlib.md5(link.encode('utf-8')).digest()
+                        car_dict['car_id'] = int.from_bytes(h[:8], byteorder='big', signed=False)
+                    data.append(car_dict)
+                if not getattr(response.data, 'has_more', False):
+                    break
             if missing_id_count:
                 logger.info(f"che168: {missing_id_count} cars had no car_id; generated from link hash")
-
-            # Логируем первые 5 ссылок для отладки
-            try:
-                sample_links = [d.get('link') for d in data[:5]]
-                logger.info(f"che168 sample links: {sample_links}")
-            except Exception:
-                pass
-
             return data
             
         except Exception as e:
-            logger.error(f"Error parsing che168: {e}")
+            logger.error(f"Error parsing che168 full: {e}")
+            return []
+
+    async def _parse_che168_incremental(self, existing_ids: List[str], id_field: str) -> list:
+        """Инкрементальный парсинг che168 (первые страницы)"""
+        try:
+            parser = Che168Parser()
+            data = []
+            missing_id_count = 0
+            existing_set = set(str(x) for x in existing_ids if x)
+
+            for page in range(1, 101):
+                response = parser.fetch_cars_by_page(page)
+                if not response.data or not response.data.search_sh_sku_info_list:
+                    break
+                cars_list = response.data.search_sh_sku_info_list
+                found_existing = False
+                for i, car in enumerate(cars_list):
+                    car_dict = car.dict()
+                    # Остановка при первом совпадении по нужному полю
+                    stop_id = car_dict.get(id_field)
+                    if stop_id is not None:
+                        try:
+                            stop_id = str(int(stop_id)) if isinstance(stop_id, (int, float, str)) else str(stop_id)
+                        except Exception:
+                            stop_id = str(stop_id)
+                    if stop_id and stop_id in existing_set:
+                        found_existing = True
+                        break
+                    car_dict.update({
+                        'sort_number': len(cars_list) - i,
+                        'source': 'che168'
+                    })
+                    if car_dict.get('sh_price') is not None and car_dict.get('sh_price') != '':
+                        car_dict['price'] = str(car_dict['sh_price'])
+                    year_val = car_dict.get('car_year')
+                    if year_val is not None:
+                        try:
+                            car_dict['year'] = int(year_val)
+                        except (ValueError, TypeError):
+                            car_dict['year'] = None
+                    if car_dict.get('year') in (None, 0):
+                        title_text = car_dict.get('title') or ''
+                        m = re.search(r'(19|20)\d{2}', title_text)
+                        if m:
+                            try:
+                                y = int(m.group(0))
+                                if 1990 <= y <= 2030:
+                                    car_dict['year'] = y
+                            except Exception:
+                                pass
+                    if car_dict.get('car_source_city_name'):
+                        car_dict['city'] = car_dict.get('car_source_city_name')
+                    mileage_raw = car_dict.get('car_mileage')
+                    if isinstance(mileage_raw, str) and mileage_raw.strip() != '':
+                        text = mileage_raw.strip()
+                        num_match = re.search(r"[0-9]+(?:\.[0-9]+)?", text)
+                        if num_match:
+                            num_str = num_match.group(0)
+                            try:
+                                if '万' in text:
+                                    km_val = int(float(num_str) * 10000.0)
+                                else:
+                                    km_val = int(float(num_str))
+                                if km_val >= 0:
+                                    car_dict['mileage'] = km_val
+                            except Exception:
+                                pass
+                    try:
+                        if 'car_id' in car_dict and car_dict['car_id'] is not None:
+                            car_dict['car_id'] = int(car_dict['car_id'])
+                        else:
+                            raise ValueError('missing car_id')
+                    except Exception:
+                        missing_id_count += 1
+                        link = car_dict.get('link') or ''
+                        import hashlib
+                        h = hashlib.md5(link.encode('utf-8')).digest()
+                        car_dict['car_id'] = int.from_bytes(h[:8], byteorder='big', signed=False)
+                    data.append(car_dict)
+                if found_existing:
+                    break
+            if missing_id_count:
+                logger.info(f"che168: {missing_id_count} cars had no car_id; generated from link hash")
+            return data
+        except Exception as e:
+            logger.error(f"Error parsing che168 incremental: {e}")
             return []
 
 # Глобальный экземпляр сервиса

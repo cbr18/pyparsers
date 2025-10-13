@@ -10,15 +10,25 @@ class TaskStatus(str, Enum):
     DONE = "done"
     FAILED = "failed"
 
+class TaskType(str, Enum):
+    FULL = "full"
+    INCREMENTAL = "incremental"
+
 class Task(BaseModel):
     id: str
     source: str
+    task_type: TaskType
+    id_field: Optional[str] = None
+    existing_ids: Optional[List[str]] = None
     status: TaskStatus
     created_at: datetime
     updated_at: datetime
 
 class TaskCreateRequest(BaseModel):
     source: str
+    task_type: TaskType = TaskType.FULL
+    id_field: Optional[str] = None
+    existing_ids: Optional[List[str]] = None
 
 class TaskCreateResponse(BaseModel):
     task_id: str
@@ -26,6 +36,7 @@ class TaskCreateResponse(BaseModel):
 class TaskCompleteRequest(BaseModel):
     task_id: str
     source: str
+    task_type: TaskType
     status: str
     data: List[Dict[str, Any]]
 

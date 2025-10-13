@@ -67,7 +67,7 @@ func main() {
 
 	dongchediClient := external.NewDongchediClient(apiBaseURL)
 	che168Client := external.NewChe168Client(apiBaseURL)
-	pyparsersClient := external.NewPyparsersClient(apiBaseURL)
+    pyparsersClient := external.NewPyparsersClient(apiBaseURL)
 	updateService := map[string]*usecase.UpdateService{
 		"dongchedi": usecase.NewUpdateService(repo, dongchediClient, "dongchedi"),
 		"che168":    usecase.NewUpdateService(repo, che168Client, "che168"),

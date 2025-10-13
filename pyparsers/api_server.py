@@ -11,7 +11,7 @@ from typing import List, Dict
 from datetime import datetime
 from dotenv import load_dotenv
 from pydantic import BaseModel
-from models import TaskCreateRequest, TaskCreateResponse
+from models import TaskCreateRequest, TaskCreateResponse, TaskType
 from task_service import task_service
 
 # Модель для запроса детального парсинга che168
@@ -647,7 +647,11 @@ async def create_task(request: TaskCreateRequest):
     if request.source not in ["dongchedi", "che168"]:
         return {"error": "Invalid source. Must be 'dongchedi' or 'che168'"}
     
-    task = task_service.create_task(request.source)
+    # Тип задачи: full / incremental (по умолчанию full)
+    task_type = getattr(request, 'task_type', TaskType.FULL)
+    id_field = getattr(request, 'id_field', None)
+    existing_ids = getattr(request, 'existing_ids', None)
+    task = task_service.create_task(request.source, task_type, id_field, existing_ids)
     
     # Запускаем обработку задачи в фоне
     asyncio.create_task(task_service.process_task(task.id))

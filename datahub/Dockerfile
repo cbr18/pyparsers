@@ -1,11 +1,21 @@
 FROM golang:1.24.5-alpine AS builder
 WORKDIR /app
-COPY . .
-RUN go mod download
-RUN go build -o datahub ./cmd/main.go
 
-# Install migrate in builder stage
-RUN go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+# 1) Кэшируем зависимости отдельно, чтобы не перекачивать их при каждом изменении кода
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
+
+# 2) Копируем остальной исходный код и собираем бинарник с кэшами сборки
+COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /app/datahub ./cmd/main.go
+
+# 3) Устанавливаем migrate (пинованный тег), слой кешируется отдельно
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.17.1
 
 FROM alpine:3.19
 RUN apk --no-cache add ca-certificates postgresql-client

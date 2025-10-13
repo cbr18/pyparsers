@@ -9,13 +9,9 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import (
     Update,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
     Message,
     WebAppInfo,
     MenuButtonWebApp,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
 )
 
 
@@ -33,38 +29,22 @@ dispatcher = Dispatcher()
 app = FastAPI()
 
 
-def build_reply_keyboard() -> ReplyKeyboardMarkup:
-    # Left-most WebApp button, plus a "Начать" text button
-    keyboard = [
-        [
-            KeyboardButton(text="🚗 Открыть мини‑приложение", web_app=WebAppInfo(url=WEBAPP_URL)),
-            KeyboardButton(text="Начать"),
-        ]
-    ]
-    return ReplyKeyboardMarkup(
-        keyboard=keyboard,
-        resize_keyboard=True,
-        is_persistent=True,
-        one_time_keyboard=False,
-    )
+# Reply keyboard удалена: используем только кнопку меню (гамбургер)
 
 
 # --- Telegram Bot Handlers ---
 @dispatcher.message(CommandStart())
 async def handle_start(message: Message):
-    reply_kb = build_reply_keyboard()
     await message.answer(
-        "Бот для заявок CarCatch активен!\n\nОткройте мини‑приложение кнопкой слева или нажмите \"Начать\".",
-        reply_markup=reply_kb,
+        "Бот для заявок CarCatch активен!\n\nОткройте мини‑приложение через кнопку в меню (гамбургер).",
     )
 
 
 @dispatcher.message(F.text.casefold() == "начать")
 async def handle_begin(message: Message):
-    reply_kb = build_reply_keyboard()
     await message.answer(
-        "Готово! Используйте кнопку слева \"🚗 Открыть мини‑приложение\" для запуска.",
-        reply_markup=reply_kb,
+        "Готово! Используйте кнопку в меню "
+        "\"🚗 Подбор авто\" для запуска мини‑приложения.",
     )
 
 

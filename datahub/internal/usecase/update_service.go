@@ -101,3 +101,44 @@ func (s *UpdateService) SaveCars(ctx context.Context, cars []domain.Car) error {
 	
 	return s.repo.CreateMany(ctx, cars)
 }
+
+// ClearSource — удалить все записи по источнику (для полного обновления)
+func (s *UpdateService) ClearSource(ctx context.Context) error {
+    return s.repo.DeleteBySource(ctx, s.sourceName)
+}
+
+// RepoGetBySourceAndSort — прокси к репозиторию для получения последних N машин по источнику
+func (s *UpdateService) RepoGetBySourceAndSort(ctx context.Context, source string, limit int) ([]domain.Car, error) {
+    // игнорируем входной source и используем конфигурированный для сервиса, чтобы не смешивать источники
+    return s.repo.GetBySourceAndSort(ctx, s.sourceName, limit)
+}
+
+// ReplaceSource — атомарно заменяет все записи источника на новые
+func (s *UpdateService) ReplaceSource(ctx context.Context, cars []domain.Car) error {
+    // Нормализуем source на всякий
+    for i := range cars {
+        cars[i].Source = s.sourceName
+    }
+    return s.repo.ReplaceBySource(ctx, s.sourceName, cars)
+}
+
+// AppendIncremental — добавляет новые записи с корректным sort_number
+func (s *UpdateService) AppendIncremental(ctx context.Context, cars []domain.Car) error {
+    if len(cars) == 0 {
+        return nil
+    }
+    // Получим текущий максимум sort_number по источнику
+    last, err := s.repo.GetBySourceAndSort(ctx, s.sourceName, 1)
+    if err != nil {
+        return err
+    }
+    currentMax := 0
+    if len(last) == 1 {
+        currentMax = last[0].SortNumber
+    }
+    for i := range cars {
+        cars[i].Source = s.sourceName
+        cars[i].SortNumber = currentMax + i + 1
+    }
+    return s.repo.CreateMany(ctx, cars)
+}

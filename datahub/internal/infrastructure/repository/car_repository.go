@@ -313,3 +313,64 @@ func (r *CarRepository) GetBySourceAndSort(ctx context.Context, source string, l
 		Find(&cars).Error
 	return cars, err
 }
+
+// ReplaceBySource — атомарно заменяет все записи по источнику в одной транзакции
+func (r *CarRepository) ReplaceBySource(ctx context.Context, source string, cars []domain.Car) error {
+    now := time.Now()
+    tx := r.db.WithContext(ctx).Begin()
+    if tx.Error != nil {
+        return tx.Error
+    }
+    defer func() {
+        if r := recover(); r != nil {
+            tx.Rollback()
+        }
+    }()
+
+    // Удаляем всё по источнику
+    if err := tx.Where("source = ?", source).Delete(&domain.Car{}).Error; err != nil {
+        tx.Rollback()
+        return err
+    }
+
+    if len(cars) == 0 {
+        return tx.Commit().Error
+    }
+
+    // Обеспечим UUID/времена и бренды
+    for i := range cars {
+        if cars[i].CreatedAt.IsZero() {
+            cars[i].CreatedAt = now
+        }
+        cars[i].UpdatedAt = now
+        if cars[i].UUID == "" {
+            cars[i].UUID = uuid.NewString()
+        }
+        // Привяжем бренд
+        if cars[i].BrandName != "" {
+            var brand domain.Brand
+            err := tx.Where("name = ? OR orig_name = ?", cars[i].BrandName, cars[i].BrandName).First(&brand).Error
+            if errors.Is(err, gorm.ErrRecordNotFound) {
+                name := cars[i].BrandName
+                b := &domain.Brand{ Name: &name, OrigName: &name, CreatedAt: now, UpdatedAt: now }
+                if err := tx.Create(b).Error; err != nil {
+                    tx.Rollback()
+                    return err
+                }
+                cars[i].MybrandID = &b.ID
+            } else if err != nil {
+                tx.Rollback()
+                return err
+            } else {
+                cars[i].MybrandID = &brand.ID
+            }
+        }
+    }
+
+    if err := tx.Create(&cars).Error; err != nil {
+        tx.Rollback()
+        return err
+    }
+
+    return tx.Commit().Error
+}

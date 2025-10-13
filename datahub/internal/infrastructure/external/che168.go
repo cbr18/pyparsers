@@ -1,14 +1,17 @@
 package external
 
 import (
-	"bytes"
-	"context"
-	"datahub/internal/domain"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-	"time"
+    "bytes"
+    "context"
+    "datahub/internal/domain"
+    "encoding/json"
+    "fmt"
+    "io"
+    "net/http"
+    "regexp"
+    "strconv"
+    "strings"
+    "time"
 )
 
 // Che168Car представляет структуру данных автомобиля из che168
@@ -30,6 +33,60 @@ type Che168Car struct {
 	TagsV2            interface{} `json:"tags_v2"`
 }
 
+// parseMileageToKm converts che168 mileage strings like "3.5万公里" or "5600公里" to kilometers
+func parseMileageToKm(s string) int32 {
+    s = strings.TrimSpace(s)
+    if s == "" {
+        return 0
+    }
+    numRe := regexp.MustCompile(`(?i)[0-9]+(?:\.[0-9]+)?`)
+    num := numRe.FindString(s)
+    if num == "" {
+        return 0
+    }
+    // Detect "万" (ten-thousands) units
+    if strings.Contains(s, "万") {
+        f, err := strconv.ParseFloat(num, 64)
+        if err != nil {
+            return 0
+        }
+        // 万公里 -> multiply by 10,000 km
+        km := int32(f * 10000.0)
+        if km < 0 {
+            return 0
+        }
+        return km
+    }
+    // Otherwise treat as kilometers
+    v, err := strconv.ParseInt(num, 10, 32)
+    if err != nil || v < 0 {
+        return 0
+    }
+    return int32(v)
+}
+
+// extractYear tries to pull a reasonable year from a title when API field is 0
+func extractYear(title string) int {
+    title = strings.TrimSpace(title)
+    if title == "" {
+        return 0
+    }
+    // Find a 4-digit year between 1990 and 2030
+    yearRe := regexp.MustCompile(`(19|20)\d{2}`)
+    m := yearRe.FindString(title)
+    if m == "" {
+        return 0
+    }
+    y, err := strconv.Atoi(m)
+    if err != nil {
+        return 0
+    }
+    if y < 1990 || y > 2030 {
+        return 0
+    }
+    return y
+}
+
 // ToCar преобразует Che168Car в domain.Car
 func (c *Che168Car) ToCar() domain.Car {
 	var tagsV2Str string
@@ -39,23 +96,32 @@ func (c *Che168Car) ToCar() domain.Car {
 		}
 	}
 
+    // Normalize fields to match domain.Car used by frontend
+    year := c.CarYear
+    if year == 0 {
+        year = extractYear(c.Title)
+    }
+
+    mileage := parseMileageToKm(c.CarMileage)
+
 	return domain.Car{
 		Source:            "che168",
 		CarID:             c.CarID,
 		Title:             c.Title,
 		CarName:           c.CarName,
-		Year:              c.CarYear,
-		Price:             c.ShPrice,
+        Year:              year,
+        Price:             c.ShPrice,
 		Image:             c.Image,
 		Link:              c.Link,
 		BrandName:         c.BrandName,
 		SeriesName:        c.SeriesName,
-		City:              c.CarSourceCityName,
+        City:              c.CarSourceCityName,
 		ShopID:            c.ShopID,
 		BrandID:           c.BrandID,
 		SeriesID:          c.SeriesID,
 		CarSourceCityName: c.CarSourceCityName,
 		TagsV2:            tagsV2Str,
+        Mileage:           mileage,
 	}
 }
 

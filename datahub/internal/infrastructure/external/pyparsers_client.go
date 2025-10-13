@@ -16,6 +16,9 @@ type PyparsersClient struct {
 
 type CreateTaskRequest struct {
 	Source string `json:"source"`
+    TaskType string `json:"task_type"`
+    IDField string `json:"id_field,omitempty"`
+    ExistingIDs []string `json:"existing_ids,omitempty"`
 }
 
 type CreateTaskResponse struct {
@@ -32,10 +35,14 @@ func NewPyparsersClient(baseURL string) *PyparsersClient {
 	}
 }
 
-func (c *PyparsersClient) CreateTask(ctx context.Context, source string) (*CreateTaskResponse, error) {
-	reqBody := CreateTaskRequest{
-		Source: source,
-	}
+func (c *PyparsersClient) CreateTask(ctx context.Context, source string, taskType string, idField string, existingIDs []string) (*CreateTaskResponse, error) {
+    reqBody := CreateTaskRequest{Source: source, TaskType: taskType}
+    if idField != "" {
+        reqBody.IDField = idField
+    }
+    if len(existingIDs) > 0 {
+        reqBody.ExistingIDs = existingIDs
+    }
 	
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {

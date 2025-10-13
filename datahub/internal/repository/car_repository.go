@@ -16,4 +16,5 @@ type CarRepository interface {
 	Create(ctx context.Context, car domain.Car) error
 	CreateMany(ctx context.Context, cars []domain.Car) error
 	DeleteBySource(ctx context.Context, source string) error
+    ReplaceBySource(ctx context.Context, source string, cars []domain.Car) error
 }

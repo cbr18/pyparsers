@@ -124,19 +124,19 @@ func (h *Handler) FullUpdate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown source"})
 		return
 	}
-	
-	// Создаем задачу в pyparsers
-	response, err := h.pyparsersClient.CreateTask(c.Request.Context(), source)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	
-	c.JSON(http.StatusOK, gin.H{
-		"status": "ok", 
-		"message": "Task created successfully",
-		"task_id": response.TaskID,
-	})
+
+    // Меняем поведение на push-модель: быстро создаем задачу в pyparsers и сразу отвечаем
+    // Дальше pyparsers сам спарсит и отправит результат в datahub через /api/tasks/{id}/complete
+    resp, err := h.pyparsersClient.CreateTask(c.Request.Context(), source, "full", "", nil)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+    c.JSON(http.StatusOK, gin.H{
+        "status":  "ok",
+        "message": "Task created successfully",
+        "task_id": resp.TaskID,
+    })
 }
 
 // isDuplicateKeyError проверяет, является ли ошибка нарушением ограничения уникальности
@@ -175,7 +175,31 @@ func (h *Handler) IncrementalUpdate(c *gin.Context) {
 	}
 	
 	// Создаем задачу в pyparsers
-	response, err := h.pyparsersClient.CreateTask(c.Request.Context(), source)
+    // Подготовим existing_ids для инкрементала
+    // Для dongchedi используем sku_id, для che168 — car_id
+    idField := ""
+    var existingIDs []string
+    if svc, ok := h.updateService[source]; ok {
+        const lastN = 1000
+        cars, _ := svc.RepoGetBySourceAndSort(c.Request.Context(), source, lastN)
+        if source == "dongchedi" {
+            idField = "sku_id"
+            for _, car := range cars {
+                if car.SkuID != "" {
+                    existingIDs = append(existingIDs, car.SkuID)
+                }
+            }
+        } else if source == "che168" {
+            idField = "car_id"
+            for _, car := range cars {
+                if car.CarID != 0 {
+                    existingIDs = append(existingIDs, strconv.FormatInt(car.CarID, 10))
+                }
+            }
+        }
+    }
+
+    response, err := h.pyparsersClient.CreateTask(c.Request.Context(), source, "incremental", idField, existingIDs)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -220,12 +244,13 @@ func (h *Handler) GetBrands(c *gin.Context) {
 func (h *Handler) CompleteTask(c *gin.Context) {
 	taskID := c.Param("id")
 	
-	var req struct {
-		TaskID string      `json:"task_id" binding:"required"`
-		Source string      `json:"source" binding:"required"`
-		Status string      `json:"status" binding:"required"`
-		Data   []domain.Car `json:"data" binding:"required"`
-	}
+    var req struct {
+        TaskID   string      `json:"task_id" binding:"required"`
+        Source   string      `json:"source" binding:"required"`
+        TaskType string      `json:"task_type" binding:"required"`
+        Status   string      `json:"status" binding:"required"`
+        Data     []domain.Car `json:"data" binding:"required"`
+    }
 	
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
@@ -238,32 +263,49 @@ func (h *Handler) CompleteTask(c *gin.Context) {
 		return
 	}
 	
-	// Создаем задачу в сервисе задач
-	task, err := h.taskService.CreateTask(req.Source, "full")
+    // Создаем задачу в сервисе задач (тип из запроса)
+    task, err := h.taskService.CreateTask(req.Source, req.TaskType)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	
-	// Обновляем статус задачи на "done"
-	h.taskService.UpdateTaskStatus(task.ID, "done", &domain.TaskResult{
-		Count:   len(req.Data),
-		Message: "Data received from pyparsers",
-	}, nil)
-	
-	// Сохраняем данные машин в базу через существующий сервис
+    // Сохраняем данные машин в базу через существующий сервис
 	service, ok := h.updateService[req.Source]
 	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown source"})
 		return
 	}
-	
-	// Используем существующий метод для сохранения данных
-	err = service.SaveCars(c.Request.Context(), req.Data)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+
+    // Full: защищаемся от пустого датасета и делаем замену атомарно
+    if req.TaskType == "full" {
+        if len(req.Data) == 0 {
+            c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "empty dataset for full update"})
+            return
+        }
+        // Присвоим sort_number детерминированно: новые сверху => больший номер
+        total := len(req.Data)
+        for i := range req.Data {
+            req.Data[i].Source = req.Source
+            req.Data[i].SortNumber = total - i
+        }
+        if err := service.ReplaceSource(c.Request.Context(), req.Data); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+            return
+        }
+    } else {
+        // Incremental: наращиваем сверху — возьмем текущий max и назначим по порядку
+        if err := service.AppendIncremental(c.Request.Context(), req.Data); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+            return
+        }
+    }
+
+    // Обновляем статус задачи на "done" (после успешной записи)
+    h.taskService.UpdateTaskStatus(task.ID, "done", &domain.TaskResult{
+        Count:   len(req.Data),
+        Message: "Data received from pyparsers",
+    }, nil)
 	
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }

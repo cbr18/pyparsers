@@ -1,0 +1,60 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Car-Catch",
+    "version": "1"
+  },
+  "servers": [
+    { "url": "https://car-catch.ru" }
+  ],
+  "paths": {
+    "/lead": {
+      "post": {
+        "summary": "Создать лид",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "car": {
+                    "type": "object",
+                    "properties": {
+                      "brand_name": { "type": "string", "nullable": true },
+                      "car_name": { "type": "string", "nullable": true },
+                      "year": { "nullable": true },
+                      "city": { "type": "string", "nullable": true },
+                      "price": { "nullable": true },
+                      "link": { "type": "string", "nullable": true }
+                    },
+                    "required": []
+                  },
+                  "user": { "type": "string", "nullable": true }
+                },
+                "required": ["car"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "OK" },
+          "500": { "description": "Failed to send message" }
+        }
+      }
+    },
+    "/bot": {
+      "post": {
+        "summary": "Telegram webhook",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } }
+        },
+        "responses": { "200": { "description": "OK" }, "400": { "description": "Invalid update" } }
+      }
+    },
+    "/health": { "get": { "summary": "Health", "responses": { "200": { "description": "healthy" } } } }
+  }
+}
+
+

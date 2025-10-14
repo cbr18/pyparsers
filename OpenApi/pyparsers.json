@@ -1,0 +1,161 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Car-Catch",
+    "version": "1"
+  },
+  "servers": [
+    { "url": "https://car-catch.ru" }
+  ],
+  "paths": {
+    "/pyparsers/": {
+      "get": {
+        "summary": "Root",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/pyparsers/health": {
+      "get": { "summary": "Health", "responses": { "200": { "description": "OK" } } }
+    },
+    "/pyparsers/cars/dongchedi": {
+      "get": { "summary": "Dongchedi list", "responses": { "200": { "description": "OK" } } }
+    },
+    "/pyparsers/cars/dongchedi/page/{page}": {
+      "get": {
+        "summary": "Dongchedi list by page",
+        "parameters": [ { "name": "page", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 1 } } ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/pyparsers/cars/dongchedi/all": {
+      "get": { "summary": "Dongchedi all", "responses": { "200": { "description": "OK" } } }
+    },
+    "/pyparsers/cars/dongchedi/incremental": {
+      "post": {
+        "summary": "Dongchedi incremental",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "existing_cars": {
+                    "type": "array",
+                    "items": { "type": "object", "additionalProperties": true }
+                  }
+                },
+                "required": ["existing_cars"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/pyparsers/cars/dongchedi/car/{car_id}": {
+      "get": {
+        "summary": "Dongchedi car detail",
+        "parameters": [ { "name": "car_id", "in": "path", "required": true, "schema": { "type": "string" } } ],
+        "responses": { "200": { "description": "OK" }, "500": { "description": "Error" } }
+      }
+    },
+    "/pyparsers/cars/dongchedi/cars": {
+      "post": {
+        "summary": "Dongchedi multiple car details",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "properties": { "car_ids": { "type": "array", "items": { "type": "string" } } }, "required": ["car_ids"] } } }
+        },
+        "responses": { "200": { "description": "OK" }, "400": { "description": "Too many IDs" } }
+      }
+    },
+    "/pyparsers/cars/che168": {
+      "get": { "summary": "Che168 list", "responses": { "200": { "description": "OK" } } }
+    },
+    "/pyparsers/cars/che168/page/{page}": {
+      "get": {
+        "summary": "Che168 list by page",
+        "parameters": [ { "name": "page", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 1 } } ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/pyparsers/cars/che168/all": {
+      "get": { "summary": "Che168 all", "responses": { "200": { "description": "OK" } } }
+    },
+    "/pyparsers/cars/che168/incremental": {
+      "post": {
+        "summary": "Che168 incremental",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "existing_cars": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+                },
+                "required": ["existing_cars"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/pyparsers/cars/che168/car": {
+      "post": {
+        "summary": "Che168 car detail by URL",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "properties": { "car_url": { "type": "string", "format": "uri" } }, "required": ["car_url"] } } }
+        },
+        "responses": { "200": { "description": "OK" }, "500": { "description": "Error" } }
+      }
+    },
+    "/pyparsers/update/dongchedi/full": {
+      "get": { "summary": "Update dongchedi full", "responses": { "200": { "description": "OK" } } }
+    },
+    "/pyparsers/update/che168/full": {
+      "get": { "summary": "Update che168 full", "responses": { "200": { "description": "OK" } } }
+    },
+    "/pyparsers/tasks": {
+      "post": {
+        "summary": "Создать задачу парсинга",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskCreateRequest" } } }
+        },
+        "responses": { "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskCreateResponse" } } } } }
+      }
+    },
+    "/pyparsers/tasks/{task_id}": {
+      "get": {
+        "summary": "Получить статус задачи",
+        "parameters": [ { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } } ],
+        "responses": { "200": { "description": "OK" }, "404": { "description": "Task not found" } }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "TaskCreateRequest": {
+        "type": "object",
+        "properties": {
+          "source": { "type": "string", "enum": ["dongchedi", "che168"] },
+          "task_type": { "type": "string", "enum": ["full", "incremental"], "default": "full" },
+          "id_field": { "type": "string", "nullable": true },
+          "existing_ids": { "type": "array", "items": { "type": "string" }, "nullable": true }
+        },
+        "required": ["source"]
+      },
+      "TaskCreateResponse": {
+        "type": "object",
+        "properties": { "task_id": { "type": "string" } },
+        "required": ["task_id"]
+      }
+    }
+  }
+}
+
+

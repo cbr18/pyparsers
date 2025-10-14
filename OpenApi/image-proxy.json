@@ -1,0 +1,27 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Car-Catch",
+    "version": "1"
+  },
+  "servers": [
+    { "url": "https://car-catch.ru" }
+  ],
+  "paths": {
+    "/proxy-image": {
+      "get": {
+        "summary": "Проксирование изображения по URL",
+        "description": "Проксирует внешний URL изображения с корректными заголовками и кэшированием.",
+        "parameters": [
+          { "name": "url", "in": "query", "required": true, "schema": { "type": "string", "format": "uri" }, "description": "URL источника изображения (url-encoded)" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "image/*": { } } },
+          "400": { "description": "Missing 'url' query param" }
+        }
+      }
+    }
+  }
+}
+
+

@@ -11,6 +11,8 @@ services:
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
     expose:
       - "5432"
+    ports:
+      - "4827:5432"
     volumes:
       - carsparser_pg_data:/var/lib/postgresql/data
       - ./init-scripts:/docker-entrypoint-initdb.d

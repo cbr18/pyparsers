@@ -24,6 +24,49 @@ services:
       - /tmp
       - /var/run/postgresql
 
+  # Translation Service
+  translator:
+    build:
+      context: ./translator
+      dockerfile: Dockerfile
+    container_name: carcatch-translator
+    env_file:
+      - .env
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    expose:
+      - "8000"
+    depends_on:
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - carcatch-network
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+
+  # Redis for Translation Cache
+  redis:
+    build:
+      context: ./translator
+      dockerfile: Dockerfile.redis
+    container_name: carcatch-redis
+    expose:
+      - "6379"
+    restart: unless-stopped
+    networks:
+      - carcatch-network
+    security_opt:
+      - no-new-privileges:true
+
   # Core API Services
   datahub:
     build:
@@ -36,11 +79,15 @@ services:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - API_BASE_URL=http://pyparsers:5000
+      - TRANSLATOR_URL=http://translator:8000
+      - TRANSLATION_ENABLED=true
       - NODE_ENV=production
     expose:
       - "8080"
     depends_on:
       postgres:
+        condition: service_started
+      translator:
         condition: service_started
     restart: unless-stopped
     healthcheck:

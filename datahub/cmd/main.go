@@ -39,7 +39,12 @@ func main() {
 	pgPort := os.Getenv("POSTGRES_PORT")
 	pgHost := os.Getenv("POSTGRES_HOST")
 	apiBaseURL := os.Getenv("API_BASE_URL")
+	translatorURL := os.Getenv("TRANSLATOR_URL")
+	translationEnabled := os.Getenv("TRANSLATION_ENABLED") == "true"
+	
 	log.Printf("API_BASE_URL: '%s'", apiBaseURL)
+	log.Printf("TRANSLATOR_URL: '%s'", translatorURL)
+	log.Printf("TRANSLATION_ENABLED: %t", translationEnabled)
 	if pgHost == "" {
 		pgHost = "localhost"
 	}
@@ -68,9 +73,21 @@ func main() {
 	dongchediClient := external.NewDongchediClient(apiBaseURL)
 	che168Client := external.NewChe168Client(apiBaseURL)
     pyparsersClient := external.NewPyparsersClient(apiBaseURL)
+    
+    // Инициализация сервиса перевода
+    var translationService *usecase.TranslationService
+    if translationEnabled && translatorURL != "" {
+        translatorClient := external.NewTranslatorClient(translatorURL)
+        translationService = usecase.NewTranslationService(translatorClient, true)
+        log.Printf("Translation service initialized with URL: %s", translatorURL)
+    } else {
+        translationService = usecase.NewTranslationService(nil, false)
+        log.Printf("Translation service disabled")
+    }
+    
 	updateService := map[string]*usecase.UpdateService{
-		"dongchedi": usecase.NewUpdateService(repo, dongchediClient, "dongchedi"),
-		"che168":    usecase.NewUpdateService(repo, che168Client, "che168"),
+		"dongchedi": usecase.NewUpdateServiceWithTranslation(repo, dongchediClient, "dongchedi", translationService),
+		"che168":    usecase.NewUpdateServiceWithTranslation(repo, che168Client, "che168", translationService),
 	}
 
 	handler := httpdelivery.NewHandler(carService, updateService, brandService, taskService, pyparsersClient)

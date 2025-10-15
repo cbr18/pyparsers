@@ -5,6 +5,7 @@ import (
 	"datahub/internal/domain"
 	"datahub/internal/repository"
 	"fmt"
+	"time"
 )
 
 // ExternalSourceClient — интерфейс для клиента внешнего источника (dongchedi, che168)
@@ -18,13 +19,19 @@ type ExternalSourceClient interface {
 // repo — репозиторий БД, client — внешний источник
 // sourceName — "dongchedi" или "che168"
 type UpdateService struct {
-	repo       repository.CarRepository
-	client     ExternalSourceClient
-	sourceName string
+	repo              repository.CarRepository
+	client            ExternalSourceClient
+	sourceName        string
+	translationService *TranslationService
 }
 
 func NewUpdateService(repo repository.CarRepository, client ExternalSourceClient, sourceName string) *UpdateService {
-	return &UpdateService{repo: repo, client: client, sourceName: sourceName}
+	return &UpdateService{repo: repo, client: client, sourceName: sourceName, translationService: nil}
+}
+
+// NewUpdateServiceWithTranslation создает UpdateService с поддержкой перевода
+func NewUpdateServiceWithTranslation(repo repository.CarRepository, client ExternalSourceClient, sourceName string, translationService *TranslationService) *UpdateService {
+	return &UpdateService{repo: repo, client: client, sourceName: sourceName, translationService: translationService}
 }
 
 // FullUpdate — полное обновление: очищает старые записи, сохраняет новые
@@ -34,10 +41,22 @@ func (s *UpdateService) FullUpdate(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	
+	// Переводим данные если сервис перевода доступен
+	if s.translationService != nil && s.translationService.IsEnabled() {
+		translatedCars, translateErr := s.translationService.TranslateCars(ctx, cars)
+		if translateErr != nil {
+			// Логируем ошибку, но продолжаем с исходными данными
+			fmt.Printf("Translation failed, using original data: %v\n", translateErr)
+		} else {
+			cars = translatedCars
+		}
+	}
+	
 	if err := s.repo.DeleteBySource(ctx, s.sourceName); err != nil {
 		return 0, err
 	}
-	if err := s.repo.CreateMany(ctx, cars); err != nil {
+	if err := s.repo.CreateManyWithTranslation(ctx, cars, s.translationService); err != nil {
 		return 0, err
 	}
 	return len(cars), nil
@@ -59,9 +78,19 @@ func (s *UpdateService) IncrementalUpdate(ctx context.Context, lastN int) error 
 		return nil
 	}
 	
-	// Используем CreateMany вместо Create для каждой машины отдельно
-	// Это позволит создать бренды в рамках одной транзакции
-	err = s.repo.CreateMany(ctx, newCars)
+	// Переводим данные если сервис перевода доступен
+	if s.translationService != nil && s.translationService.IsEnabled() {
+		translatedCars, translateErr := s.translationService.TranslateCars(ctx, newCars)
+		if translateErr != nil {
+			// Логируем ошибку, но продолжаем с исходными данными
+			fmt.Printf("Translation failed, using original data: %v\n", translateErr)
+		} else {
+			newCars = translatedCars
+		}
+	}
+	
+	// Используем CreateManyWithTranslation для создания машин и брендов с переводом
+	err = s.repo.CreateManyWithTranslation(ctx, newCars, s.translationService)
 	if err != nil {
 		// Если произошла ошибка, возвращаем ее
 		return err
@@ -115,18 +144,42 @@ func (s *UpdateService) RepoGetBySourceAndSort(ctx context.Context, source strin
 
 // ReplaceSource — атомарно заменяет все записи источника на новые
 func (s *UpdateService) ReplaceSource(ctx context.Context, cars []domain.Car) error {
+    // Переводим данные если сервис перевода доступен
+    if s.translationService != nil && s.translationService.IsEnabled() {
+        translatedCars, translateErr := s.translationService.TranslateCars(ctx, cars)
+        if translateErr != nil {
+            // Логируем ошибку, но продолжаем с исходными данными
+            fmt.Printf("Translation failed, using original data: %v\n", translateErr)
+        } else {
+            cars = translatedCars
+        }
+    }
+    
     // Нормализуем source на всякий
     for i := range cars {
         cars[i].Source = s.sourceName
     }
-    return s.repo.ReplaceBySource(ctx, s.sourceName, cars)
+    return s.repo.ReplaceBySourceWithTranslation(ctx, s.sourceName, cars, s.translationService)
 }
+
 
 // AppendIncremental — добавляет новые записи с корректным sort_number
 func (s *UpdateService) AppendIncremental(ctx context.Context, cars []domain.Car) error {
     if len(cars) == 0 {
         return nil
     }
+    
+    // Переводим данные если сервис перевода доступен
+    if s.translationService != nil && s.translationService.IsEnabled() {
+        translatedCars, translateErr := s.translationService.TranslateCars(ctx, cars)
+        if translateErr != nil {
+            // Логируем ошибку, но продолжаем с исходными данными
+            fmt.Printf("Translation failed, using original data: %v\n", translateErr)
+        } else {
+            cars = translatedCars
+        }
+    }
+    
     // Получим текущий максимум sort_number по источнику
     last, err := s.repo.GetBySourceAndSort(ctx, s.sourceName, 1)
     if err != nil {

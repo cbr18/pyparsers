@@ -63,12 +63,11 @@ func (r *CarRepository) Create(ctx context.Context, car domain.Car) error {
 
 		// Если бренд не найден, создаем его
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			brandName := car.BrandName
-			newBrand := &domain.Brand{
-				Name:      &brandName,
-				OrigName:  &brandName, // Устанавливаем оригинальное имя бренда
-				CreatedAt: now,
-				UpdatedAt: now,
+			// Создаем бренд с правильной логикой: orig_name - китайское, name - английское
+			newBrand, err := r.CreateBrandWithTranslation(ctx, car.BrandName, nil)
+			if err != nil {
+				tx.Rollback()
+				return err
 			}
 
 			if err := tx.Create(newBrand).Error; err != nil {
@@ -279,19 +278,19 @@ func (r *CarRepository) CreateMany(ctx context.Context, cars []domain.Car) error
 			var brand domain.Brand
 			err := tx.Where("name = ? OR orig_name = ?", filtered[i].BrandName, filtered[i].BrandName).First(&brand).Error
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				brandName := filtered[i].BrandName
-				newBrand := &domain.Brand{
-					Name:      &brandName,
-					OrigName:  &brandName,
-					CreatedAt: now,
-					UpdatedAt: now,
+				// Создаем бренд с правильной логикой: orig_name - китайское, name - английское
+				newBrand, err := r.CreateBrandWithTranslation(ctx, filtered[i].BrandName, nil)
+				if err != nil {
+					tx.Rollback()
+					log.Printf("ERROR: failed to create brand '%s': %v", filtered[i].BrandName, err)
+					return err
 				}
 				if err := tx.Create(newBrand).Error; err != nil {
 					tx.Rollback()
-					log.Printf("ERROR: failed to create brand '%s': %v", brandName, err)
+					log.Printf("ERROR: failed to create brand '%s': %v", filtered[i].BrandName, err)
 					return err
 				}
-				log.Printf("Created new brand: %s (ID=%s)", brandName, newBrand.ID)
+				log.Printf("Created new brand: %s (ID=%s)", filtered[i].BrandName, newBrand.ID)
 				filtered[i].MybrandID = &newBrand.ID
 			} else if err != nil {
 				tx.Rollback()
@@ -382,8 +381,12 @@ func (r *CarRepository) ReplaceBySource(ctx context.Context, source string, cars
             var brand domain.Brand
             err := tx.Where("name = ? OR orig_name = ?", dedup[i].BrandName, dedup[i].BrandName).First(&brand).Error
             if errors.Is(err, gorm.ErrRecordNotFound) {
-                name := dedup[i].BrandName
-                b := &domain.Brand{ Name: &name, OrigName: &name, CreatedAt: now, UpdatedAt: now }
+                // Создаем бренд с правильной логикой: orig_name - китайское, name - английское
+                b, err := r.CreateBrandWithTranslation(ctx, dedup[i].BrandName, nil)
+                if err != nil {
+                    tx.Rollback()
+                    return err
+                }
                 if err := tx.Create(b).Error; err != nil {
                     tx.Rollback()
                     return err
@@ -414,4 +417,125 @@ func (r *CarRepository) ReplaceBySource(ctx context.Context, source string, cars
     }
 
     return tx.Commit().Error
+}
+
+// CreateBrandWithTranslation создает бренд с переводом названия
+func (r *CarRepository) CreateBrandWithTranslation(ctx context.Context, brandName string, translationService interface{}) (*domain.Brand, error) {
+	origBrandName := brandName
+	translatedBrandName := brandName // По умолчанию используем оригинальное имя
+	
+	// Переводим название бренда на английский если TranslationService доступен
+	if translationService != nil {
+		// Приводим к правильному типу и переводим
+		if ts, ok := translationService.(interface {
+			TranslateBrandName(ctx context.Context, brandName string) (string, error)
+		}); ok {
+			translated, err := ts.TranslateBrandName(ctx, brandName)
+			if err != nil {
+				fmt.Printf("Failed to translate brand name '%s': %v\n", brandName, err)
+			} else {
+				translatedBrandName = translated
+			}
+		}
+	}
+	
+	now := time.Now()
+	brand := &domain.Brand{
+		Name:      &translatedBrandName, // Переведенное имя на английском
+		OrigName:  &origBrandName,       // Оригинальное китайское имя
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	
+	return brand, nil
+}
+
+// CreateManyWithTranslation создает множество автомобилей с переводом брендов
+func (r *CarRepository) CreateManyWithTranslation(ctx context.Context, cars []domain.Car, translationService interface{}) error {
+	if len(cars) == 0 {
+		return nil
+	}
+
+	now := time.Now()
+	
+	// Начинаем транзакцию
+	tx := r.db.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+
+	// Откатываем транзакцию в случае ошибки
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// Обрабатываем каждую машину
+	for i := range cars {
+		if cars[i].CreatedAt.IsZero() {
+			cars[i].CreatedAt = now
+		}
+		cars[i].UpdatedAt = now
+		
+		// Ensure UUID is set
+		if cars[i].UUID == "" {
+			cars[i].UUID = uuid.NewString()
+		}
+
+		// Обрабатываем бренд если есть
+		if cars[i].BrandName != "" {
+			var brand domain.Brand
+			// Ищем по полю name или orig_name
+			err := tx.Where("name = ? OR orig_name = ?", cars[i].BrandName, cars[i].BrandName).First(&brand).Error
+
+			// Если бренд не найден, создаем его с переводом
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				newBrand, err := r.CreateBrandWithTranslation(ctx, cars[i].BrandName, translationService)
+				if err != nil {
+					tx.Rollback()
+					return err
+				}
+
+				if err := tx.Create(newBrand).Error; err != nil {
+					tx.Rollback()
+					return err
+				}
+
+				cars[i].MybrandID = &newBrand.ID
+			} else if err != nil {
+				tx.Rollback()
+				return err
+			} else {
+				cars[i].MybrandID = &brand.ID
+			}
+		}
+	}
+
+	// Вставляем все машины батчами
+	const batchSize = 1000
+	for i := 0; i < len(cars); i += batchSize {
+		end := i + batchSize
+		if end > len(cars) {
+			end = len(cars)
+		}
+		batch := cars[i:end]
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(&batch, batchSize).Error; err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+
+	return tx.Commit().Error
+}
+
+// ReplaceBySourceWithTranslation атомарно заменяет все записи источника на новые с переводом брендов
+func (r *CarRepository) ReplaceBySourceWithTranslation(ctx context.Context, source string, cars []domain.Car, translationService interface{}) error {
+	// Удаляем старые записи
+	if err := r.DeleteBySource(ctx, source); err != nil {
+		return err
+	}
+	
+	// Создаем новые записи с переводом
+	return r.CreateManyWithTranslation(ctx, cars, translationService)
 }

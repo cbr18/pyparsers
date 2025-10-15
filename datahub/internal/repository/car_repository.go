@@ -15,6 +15,8 @@ type CarRepository interface {
 	GetBySourceAndSort(ctx context.Context, source string, limit int) ([]domain.Car, error)
 	Create(ctx context.Context, car domain.Car) error
 	CreateMany(ctx context.Context, cars []domain.Car) error
+	CreateManyWithTranslation(ctx context.Context, cars []domain.Car, translationService interface{}) error
 	DeleteBySource(ctx context.Context, source string) error
     ReplaceBySource(ctx context.Context, source string, cars []domain.Car) error
+    ReplaceBySourceWithTranslation(ctx context.Context, source string, cars []domain.Car, translationService interface{}) error
 }

@@ -103,7 +103,8 @@
         "responses": { "200": { "description": "OK" } }
       }
     },
-    "/pyparsers/cars/che168/car": {
+    "/pyparsersросто 
+    che168/car": {
       "post": {
         "summary": "Che168 car detail by URL",
         "requestBody": {

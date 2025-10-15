@@ -261,12 +261,15 @@ class TaskService:
             parser = Che168Parser()
             data = []
             missing_id_count = 0
+            filtered_by_year = 0
             # Собираем страницы 1..100 или до конца
             for page in range(1, 101):
                 response = parser.fetch_cars_by_page(page)
                 if not response.data or not response.data.search_sh_sku_info_list:
                     break
                 cars_list = response.data.search_sh_sku_info_list
+                logger.info(f"che168 page {page}: processing {len(cars_list)} cars")
+                
                 for i, car in enumerate(cars_list):
                     car_dict = car.dict()
                     car_dict.update({
@@ -283,8 +286,6 @@ class TaskService:
                             car_dict['year'] = None
                     if car_dict.get('year') in (None, 0):
                         title_text = car_dict.get('title') or ''
-                    if car_dict.get('year') in (None, 0):
-                        title_text = car_dict.get('title') or ''
                         m = re.search(r'(19|20)\d{2}', title_text)
                         if m:
                             try:
@@ -293,6 +294,13 @@ class TaskService:
                                     car_dict['year'] = y
                             except Exception:
                                 pass
+                    
+                    # Логируем фильтрацию по году
+                    if car_dict.get('year') is not None and car_dict.get('year') < 2017:
+                        filtered_by_year += 1
+                        logger.debug(f"che168: filtered car {car_dict.get('car_id')} - year {car_dict.get('year')} < 2017")
+                        continue  # Пропускаем машины старше 2017
+                    
                     if car_dict.get('car_source_city_name'):
                         car_dict['city'] = car_dict.get('car_source_city_name')
                     mileage_raw = car_dict.get('car_mileage')
@@ -324,6 +332,8 @@ class TaskService:
                     data.append(car_dict)
                 if not getattr(response.data, 'has_more', False):
                     break
+            
+            logger.info(f"che168 full parsing: {len(data)} cars collected, {filtered_by_year} filtered by year < 2017, {missing_id_count} had no car_id")
             if missing_id_count:
                 logger.info(f"che168: {missing_id_count} cars had no car_id; generated from link hash")
             return data
@@ -338,13 +348,16 @@ class TaskService:
             parser = Che168Parser()
             data = []
             missing_id_count = 0
+            filtered_by_year = 0
             existing_set = set(str(x) for x in existing_ids if x)
+            logger.info(f"che168 incremental: checking against {len(existing_set)} existing IDs")
 
             for page in range(1, 101):
                 response = parser.fetch_cars_by_page(page)
                 if not response.data or not response.data.search_sh_sku_info_list:
                     break
                 cars_list = response.data.search_sh_sku_info_list
+                logger.info(f"che168 incremental page {page}: processing {len(cars_list)} cars")
                 found_existing = False
                 for i, car in enumerate(cars_list):
                     car_dict = car.dict()
@@ -357,6 +370,7 @@ class TaskService:
                             stop_id = str(stop_id)
                     if stop_id and stop_id in existing_set:
                         found_existing = True
+                        logger.info(f"che168 incremental: found existing car {stop_id} on page {page}, stopping")
                         break
                     car_dict.update({
                         'sort_number': len(cars_list) - i,
@@ -380,6 +394,13 @@ class TaskService:
                                     car_dict['year'] = y
                             except Exception:
                                 pass
+                    
+                    # Логируем фильтрацию по году
+                    if car_dict.get('year') is not None and car_dict.get('year') < 2017:
+                        filtered_by_year += 1
+                        logger.debug(f"che168 incremental: filtered car {car_dict.get('car_id')} - year {car_dict.get('year')} < 2017")
+                        continue  # Пропускаем машины старше 2017
+                    
                     if car_dict.get('car_source_city_name'):
                         car_dict['city'] = car_dict.get('car_source_city_name')
                     mileage_raw = car_dict.get('car_mileage')
@@ -411,6 +432,8 @@ class TaskService:
                     data.append(car_dict)
                 if found_existing:
                     break
+            
+            logger.info(f"che168 incremental: {len(data)} cars collected, {filtered_by_year} filtered by year < 2017, {missing_id_count} had no car_id")
             if missing_id_count:
                 logger.info(f"che168: {missing_id_count} cars had no car_id; generated from link hash")
             return data

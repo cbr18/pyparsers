@@ -18,15 +18,15 @@ var DB *gorm.DB
 
 // InitDB - инициализирует подключение к базе данных
 func InitDB(dsn string) (*gorm.DB, error) {
-	newLogger := logger.New(
-		log.New(os.Stdout, "\r\n", log.LstdFlags),
-		logger.Config{
-			SlowThreshold:             time.Second,
-			LogLevel:                  logger.Info,
-			IgnoreRecordNotFoundError: true,
-			Colorful:                  true,
-		},
-	)
+    newLogger := logger.New(
+        log.New(os.Stdout, "\r\n", log.LstdFlags),
+        logger.Config{
+            SlowThreshold:             time.Second,
+            LogLevel:                  logger.Silent, // no SQL logs at all
+            IgnoreRecordNotFoundError: true,
+            Colorful:                  true,
+        },
+    )
 
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger: newLogger,

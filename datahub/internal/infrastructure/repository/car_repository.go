@@ -234,10 +234,20 @@ func (r *CarRepository) CreateMany(ctx context.Context, cars []domain.Car) error
 
 	// Оставляем только новые машины
 	filtered := make([]domain.Car, 0, len(cars))
+	// Также устраняем дубликаты внутри входного набора по (source, car_id)
+	seenNew := make(map[carKey]struct{}, len(cars))
 	for _, car := range cars {
-		if _, found := existingMap[carKey{Source: car.Source, CarID: car.CarID}]; !found {
-			filtered = append(filtered, car)
+		key := carKey{Source: car.Source, CarID: car.CarID}
+		if _, exists := existingMap[key]; exists {
+			// уже есть в БД — пропускаем
+			continue
 		}
+		if _, dup := seenNew[key]; dup {
+			// дубликат внутри входного массива — пропускаем
+			continue
+		}
+		seenNew[key] = struct{}{}
+		filtered = append(filtered, car)
 	}
 	if len(filtered) == 0 {
 		return nil
@@ -293,12 +303,20 @@ func (r *CarRepository) CreateMany(ctx context.Context, cars []domain.Car) error
 		}
 	}
 
-	// Вставляем все машины, пропуская дубликаты на уровне базы
-	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&filtered).Error; err != nil {
-		tx.Rollback()
-		log.Printf("ERROR: failed to insert cars (possible duplicate): %v", err)
-		return err
-	}
+    // Вставляем все машины батчами, пропуская дубликаты на уровне базы
+    const batchSize = 1000
+    for i := 0; i < len(filtered); i += batchSize {
+        end := i + batchSize
+        if end > len(filtered) {
+            end = len(filtered)
+        }
+        batch := filtered[i:end]
+        if err := tx.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(&batch, batchSize).Error; err != nil {
+            tx.Rollback()
+            log.Printf("ERROR: failed to insert cars batch [%d:%d]: %v", i, end, err)
+            return err
+        }
+    }
 
 	return tx.Commit().Error
 }
@@ -337,39 +355,62 @@ func (r *CarRepository) ReplaceBySource(ctx context.Context, source string, cars
         return tx.Commit().Error
     }
 
-    // Обеспечим UUID/времена и бренды
+    // Устраним дубликаты по (source, car_id) внутри входного слайса
+    type carKey struct { Source string; CarID int64 }
+    seen := make(map[carKey]struct{}, len(cars))
+    dedup := make([]domain.Car, 0, len(cars))
     for i := range cars {
-        if cars[i].CreatedAt.IsZero() {
-            cars[i].CreatedAt = now
+        key := carKey{ Source: cars[i].Source, CarID: cars[i].CarID }
+        if _, ok := seen[key]; ok {
+            continue
         }
-        cars[i].UpdatedAt = now
-        if cars[i].UUID == "" {
-            cars[i].UUID = uuid.NewString()
+        seen[key] = struct{}{}
+        dedup = append(dedup, cars[i])
+    }
+
+    // Обеспечим UUID/времена и бренды
+    for i := range dedup {
+        if dedup[i].CreatedAt.IsZero() {
+            dedup[i].CreatedAt = now
+        }
+        dedup[i].UpdatedAt = now
+        if dedup[i].UUID == "" {
+            dedup[i].UUID = uuid.NewString()
         }
         // Привяжем бренд
-        if cars[i].BrandName != "" {
+        if dedup[i].BrandName != "" {
             var brand domain.Brand
-            err := tx.Where("name = ? OR orig_name = ?", cars[i].BrandName, cars[i].BrandName).First(&brand).Error
+            err := tx.Where("name = ? OR orig_name = ?", dedup[i].BrandName, dedup[i].BrandName).First(&brand).Error
             if errors.Is(err, gorm.ErrRecordNotFound) {
-                name := cars[i].BrandName
+                name := dedup[i].BrandName
                 b := &domain.Brand{ Name: &name, OrigName: &name, CreatedAt: now, UpdatedAt: now }
                 if err := tx.Create(b).Error; err != nil {
                     tx.Rollback()
                     return err
                 }
-                cars[i].MybrandID = &b.ID
+                dedup[i].MybrandID = &b.ID
             } else if err != nil {
                 tx.Rollback()
                 return err
             } else {
-                cars[i].MybrandID = &brand.ID
+                dedup[i].MybrandID = &brand.ID
             }
         }
     }
 
-    if err := tx.Create(&cars).Error; err != nil {
-        tx.Rollback()
-        return err
+    // Вставляем все машины батчами в одной транзакции
+    const batchSize = 1000
+    for i := 0; i < len(dedup); i += batchSize {
+        end := i + batchSize
+        if end > len(dedup) {
+            end = len(dedup)
+        }
+        batch := dedup[i:end]
+        if err := tx.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(&batch, batchSize).Error; err != nil {
+            tx.Rollback()
+            log.Printf("ERROR: failed to insert cars batch [%d:%d]: %v", i, end, err)
+            return err
+        }
     }
 
     return tx.Commit().Error

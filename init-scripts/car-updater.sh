@@ -1,41 +1,60 @@
 #!/bin/bash
 
-log_file="/var/log/car-updater.log"
-timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+set -o pipefail
+
+# Логи сохраняем в примонтированную директорию контейнера
+LOG_FILE="/logs/car-updater.log"
+
+timestamp() {
+  date '+%Y-%m-%d %H:%M:%S'
+}
 
 log() {
-  echo "[$timestamp] $1" >> "$log_file"
+  echo "[$(timestamp)] $1" >> "$LOG_FILE"
 }
+
+# Базовый URL для datahub — берем из переменной окружения или используем адрес сервиса в докер-сети
+DATAHUB_URL_DEFAULT="http://datahub:8080"
+BASE_URL="${DATAHUB_URL:-$DATAHUB_URL_DEFAULT}"
 
 make_get() {
   url="$1"
   log "GET $url"
-  curl -s -X GET --max-time 3600 "$url" >/dev/null 2>&1
-  log "GET $url finished"
+  # -L следовать редиректам, -f fail on HTTP errors, -S показать ошибку, --max-time ограничение
+  if curl -s -L -f -S -X GET --max-time 3600 "$url" >/dev/null; then
+    log "GET $url finished"
+  else
+    rc=$?
+    log "GET $url failed (rc=$rc)"
+  fi
 }
 
 make_post() {
   url="$1"
   data="$2"
   log "POST $url"
-  curl -s -X POST -H "Content-Type: application/json" -d "$data" --max-time 3600 "$url" >/dev/null 2>&1
-  log "POST $url finished"
+  if curl -s -L -f -S -X POST -H "Content-Type: application/json" -d "$data" --max-time 3600 "$url" >/dev/null; then
+    log "POST $url finished"
+  else
+    rc=$?
+    log "POST $url failed (rc=$rc)"
+  fi
 }
 
 # Параметр $1 — тип запуска: full или partial
 case "$1" in
   full)
-    make_get "http://car-catch.ru:8080/update/dongchedi/full/"
+    make_get  "${BASE_URL}/update/dongchedi/full"
     sleep 15
-    make_get "http://car-catch.ru:8080/update/che168/full/"
+    make_get  "${BASE_URL}/update/che168/full"
     ;;
   partial)
-    make_post "http://car-catch.ru:8080/update/dongchedi/" '{"last_n":10}'
+    make_post "${BASE_URL}/update/dongchedi" '{"last_n":10}'
     sleep 15
-    make_post "http://car-catch.ru:8080/update/che168/" '{"last_n":10}'
+    make_post "${BASE_URL}/update/che168" '{"last_n":10}'
     ;;
   *)
     log "Unknown parameter: $1"
     exit 1
     ;;
-esac 
+esac

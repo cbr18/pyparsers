@@ -1,12 +1,14 @@
 package http
 
 import (
+	"context"
 	"datahub/internal/domain"
 	"datahub/internal/infrastructure/external"
 	"datahub/internal/usecase"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -199,7 +201,11 @@ func (h *Handler) IncrementalUpdate(c *gin.Context) {
         }
     }
 
-    response, err := h.pyparsersClient.CreateTask(c.Request.Context(), source, "incremental", idField, existingIDs)
+    // Увеличиваем таймаут для pyparsers до 5 минут
+    ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Minute)
+    defer cancel()
+    
+    response, err := h.pyparsersClient.CreateTask(ctx, source, "incremental", idField, existingIDs)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

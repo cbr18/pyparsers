@@ -64,9 +64,21 @@ class LeadRequest(BaseModel):
 
 
 # --- Service Endpoints ---
-@app.get("/health", response_class=PlainTextResponse)
-async def health() -> str:
-    return "healthy\n"
+@app.get("/health")
+@app.head("/health")
+async def health():
+    """
+    Проверка работоспособности API.
+    """
+    return {
+        "data": {
+            "status": "ok",
+            "service": "telegrambot",
+            "bot_connected": TELEGRAM_BOT_TOKEN is not None
+        },
+        "message": "Service is healthy",
+        "status": 200
+    }
 
 
 @app.post("/lead")

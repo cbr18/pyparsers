@@ -1,6 +1,6 @@
 // API service for datahub
 
-const API_URL = '/cars';
+const API_URL = '/api/cars';
 
 /**
  * Fetch cars with pagination and filters
@@ -43,7 +43,7 @@ export const fetchCars = async (page = 1, limit = 10, filters = {}) => {
  */
 export const fetchBrands = async () => {
   try {
-    const response = await fetch('/brands');
+    const response = await fetch('/api/brands');
     if (!response.ok) {
       throw new Error(`HTTP error! Status: ${response.status}`);
     }

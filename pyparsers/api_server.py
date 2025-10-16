@@ -55,6 +55,25 @@ app.add_middleware(
     allow_headers=cors_headers,
 )
 
+@app.get("/health")
+@app.head("/health")
+def health_check():
+    """
+    Проверка работоспособности API.
+    """
+    return {
+        "data": {
+            "status": "ok",
+            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            "services": {
+                "dongchedi_parser": "available",
+                "che168_parser": "available"
+            }
+        },
+        "message": "Service is healthy",
+        "status": 200
+    }
+
 @app.get("/cars/dongchedi")
 def get_dongchedi_cars():
     parser = DongchediParser()

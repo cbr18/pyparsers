@@ -198,16 +198,16 @@ services:
       - nginx_temp:/var/cache/nginx/temp
     depends_on:
       datahub:
-        condition: service_started
+        condition: service_healthy
       pyparsers:
-        condition: service_started
+        condition: service_healthy
       telegrambot:
-        condition: service_started
+        condition: service_healthy
       telegramapp:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:80/health"]
       interval: 15s
       timeout: 5s
       retries: 3

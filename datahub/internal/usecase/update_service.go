@@ -127,7 +127,7 @@ func (s *UpdateService) SaveCars(ctx context.Context, cars []domain.Car) error {
 		cars[i].Source = s.sourceName
 	}
 	
-	return s.repo.CreateMany(ctx, cars)
+	return s.repo.CreateManyWithTranslation(ctx, cars, s.translationService)
 }
 
 // ClearSource — удалить все записи по источнику (для полного обновления)
@@ -192,5 +192,5 @@ func (s *UpdateService) AppendIncremental(ctx context.Context, cars []domain.Car
         cars[i].Source = s.sourceName
         cars[i].SortNumber = currentMax + i + 1
     }
-    return s.repo.CreateMany(ctx, cars)
+    return s.repo.CreateManyWithTranslation(ctx, cars, s.translationService)
 }

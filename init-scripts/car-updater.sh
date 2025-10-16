@@ -41,17 +41,19 @@ make_post() {
   fi
 }
 
-# Параметр $1 — тип запуска: full или partial
+# Параметр $1 — тип запуска: dongchedi, che168, dongchedi-full, che168-full
 case "$1" in
-  full)
-    make_get  "${BASE_URL}/update/dongchedi/full"
-    sleep 15
-    make_get  "${BASE_URL}/update/che168/full"
+  dongchedi)
+    make_post "${BASE_URL}/api/update/dongchedi" '{"last_n":10}'
     ;;
-  partial)
-    make_post "${BASE_URL}/update/dongchedi" '{"last_n":10}'
-    sleep 15
-    make_post "${BASE_URL}/update/che168" '{"last_n":10}'
+  che168)
+    make_post "${BASE_URL}/api/update/che168" '{"last_n":10}'
+    ;;
+  dongchedi-full)
+    make_get  "${BASE_URL}/api/update/dongchedi/full"
+    ;;
+  che168-full)
+    make_get  "${BASE_URL}/api/update/che168/full"
     ;;
   *)
     log "Unknown parameter: $1"

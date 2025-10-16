@@ -32,6 +32,10 @@ class CacheService:
             await self.redis.close()
             logger.info("Отключение от Redis")
     
+    def is_connected(self) -> bool:
+        """Проверка подключения к Redis"""
+        return self.redis is not None
+    
     def _generate_key(self, text: str, source_lang: str = "zh", target_lang: str = "ru") -> str:
         """
         Генерирует ключ для кэша на основе текста и языков

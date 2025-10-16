@@ -1,3 +1,11 @@
 # m h  dom mon dow   command
-*/10 * * * * /init-scripts/car-updater.sh partial
-0 3 * * * /init-scripts/car-updater.sh full 
+# Частичные обновления каждые 10 минут (чередование источников)
+# Dongchedi: каждые 20 минут (00:00, 00:20, 00:40, 01:00, 01:20, ...)
+*/20 * * * * /init-scripts/car-updater.sh dongchedi
+# Che168: каждые 20 минут со сдвигом на 10 минут (00:10, 00:30, 00:50, 01:10, 01:30, ...)
+10,30,50 * * * * /init-scripts/car-updater.sh che168
+# Полные обновления по источникам (каждый источник 2 раза в день)
+# Dongchedi full: каждый день в 02:00 и 14:00
+0 2,14 * * * /init-scripts/car-updater.sh dongchedi-full
+# Che168 full: каждый день в 08:00 и 20:00
+0 8,20 * * * /init-scripts/car-updater.sh che168-full 

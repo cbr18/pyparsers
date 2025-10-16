@@ -115,14 +115,20 @@ async def root():
 
 
 @app.get("/health")
+@app.head("/health")
 async def health():
     """
     Проверка здоровья приложения
     """
     return {
-        "status": "healthy",
-        "service": "translator",
-        "version": "1.0.0"
+        "data": {
+            "status": "ok",
+            "service": "translator",
+            "version": "1.0.0",
+            "cache_connected": cache_service is not None and cache_service.is_connected() if cache_service else False
+        },
+        "message": "Service is healthy",
+        "status": 200
     }
 
 

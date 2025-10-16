@@ -152,7 +152,9 @@ function App() {
 
       {/* Loading indicator */}
       {loading ? (
-        <div className="loader">Загрузка...</div>
+        <div className="loader-container">
+          <div className="loader">Загрузка автомобилей...</div>
+        </div>
       ) : (
         <>
           {/* Car list */}

@@ -10,7 +10,7 @@ WORKDIR /app
 
 # System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates \
+    curl ca-certificates wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv (fast Python package manager)

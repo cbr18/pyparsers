@@ -6,7 +6,7 @@ RUN pip install --no-cache-dir fastapi uvicorn[standard] requests aiohttp beauti
 
 # Install Chromium browser and chromedriver with needed system deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    chromium chromium-driver ca-certificates fonts-liberation \
+    chromium chromium-driver ca-certificates fonts-liberation wget \
     libasound2 libatk1.0-0 libatk-bridge2.0-0 libc6 libxcb1 libx11-6 \
     libnss3 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 \
     libxrandr2 libgbm1 libglib2.0-0 libgtk-3-0 libpango-1.0-0 libxshmfence1 \

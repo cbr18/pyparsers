@@ -1,4 +1,4 @@
-/* Base styles */
+ /* Base styles */
 * {
   box-sizing: border-box;
   margin: 0;
@@ -377,6 +377,12 @@ body::before {
   font-weight: 500;
 }
 
+.car-buttons {
+  display: flex;
+  gap: 12px;
+  margin-top: auto;
+}
+
 .lead-btn {
   background: linear-gradient(135deg, #667eea, #764ba2);
   color: white;
@@ -388,12 +394,29 @@ body::before {
   cursor: pointer;
   transition: all 0.3s ease;
   box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
-  margin-top: auto;
   position: relative;
   overflow: hidden;
+  flex: 1;
 }
 
-.lead-btn::before {
+.write-btn {
+  background: linear-gradient(135deg, #48bb78, #38a169);
+  color: white;
+  border: none;
+  border-radius: 12px;
+  padding: 14px 24px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(72, 187, 120, 0.4);
+  position: relative;
+  overflow: hidden;
+  flex: 1;
+}
+
+.lead-btn::before,
+.write-btn::before {
   content: '';
   position: absolute;
   top: 0;
@@ -404,7 +427,8 @@ body::before {
   transition: left 0.5s;
 }
 
-.lead-btn:hover::before {
+.lead-btn:hover::before,
+.write-btn:hover::before {
   left: 100%;
 }
 
@@ -413,11 +437,18 @@ body::before {
   box-shadow: 0 8px 25px rgba(102, 126, 234, 0.6);
 }
 
-.lead-btn:active {
+.write-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(72, 187, 120, 0.6);
+}
+
+.lead-btn:active,
+.write-btn:active {
   transform: translateY(0);
 }
 
-.lead-btn span {
+.lead-btn span,
+.write-btn span {
   position: relative;
   z-index: 1;
 }
@@ -440,7 +471,8 @@ body::before {
 }
 
 /* Loading state for buttons */
-.lead-btn:disabled {
+.lead-btn:disabled,
+.write-btn:disabled {
   opacity: 0.7;
   cursor: not-allowed;
   transform: none;
@@ -450,6 +482,11 @@ body::before {
 .lead-btn:disabled:hover {
   transform: none;
   box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+}
+
+.write-btn:disabled:hover {
+  transform: none;
+  box-shadow: 0 4px 15px rgba(72, 187, 120, 0.4);
 }
 
 /* Success state animation */
@@ -651,18 +688,32 @@ body::before {
   }
 
   .pagination {
-    flex-direction: column;
-    gap: 15px;
+    flex-direction: row;
+    gap: 8px;
     padding: 15px 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .pagination button {
+    padding: 10px 12px;
+    font-size: 12px;
+    min-width: 36px;
   }
 
   .page-info, .total-info {
-    margin: 5px 0;
+    margin: 0 8px;
+    font-size: 12px;
   }
 
-  .filter-button, .lead-btn {
+  .filter-button, .lead-btn, .write-btn {
     padding: 12px 20px;
     font-size: 14px;
+  }
+
+  .car-buttons {
+    flex-direction: column;
+    gap: 10px;
   }
 
   .loader-container {
@@ -690,6 +741,26 @@ body::before {
 
   .car-info p {
     font-size: 13px;
+  }
+
+  .pagination {
+    gap: 6px;
+    padding: 12px 15px;
+  }
+
+  .pagination button {
+    padding: 8px 10px;
+    font-size: 11px;
+    min-width: 32px;
+  }
+
+  .page-info, .total-info {
+    margin: 0 6px;
+    font-size: 11px;
+  }
+
+  .total-info {
+    display: none; /* Скрываем на очень маленьких экранах */
   }
 }
 

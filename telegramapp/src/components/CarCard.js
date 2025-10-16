@@ -1,94 +1,90 @@
-import React, { useState } from 'react';
-import { sendLeadRequest } from '../services/api';
+import React from 'react';
 import { getProxiedImageUrl, shouldUseProxy } from '../utils/imageProxy';
+import { sendLeadRequest } from '../services/api';
 
 const CarCard = ({ car }) => {
-  const [isLoading, setIsLoading] = useState(false);
-  const [buttonState, setButtonState] = useState('normal'); // normal, success, error
   // Beautiful placeholder for missing images
   const placeholder = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="350" height="220"><defs><linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:%23667eea;stop-opacity:0.1" /><stop offset="100%" style="stop-color:%23764ba2;stop-opacity:0.1" /></linearGradient></defs><rect width="100%" height="100%" fill="url(%23grad)"/><g transform="translate(175,110)"><circle cx="0" cy="0" r="30" fill="none" stroke="%23667eea" stroke-width="2" opacity="0.3"/><path d="M-20,-10 L20,-10 M-20,0 L20,0 M-20,10 L20,10" stroke="%23667eea" stroke-width="2" opacity="0.3"/><text x="0" y="35" text-anchor="middle" fill="%23667eea" font-size="14" font-family="Arial, sans-serif" opacity="0.6">Нет фото</text></g></svg>';
 
-  const handleLeadRequest = async () => {
-    if (isLoading) return;
+
+  const handleWriteMessage = () => {
+    // Получаем данные пользователя из Telegram WebApp
+    const tg = window.Telegram?.WebApp;
+    let username = 'Пользователь';
     
-    setIsLoading(true);
-    setButtonState('normal');
-    
-    try {
-      // Подготовим сообщение с ссылкой на машину
-      const carUrl = car.link || '';
-      const message = `Здравствуйте, меня интересует данная машина: ${carUrl}`;
-
-      // Скопируем текст в буфер обмена на случай, если Telegram проигнорирует автотекст
-      try { await navigator.clipboard.writeText(message); } catch (_) {}
-
-      // Пытаемся открыть Telegram с предзаполненным сообщением
-      // Прямой deep-link с текстом может игнорироваться в Mini App, поэтому используем web-share, где возможно
-      const tgDeepLink = `tg://resolve?domain=cbr_18&text=${encodeURIComponent(message)}`;
-
-      // Детекция платформы для корректных веб-фолбэков
-      const ua = (typeof navigator !== 'undefined' && navigator.userAgent) ? navigator.userAgent : '';
-      const isMobile = /Android|iPhone|iPad|iPod/i.test(ua);
-
-      // Веб-варианты:
-      // - Desktop/Web: можно открыть чат с текстом через web Telegram
-      const tgWebDesktopChat = `https://t.me/cbr_18?text=${encodeURIComponent(message)}`;
-      // - Mobile: официальный способ с текстом — общий share, пользователь выберет контакт
-      const tgWebShare = `https://t.me/share/url?url=${encodeURIComponent(carUrl)}&text=${encodeURIComponent(message)}`;
-
-      // Параллельно тихо отправим лид на бэкенд (не блокируем UX)
-      try { 
-        await sendLeadRequest(car);
-        setButtonState('success');
-        setTimeout(() => setButtonState('normal'), 2000);
-      } catch (_) {
-        setButtonState('error');
-        setTimeout(() => setButtonState('normal'), 2000);
-      }
-
-      // Если мы внутри Telegram Mini App — используем официальный API
-      const webApp = (typeof window !== 'undefined' && window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
-      // 1) Попробуем инлайн-режим: откроет выбор чата с предзаполненным запросом
-      if (webApp && typeof webApp.switchInlineQuery === 'function') {
-        try {
-          webApp.switchInlineQuery(message, true);
-          return;
-        } catch (_) {}
-      }
-      const openUrl = (url) => {
-        if (webApp && typeof webApp.openTelegramLink === 'function') {
-          webApp.openTelegramLink(url);
-        } else {
-          window.location.href = url;
-        }
-      };
-
-      // В Mini App лучше сразу использовать share-URL — он корректно подставляет текст (где поддерживается)
-      if (webApp) {
-        openUrl(isMobile ? tgWebShare : tgWebDesktopChat);
-        return;
-      }
-
-      // Пробуем открыть app-ссылку; если не сработает, дадим веб-фолбэк
-      const fallbackTimer = setTimeout(() => {
-        // Если deep link не сработал, используем лучший веб‑вариант для текущей платформы
-        openUrl(isMobile ? tgWebShare : tgWebDesktopChat);
-      }, 800);
-
+    if (tg?.initDataUnsafe?.user) {
+      const user = tg.initDataUnsafe.user;
+      username = user.username ? `@${user.username}` : 
+                 user.first_name ? user.first_name : 
+                 'Пользователь';
+    } else if (tg?.initData) {
+      // Альтернативный способ через initData
       try {
-        openUrl(tgDeepLink);
-        // Если приложение перехватило протокол, переход произойдет и таймер можно игнорировать
-        // Отменить таймер корректно нельзя без детекции, оставим как есть
-      } catch (_) {
-        clearTimeout(fallbackTimer);
-        openUrl(isMobile ? tgWebShare : tgWebDesktopChat);
+        const params = new URLSearchParams(tg.initData);
+        const userParam = params.get('user');
+        if (userParam) {
+          const user = JSON.parse(decodeURIComponent(userParam));
+          username = user.username ? `@${user.username}` : 
+                     user.first_name ? user.first_name : 
+                     'Пользователь';
+        }
+      } catch (e) {
+        console.log('Could not parse user data:', e);
       }
+    }
+    
+    // Подготовим сообщение с UUID машины и username
+    const message = `Здравствуйте, меня интересует данная машина: ${car.uuid || car.id || 'ID не найден'}\n\nПользователь: ${username}`;
+    
+    // Простая ссылка на Telegram с предзаполненным текстом
+    const tgUrl = `https://t.me/cbr_18?text=${encodeURIComponent(message)}`;
+    
+    // Открываем ссылку
+    window.open(tgUrl, '_blank');
+  };
+
+  const handleLeadRequest = async () => {
+    try {
+      // Получаем данные пользователя из Telegram WebApp
+      const tg = window.Telegram?.WebApp;
+      let username = 'Пользователь сайта';
+      
+      // Отладочная информация
+      console.log('Telegram WebApp:', tg);
+      console.log('initDataUnsafe:', tg?.initDataUnsafe);
+      console.log('initData:', tg?.initData);
+      
+      if (tg?.initDataUnsafe?.user) {
+        const user = tg.initDataUnsafe.user;
+        console.log('User from initDataUnsafe:', user);
+        username = user.username ? `@${user.username}` : 
+                   user.first_name ? user.first_name : 
+                   'Пользователь сайта';
+      } else if (tg?.initData) {
+        // Альтернативный способ через initData
+        try {
+          const params = new URLSearchParams(tg.initData);
+          const userParam = params.get('user');
+          console.log('User param from initData:', userParam);
+          if (userParam) {
+            const user = JSON.parse(decodeURIComponent(userParam));
+            console.log('Parsed user:', user);
+            username = user.username ? `@${user.username}` : 
+                       user.first_name ? user.first_name : 
+                       'Пользователь сайта';
+          }
+        } catch (e) {
+          console.log('Could not parse user data:', e);
+        }
+      }
+      
+      console.log('Final username:', username);
+      
+      await sendLeadRequest(car, username);
+      alert('Заявка успешно отправлена! Администратор свяжется с вами в ближайшее время.');
     } catch (error) {
-      console.error('Error in handleLeadRequest:', error);
-      setButtonState('error');
-      setTimeout(() => setButtonState('normal'), 2000);
-    } finally {
-      setIsLoading(false);
+      console.error('Error sending lead request:', error);
+      alert('Ошибка при отправке заявки. Попробуйте позже или свяжитесь с нами напрямую.');
     }
   };
 
@@ -115,18 +111,17 @@ const CarCard = ({ car }) => {
         <p><b>Бренд:</b> <span>{car.brand_name || '—'}</span></p>
         <p><b>Серия:</b> <span>{car.series_name || '—'}</span></p>
         <p><b>Модель:</b> <span>{car.car_name || '—'}</span></p>
-        <button 
-          className={`lead-btn ${buttonState}`} 
-          onClick={handleLeadRequest}
-          disabled={isLoading}
-        >
-          <span>
-            {isLoading ? 'Отправка...' : 
-             buttonState === 'success' ? '✓ Отправлено' :
-             buttonState === 'error' ? '✗ Ошибка' :
-             'Оставить заявку'}
-          </span>
-        </button>
+        <div className="car-buttons">
+          <button className="lead-btn" onClick={handleLeadRequest}>
+            <span>Оставить заявку</span>
+          </button>
+          <button 
+            className="write-btn" 
+            onClick={handleWriteMessage}
+          >
+            <span>Написать</span>
+          </button>
+        </div>
       </div>
     </div>
   );

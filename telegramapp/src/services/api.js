@@ -55,14 +55,14 @@ export const fetchBrands = async () => {
 };
 
 /**
- * Send a lead request to the telegram bot
+ * Send a lead request to the CBR18 admin bot
  * @param {object} car - Car object
  * @param {string} user - Optional user info
  * @returns {Promise}
  */
 export const sendLeadRequest = async (car, user = '') => {
   try {
-    const response = await fetch('/lead', {
+    const response = await fetch('/admin-lead', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ car, user })

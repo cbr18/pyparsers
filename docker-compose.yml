@@ -157,6 +157,35 @@ services:
     tmpfs:
       - /tmp
 
+  # Admin Bot
+  adminbot:
+    build:
+      context: ./adminbot
+      dockerfile: Dockerfile
+    container_name: carcatch-adminbot
+    env_file:
+      - .env
+    environment:
+      - DATAHUB_URL=http://datahub:8080
+    expose:
+      - "8002"
+    restart: unless-stopped
+    depends_on:
+      datahub:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - carcatch-network
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+
   # Frontend Applications
   telegramapp:
     build:
@@ -203,6 +232,8 @@ services:
         condition: service_healthy
       telegrambot:
         condition: service_healthy
+      adminbot:
+        condition: service_started
       telegramapp:
         condition: service_healthy
     restart: unless-stopped

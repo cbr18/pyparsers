@@ -235,6 +235,38 @@ func (h *Handler) GetBrands(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": brands})
 }
 
+// GetCarByUUID godoc
+// @Summary      Получить машину по UUID
+// @Description  Поиск машины по UUID с полной информацией
+// @Tags         cars
+// @Accept       json
+// @Produce      json
+// @Param        uuid   path      string  true  "UUID машины"
+// @Success      200    {object}  map[string]interface{}
+// @Failure      404    {object}  map[string]string
+// @Failure      500    {object}  map[string]string
+// @Router       /cars/uuid/{uuid} [get]
+func (h *Handler) GetCarByUUID(c *gin.Context) {
+	uuid := c.Param("uuid")
+	if uuid == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "UUID is required"})
+		return
+	}
+
+	car, err := h.carService.GetCarByUUID(c.Request.Context(), uuid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if car == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Car not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": car})
+}
+
 // CompleteTask godoc
 // @Summary      Завершить задачу парсинга
 // @Description  Принимает результаты парсинга от pyparsers и сохраняет их в БД

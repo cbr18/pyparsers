@@ -19,6 +19,8 @@ from typing import List, Dict, Optional, Any, Union
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from datetime import datetime, timezone
+from models import TaskCreateRequest, TaskCreateResponse, TaskType
+from task_service import task_service
 
 # Настройка логирования
 logging.basicConfig(
@@ -30,10 +32,6 @@ logger = logging.getLogger(__name__)
 # Модель для запроса детального парсинга che168
 class CarUrlRequest(BaseModel):
     car_url: str
-
-# Модель для запроса инкрементального обновления
-class IncrementalRequest(BaseModel):
-    existing_cars: List[Dict]
 
 # Модель для запроса получения детальной информации о нескольких машинах
 class MultipleCarIdsRequest(BaseModel):
@@ -56,7 +54,7 @@ class ApiResponse(BaseModel):
 # Load environment variables
 load_dotenv()
 
-async def _get_next_sort_number(existing_cars: List[Dict], source: str) -> int:
+def _get_next_sort_number(existing_cars: List[Dict], source: str) -> int:
     """
     Получает следующий номер для нумерации машин.
     При инкрементальном обновлении берет максимальный номер из существующих машин + 1.
@@ -162,17 +160,38 @@ async def add_performance_info(request, call_next):
 
     return response
 
-# Создаем экземпляры парсеров
-dongchedi_parser = AsyncDongchediParser()
-che168_parser = Che168Parser()
+# Импортируем синхронные парсеры
+from api.dongchedi.parser import DongchediParser
 
-# Асинхронные обертки для методов Che168Parser
+# Создаем экземпляры парсеров
+dongchedi_parser_instance = DongchediParser()
+che168_parser_instance = Che168Parser()
+
+# Асинхронные обертки для методов парсеров
+class AsyncDongchediWrapper:
+    def __init__(self, parser):
+        self.parser = parser
+
+    async def async_fetch_cars(self):
+        return await asyncio.get_event_loop().run_in_executor(None, self.parser.fetch_cars)
+
+    async def async_fetch_cars_by_page(self, page):
+        return await asyncio.get_event_loop().run_in_executor(None, self.parser.fetch_cars_by_page, page)
+
+    async def async_fetch_car_detail(self, car_id):
+        return await asyncio.get_event_loop().run_in_executor(None, self.parser.fetch_car_detail, car_id)
+
+    async def async_fetch_all_cars(self):
+        return await asyncio.get_event_loop().run_in_executor(None, self.parser.fetch_all_cars)
+
+    async def async_fetch_multiple_car_details(self, car_ids):
+        return await asyncio.get_event_loop().run_in_executor(None, self.parser.fetch_multiple_car_details, car_ids)
+
 class AsyncChe168Wrapper:
     def __init__(self, parser):
         self.parser = parser
 
     async def async_fetch_cars(self):
-        # Запускаем синхронный метод в отдельном потоке через loop.run_in_executor
         return await asyncio.get_event_loop().run_in_executor(None, self.parser.fetch_cars)
 
     async def async_fetch_cars_by_page(self, page):
@@ -181,8 +200,9 @@ class AsyncChe168Wrapper:
     async def async_fetch_car_detail(self, car_url):
         return await asyncio.get_event_loop().run_in_executor(None, self.parser.fetch_car_detail, car_url)
 
-# Оборачиваем синхронный парсер в асинхронную обертку
-che168_parser = AsyncChe168Wrapper(che168_parser)
+# Оборачиваем синхронные парсеры в асинхронные обертки
+dongchedi_parser = AsyncDongchediWrapper(dongchedi_parser_instance)
+che168_parser = AsyncChe168Wrapper(che168_parser_instance)
 
 @app.get("/")
 async def root():
@@ -216,6 +236,7 @@ async def root():
     }
 
 @app.get("/health")
+@app.head("/health")
 async def health_check():
     """
     Проверка работоспособности API.
@@ -239,21 +260,37 @@ async def get_dongchedi_cars():
     Получает данные о машинах с dongchedi.
     """
     response = await dongchedi_parser.async_fetch_cars()
-
-    # Фильтруем машины по году (не меньше 2017)
-    filtered_cars_list = filter_cars_by_year(response.data.search_sh_sku_info_list, min_year=2017)
     
     # Преобразуем в формат для совместимости с фронтендом
     filtered_cars = []
-    total_cars = len(filtered_cars_list)
-    for i, car in enumerate(filtered_cars_list):
+    total_cars = len(response.data.search_sh_sku_info_list)
+    for i, car in enumerate(response.data.search_sh_sku_info_list):
         car_dict = car.dict()
+        
+        # Фильтруем машины с годом выпуска меньше 2017
+        year = car_dict.get('year')
+        if year is not None:
+            try:
+                if int(year) < 2017:
+                    continue
+            except (ValueError, TypeError):
+                pass
+                
         car_dict.update({
             'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
             'source': 'dongchedi'
         })
         if car_dict.get('sh_price'):
             car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
+
+        # Преобразуем car_id в int64 для совместимости с Go
+        if 'car_id' in car_dict and car_dict['car_id'] is not None:
+            try:
+                car_dict['car_id'] = int(car_dict['car_id'])
+            except (ValueError, TypeError):
+                # Если не удалось преобразовать, устанавливаем значение по умолчанию
+                car_dict['car_id'] = 0
+
         filtered_cars.append(car_dict)
 
     return {
@@ -275,21 +312,37 @@ async def get_dongchedi_cars_by_page(page: int):
         page: Номер страницы (начиная с 1)
     """
     response = await dongchedi_parser.async_fetch_cars_by_page(page)
-
-    # Фильтруем машины по году (не меньше 2017)
-    filtered_cars_list = filter_cars_by_year(response.data.search_sh_sku_info_list, min_year=2017)
     
     # Преобразуем в формат для совместимости с фронтендом
     filtered_cars = []
-    total_cars = len(filtered_cars_list)
-    for i, car in enumerate(filtered_cars_list):
+    total_cars = len(response.data.search_sh_sku_info_list)
+    for i, car in enumerate(response.data.search_sh_sku_info_list):
         car_dict = car.dict()
+        
+        # Фильтруем машины с годом выпуска меньше 2017
+        year = car_dict.get('year')
+        if year is not None:
+            try:
+                if int(year) < 2017:
+                    continue
+            except (ValueError, TypeError):
+                pass
+                
         car_dict.update({
             'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
             'source': 'dongchedi'
         })
         if car_dict.get('sh_price'):
             car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
+
+        # Преобразуем car_id в int64 для совместимости с Go
+        if 'car_id' in car_dict and car_dict['car_id'] is not None:
+            try:
+                car_dict['car_id'] = int(car_dict['car_id'])
+            except (ValueError, TypeError):
+                # Если не удалось преобразовать, устанавливаем значение по умолчанию
+                car_dict['car_id'] = 0
+
         filtered_cars.append(car_dict)
 
     return {
@@ -328,6 +381,15 @@ async def get_dongchedi_all_cars():
             if car_id not in seen_ids:
                 if car_dict.get('sh_price'):
                     car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
+
+                # Преобразуем car_id в int64 для совместимости с Go
+                if 'car_id' in car_dict and car_dict['car_id'] is not None:
+                    try:
+                        car_dict['car_id'] = int(car_dict['car_id'])
+                    except (ValueError, TypeError):
+                        # Если не удалось преобразовать, устанавливаем значение по умолчанию
+                        car_dict['car_id'] = 0
+
                 all_cars.append(car_dict)
                 seen_ids.add(car_id)
         print(len(cars_list))
@@ -346,6 +408,15 @@ async def get_dongchedi_all_cars():
             if car_id not in seen_ids:
                 if car_dict.get('sh_price'):
                     car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
+
+                # Преобразуем car_id в int64 для совместимости с Go
+                if 'car_id' in car_dict and car_dict['car_id'] is not None:
+                    try:
+                        car_dict['car_id'] = int(car_dict['car_id'])
+                    except (ValueError, TypeError):
+                        # Если не удалось преобразовать, устанавливаем значение по умолчанию
+                        car_dict['car_id'] = 0
+
                 all_cars.append(car_dict)
                 seen_ids.add(car_id)
             else:
@@ -371,25 +442,29 @@ async def get_dongchedi_all_cars():
     }
 
 @app.post("/cars/dongchedi/incremental")
-async def get_dongchedi_incremental_cars(request: IncrementalRequest):
+async def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
     """
     Получает только новые машины с dongchedi до первого совпадения с существующими.
 
     Args:
-        request: Запрос с существующими машинами
+        existing_cars: Список существующих машин с полями car_id/sku_id/link
     """
-    existing_cars = request.existing_cars
     new_cars = []
     existing_ids = set()
+    existing_sku_ids = set()
 
     # Собираем ID существующих машин
     for car in existing_cars:
-        car_id = car.get('car_id') or car.get('sku_id') or car.get('link')
+        car_id = car.get('car_id')
+        sku_id = car.get('sku_id')
         if car_id:
             existing_ids.add(car_id)
-
+        if sku_id:
+            existing_sku_ids.add(sku_id)
+    print(existing_ids)
+    
     # Получаем следующий номер для нумерации
-    next_sort_number = await _get_next_sort_number(existing_cars, 'dongchedi')
+    next_sort_number = _get_next_sort_number(existing_cars, 'dongchedi')
 
     # Парсим до первого совпадения
     page = 1
@@ -402,12 +477,18 @@ async def get_dongchedi_incremental_cars(request: IncrementalRequest):
         found_existing = False
         for car in cars_list:
             car_dict = car.dict()
-            car_id = car_dict.get('car_id') or car_dict.get('sku_id') or car_dict.get('link')
+            car_id = car_dict.get('car_id')
 
             if car_id in existing_ids:
                 found_existing = True
                 break
-                
+            
+            sku_id = car_dict.get('sku_id')
+            if sku_id in existing_sku_ids:
+                print(car_id)
+                found_existing = True
+                break
+
             # Фильтруем машины с годом выпуска меньше 2017
             year = car_dict.get('year')
             if year is not None:
@@ -416,12 +497,21 @@ async def get_dongchedi_incremental_cars(request: IncrementalRequest):
                         continue
                 except (ValueError, TypeError):
                     pass
-
+                    
             if car_dict.get('sh_price'):
                 car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
+
+            # Преобразуем car_id в int64 для совместимости с Go
+            if 'car_id' in car_dict and car_dict['car_id'] is not None:
+                try:
+                    car_dict['car_id'] = int(car_dict['car_id'])
+                except (ValueError, TypeError):
+                    # Если не удалось преобразовать, устанавливаем значение по умолчанию
+                    car_dict['car_id'] = 0
+
             new_cars.append(car_dict)
 
-        if found_existing:
+        if found_existing or page == 10:
             break
 
         if not getattr(response.data, 'has_more', False):
@@ -526,14 +616,21 @@ async def get_che168_cars():
     """
     response = await che168_parser.async_fetch_cars()
     
-    # Фильтруем машины по году (не меньше 2017)
-    filtered_cars_list = filter_cars_by_year(response.data.search_sh_sku_info_list, min_year=2017)
-    
     # Преобразуем в формат для совместимости с фронтендом
     cars_with_metadata = []
-    total_cars = len(filtered_cars_list)
-    for i, car in enumerate(filtered_cars_list):
+    total_cars = len(response.data.search_sh_sku_info_list)
+    for i, car in enumerate(response.data.search_sh_sku_info_list):
         car_dict = car.dict()
+        
+        # Фильтруем машины с годом выпуска меньше 2017
+        year = car_dict.get('year')
+        if year is not None:
+            try:
+                if int(year) < 2017:
+                    continue
+            except (ValueError, TypeError):
+                pass
+                
         car_dict.update({
             'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
             'source': 'che168'
@@ -560,14 +657,21 @@ async def get_che168_cars_by_page(page: int):
     """
     response = await che168_parser.async_fetch_cars_by_page(page)
     
-    # Фильтруем машины по году (не меньше 2017)
-    filtered_cars_list = filter_cars_by_year(response.data.search_sh_sku_info_list, min_year=2017)
-    
     # Преобразуем в формат для совместимости с фронтендом
     cars_with_metadata = []
-    total_cars = len(filtered_cars_list)
-    for i, car in enumerate(filtered_cars_list):
+    total_cars = len(response.data.search_sh_sku_info_list)
+    for i, car in enumerate(response.data.search_sh_sku_info_list):
         car_dict = car.dict()
+        
+        # Фильтруем машины с годом выпуска меньше 2017
+        year = car_dict.get('year')
+        if year is not None:
+            try:
+                if int(year) < 2017:
+                    continue
+            except (ValueError, TypeError):
+                pass
+                
         car_dict.update({
             'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
             'source': 'che168'
@@ -586,14 +690,13 @@ async def get_che168_cars_by_page(page: int):
     }
 
 @app.post("/cars/che168/incremental")
-async def get_che168_incremental_cars(request: IncrementalRequest):
+async def get_che168_incremental_cars(existing_cars: List[Dict]):
     """
     Получает только новые машины с che168 до первого совпадения с существующими.
 
     Args:
-        request: Запрос с существующими машинами
+        existing_cars: Список существующих машин с полями car_id/sku_id/link
     """
-    existing_cars = request.existing_cars
     new_cars = []
     existing_ids = set()
 
@@ -604,7 +707,7 @@ async def get_che168_incremental_cars(request: IncrementalRequest):
             existing_ids.add(car_id)
 
     # Получаем следующий номер для нумерации
-    next_sort_number = await _get_next_sort_number(existing_cars, 'che168')
+    next_sort_number = _get_next_sort_number(existing_cars, 'che168')
 
     # Парсим до первого совпадения
     page = 1
@@ -634,7 +737,7 @@ async def get_che168_incremental_cars(request: IncrementalRequest):
 
             new_cars.append(car_dict)
 
-        if found_existing:
+        if found_existing or page == 10:
             break
 
         if not getattr(response.data, 'has_more', False):
@@ -660,58 +763,112 @@ async def get_che168_incremental_cars(request: IncrementalRequest):
 @app.get("/cars/che168/all")
 async def get_che168_all_cars():
     """
-    Получает все машины со всех страниц che168, затем повторно проверяет первые страницы и добавляет только новые машины до первого совпадения.
+    Получает все машины со всех страниц che168.
+    Принудительно проходит по всем страницам от 1 до 100, чтобы гарантировать полный сбор данных.
     Экономит память: хранит только уникальные id машин.
     """
+    import logging
+    import time
+    import sys
+
+    # Настройка логирования
+    logger = logging.getLogger(__name__)
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
     all_cars = []
     seen_ids = set()
-    page = 1
-    # 1. Основной проход по всем страницам (максимум 100 для che168)
-    while page <= 100:
-        response = await che168_parser.async_fetch_cars_by_page(page)
-        cars_list = getattr(response.data, 'search_sh_sku_info_list', None)
-        if not cars_list:
-            break
-        for car in cars_list:
-            car_dict = car.dict()
-            
-            # Фильтруем машины с годом выпуска меньше 2017
-            year = car_dict.get('year')
-            if year is not None:
-                try:
-                    if int(year) < 2017:
-                        continue
-                except (ValueError, TypeError):
-                    pass
-                    
-            car_id = car_dict.get('car_id') or car_dict.get('sku_id') or car_dict.get('link')
-            if car_id not in seen_ids:
-                all_cars.append(car_dict)
-                seen_ids.add(car_id)
-        if not getattr(response.data, 'has_more', False):
-            break
-        page += 1
-    # 2. Повторная проверка первых страниц (на случай новых машин)
-    for repeat_page in range(1, min(page, 101)):
-        response = await che168_parser.async_fetch_cars_by_page(repeat_page)
-        cars_list = getattr(response.data, 'search_sh_sku_info_list', None)
-        if not cars_list:
-            break
-        for car in cars_list:
-            car_dict = car.dict()
-            car_id = car_dict.get('car_id') or car_dict.get('sku_id') or car_dict.get('link')
-            if car_id not in seen_ids:
-                all_cars.append(car_dict)
-                seen_ids.add(car_id)
-            else:
-                # Как только встретили первое совпадение — прекращаем повторный проход
-                break
+
+    # Принудительно проходим по всем страницам от 1 до 100
+    # Это гарантирует, что мы получим все доступные машины
+    max_pages = 100
+
+    logger.info(f"[CHE168] Начинаем парсинг всех страниц che168 (всего {max_pages} страниц)")
+
+    # Первый проход: собираем все машины со всех страниц
+    for page in range(1, max_pages + 1):
+        logger.info(f"[CHE168] Парсинг страницы {page} из {max_pages}...")
+
+        # Делаем до 3 попыток получить данные с каждой страницы
+        cars_list = None
+        for attempt in range(3):
+            try:
+                response = await che168_parser.async_fetch_cars_by_page(page)
+                cars_list = getattr(response.data, 'search_sh_sku_info_list', None)
+
+                if cars_list and len(cars_list) > 0:
+                    logger.info(f"[CHE168] Успешно получены данные со страницы {page} (попытка {attempt+1})")
+                    break
+
+                logger.warning(f"[CHE168] Попытка {attempt+1}: Страница {page} не содержит машин, пробуем еще раз")
+                await asyncio.sleep(2)  # Пауза перед следующей попыткой
+
+            except Exception as e:
+                logger.error(f"[CHE168] Ошибка при парсинге страницы {page}, попытка {attempt+1}: {str(e)}")
+                await asyncio.sleep(3)  # Увеличенная пауза при ошибке
+
+        # Обрабатываем полученные данные
+        if cars_list and len(cars_list) > 0:
+            new_cars_count = 0
+            for car in cars_list:
+                car_dict = car.dict()
+                car_id = car_dict.get('car_id') or car_dict.get('sku_id') or car_dict.get('link')
+
+                if car_id and car_id not in seen_ids:
+                    all_cars.append(car_dict)
+                    seen_ids.add(car_id)
+                    new_cars_count += 1
+
+            logger.info(f"[CHE168] На странице {page} найдено {len(cars_list)} машин, из них {new_cars_count} новых")
         else:
-            continue
-        break
+            logger.warning(f"[CHE168] Страница {page} не содержит машин после всех попыток")
+
+        # Небольшая пауза между запросами, чтобы не перегружать сервер
+        await asyncio.sleep(1)
+
+    # Второй проход: проверяем первые 10 страниц еще раз для поиска новых машин
+    # Это нужно, так как во время парсинга могли появиться новые объявления
+    logger.info(f"[CHE168] Первый проход завершен. Найдено {len(all_cars)} уникальных машин")
+    logger.info("[CHE168] Начинаем повторную проверку первых 10 страниц")
+
+    for repeat_page in range(1, min(11, max_pages + 1)):
+        logger.info(f"[CHE168] Повторная проверка страницы {repeat_page}...")
+
+        try:
+            response = await che168_parser.async_fetch_cars_by_page(repeat_page)
+            cars_list = getattr(response.data, 'search_sh_sku_info_list', None)
+
+            if not cars_list or len(cars_list) == 0:
+                logger.warning(f"[CHE168] Повторная проверка: страница {repeat_page} не содержит машин")
+                continue
+
+            new_cars_count = 0
+            for car in cars_list:
+                car_dict = car.dict()
+                car_id = car_dict.get('car_id') or car_dict.get('sku_id') or car_dict.get('link')
+
+                if not car_id:
+                    continue
+
+                if car_id not in seen_ids:
+                    all_cars.append(car_dict)
+                    seen_ids.add(car_id)
+                    new_cars_count += 1
+
+            logger.info(f"[CHE168] При повторной проверке страницы {repeat_page} найдено {new_cars_count} новых машин")
+
+            # Пауза между запросами
+            await asyncio.sleep(1)
+
+        except Exception as e:
+            logger.error(f"[CHE168] Ошибка при повторной проверке страницы {repeat_page}: {str(e)}")
 
     # Добавляем sort_number по убыванию (новые машины - большие номера)
     total = len(all_cars)
+    logger.info(f"[CHE168] Всего найдено {total} уникальных машин")
+
     for i, car in enumerate(all_cars):
         car['sort_number'] = total - i
         car['source'] = 'che168'
@@ -839,6 +996,49 @@ async def update_che168_full():
             "status": "error",
             "message": str(e)
         }
+
+@app.post("/tasks", response_model=TaskCreateResponse)
+async def create_task(request: TaskCreateRequest):
+    """
+    Создать новую задачу парсинга
+    """
+    if request.source not in ["dongchedi", "che168"]:
+        return {"error": "Invalid source. Must be 'dongchedi' or 'che168'"}
+    
+    # Тип задачи: full / incremental (по умолчанию full)
+    task_type = getattr(request, 'task_type', TaskType.FULL)
+    id_field = getattr(request, 'id_field', None)
+    existing_ids = getattr(request, 'existing_ids', None)
+    task = task_service.create_task(request.source, task_type, id_field, existing_ids)
+    
+    # Запускаем обработку задачи в фоне
+    asyncio.create_task(task_service.process_task(task.id))
+    
+    return TaskCreateResponse(task_id=task.id)
+
+@app.get("/tasks/{task_id}")
+async def get_task_status(task_id: str):
+    """
+    Получить статус задачи
+    """
+    if task_id not in task_service.tasks:
+        return {"error": "Task not found"}
+    
+    task = task_service.tasks[task_id]
+    return {
+        "task_id": task.id,
+        "source": task.source,
+        "status": task.status,
+        "created_at": task.created_at,
+        "updated_at": task.updated_at
+    }
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """
+    Закрыть HTTP сессию при завершении работы
+    """
+    await task_service.close_session()
 
 if __name__ == "__main__":
     import uvicorn

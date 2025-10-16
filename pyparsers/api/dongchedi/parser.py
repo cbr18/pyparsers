@@ -458,3 +458,58 @@ class DongchediParser(BaseCarParser):
         except Exception as e:
             return None, {"is_available": False, "error": str(e), "status": 500}
         return car_obj, {"is_available": is_available, "status": 200, "link": url}
+
+    def fetch_all_cars(self):
+        """
+        Получает все машины со всех страниц dongchedi.
+        Возвращает DongchediApiResponse с полным списком машин.
+        """
+        all_cars = []
+        seen_ids = set()
+        page = 1
+        
+        # Основной проход по всем страницам
+        while True:
+            response = self.fetch_cars_by_page(page)
+            cars_list = getattr(response.data, 'search_sh_sku_info_list', None)
+            if not cars_list:
+                break
+            
+            for car in cars_list:
+                car_dict = car.dict()
+                car_id = car_dict.get('car_id') or car_dict.get('sku_id') or car_dict.get('link')
+                if car_id not in seen_ids:
+                    all_cars.append(car)
+                    seen_ids.add(car_id)
+            
+            if not getattr(response.data, 'has_more', False):
+                break
+            page += 1
+
+        # Создаем ответ с полным списком машин
+        from .models.response import DongchediData
+        return DongchediApiResponse(
+            data=DongchediData(
+                has_more=False,
+                search_sh_sku_info_list=all_cars,
+                total=len(all_cars)
+            ),
+            message=f"Загружено {len(all_cars)} машин со всех страниц",
+            status=200
+        )
+
+    def fetch_multiple_car_details(self, car_ids):
+        """
+        Получает детальную информацию о нескольких машинах по их ID.
+        
+        Args:
+            car_ids: Список ID машин
+            
+        Returns:
+            Список кортежей (DongchediCar | None, meta: dict)
+        """
+        results = []
+        for car_id in car_ids:
+            car_obj, meta = self.fetch_car_detail(car_id)
+            results.append((car_obj, meta))
+        return results

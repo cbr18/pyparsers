@@ -17,6 +17,7 @@ func NewRouter(handler *Handler) *Router {
 func (r *Router) Setup() *gin.Engine {
    e := gin.Default()
    e.GET("/cars", r.handler.GetCars)
+   e.GET("/cars/uuid/:uuid", r.handler.GetCarByUUID)
    e.POST("/checkcar", r.handler.CheckCar)
    e.GET("/update/:source/full", r.handler.FullUpdate)
    e.POST("/update/:source", r.handler.IncrementalUpdate)

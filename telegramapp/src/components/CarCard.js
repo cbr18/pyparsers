@@ -43,50 +43,50 @@ const CarCard = ({ car }) => {
     window.open(tgUrl, '_blank');
   };
 
-  const handleLeadRequest = async () => {
-    try {
-      // Получаем данные пользователя из Telegram WebApp
-      const tg = window.Telegram?.WebApp;
-      let username = 'Пользователь сайта';
-      
-      // Отладочная информация
-      console.log('Telegram WebApp:', tg);
-      console.log('initDataUnsafe:', tg?.initDataUnsafe);
-      console.log('initData:', tg?.initData);
-      
-      if (tg?.initDataUnsafe?.user) {
-        const user = tg.initDataUnsafe.user;
-        console.log('User from initDataUnsafe:', user);
-        username = user.username ? `@${user.username}` : 
-                   user.first_name ? user.first_name : 
-                   'Пользователь сайта';
-      } else if (tg?.initData) {
-        // Альтернативный способ через initData
-        try {
-          const params = new URLSearchParams(tg.initData);
-          const userParam = params.get('user');
-          console.log('User param from initData:', userParam);
-          if (userParam) {
-            const user = JSON.parse(decodeURIComponent(userParam));
-            console.log('Parsed user:', user);
-            username = user.username ? `@${user.username}` : 
-                       user.first_name ? user.first_name : 
-                       'Пользователь сайта';
-          }
-        } catch (e) {
-          console.log('Could not parse user data:', e);
+const handleLeadRequest = async () => {
+  try {
+    const tg = window.Telegram?.WebApp;
+    let username = 'Пользователь сайта';
+
+    // Получаем данные пользователя из Telegram WebApp
+
+    if (tg?.initDataUnsafe?.user) {
+      const user = tg.initDataUnsafe.user; // <-- исправлено
+      console.log('User from initDataUnsafe:', user);
+      username = user.username
+        ? `@${user.username}`
+        : user.first_name
+        ? user.first_name
+        : 'Пользователь сайта';
+    } else if (tg?.initData) {
+      try {
+        const params = new URLSearchParams(tg.initData);
+        const userParam = params.get('user');
+        console.log('User param from initData:', userParam);
+        if (userParam) {
+          const user = JSON.parse(decodeURIComponent(userParam));
+          console.log('Parsed user:', user);
+          username = user.username
+            ? `@${user.username}`
+            : user.first_name
+            ? user.first_name
+            : 'Пользователь сайта';
         }
+      } catch (e) {
+        console.log('Could not parse user data:', e);
       }
-      
-      console.log('Final username:', username);
-      
-      await sendLeadRequest(car, username);
-      alert('Заявка успешно отправлена! Администратор свяжется с вами в ближайшее время.');
-    } catch (error) {
-      console.error('Error sending lead request:', error);
-      alert('Ошибка при отправке заявки. Попробуйте позже или свяжитесь с нами напрямую.');
     }
-  };
+
+    console.log('Final username:', username);
+
+    await sendLeadRequest(car, username);
+    alert('Заявка успешно отправлена! Администратор свяжется с вами в ближайшее время.');
+  } catch (error) {
+    console.error('Error sending lead request:', error);
+    alert('Ошибка при отправке заявки. Попробуйте позже или свяжитесь с нами напрямую.');
+  }
+};
+
 
   // Get proxied image URL
   const proxiedUrl = getProxiedImageUrl(car.image);

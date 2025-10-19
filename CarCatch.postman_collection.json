@@ -1,0 +1,247 @@
+{
+  "info": {
+    "_postman_id": "a0f1e8b9-1c6c-4b5b-9c1d-cc4a7d1d2e01",
+    "name": "Car-Catch API (https://car-catch.ru)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "All publicly reachable endpoints through nginx on https://car-catch.ru"
+  },
+  "item": [
+    {
+      "name": "Infrastructure",
+      "item": [
+        {
+          "name": "GET /health (nginx)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+          }
+        },
+        {
+          "name": "GET /robots.txt",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/robots.txt", "host": ["{{baseUrl}}"], "path": ["robots.txt"] }
+          }
+        },
+        {
+          "name": "GET /proxy-image?url=...",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/proxy-image?url=https%3A%2F%2Fexample.com%2Fimage.jpg",
+              "host": ["{{baseUrl}}"],
+              "path": ["proxy-image"],
+              "query": [
+                { "key": "url", "value": "https%3A%2F%2Fexample.com%2Fimage.jpg" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /docs (pyparsers Swagger UI)",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/docs", "host": ["{{baseUrl}}"], "path": ["docs"] } }
+        },
+        {
+          "name": "GET /swagger (datahub Swagger UI)",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/swagger", "host": ["{{baseUrl}}"], "path": ["swagger"] } }
+        }
+      ]
+    },
+    {
+      "name": "Datahub (direct)",
+      "item": [
+        {
+          "name": "GET /cars",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/cars?page=1&limit=20&source=dongchedi&brand=&city=&year=&search=",
+              "host": ["{{baseUrl}}"],
+              "path": ["cars"],
+              "query": [
+                {"key":"page","value":"1"},
+                {"key":"limit","value":"20"},
+                {"key":"source","value":"dongchedi"},
+                {"key":"brand","value":""},
+                {"key":"city","value":""},
+                {"key":"year","value":""},
+                {"key":"search","value":""}
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /checkcar",
+          "request": {
+            "method": "POST",
+            "header": [ {"key":"Content-Type","value":"application/json"} ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source\": \"dongchedi\",\n  \"car_id\": \"1234567890\",\n  \"car_url\": \"\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/checkcar", "host": ["{{baseUrl}}"], "path": ["checkcar"] }
+          }
+        },
+        {
+          "name": "GET /update/:source/full",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/update/{{source}}/full", "host": ["{{baseUrl}}"], "path": ["update","{{source}}","full"] }
+          },
+          "event": [],
+          "variable": [ {"key":"source","value":"dongchedi"} ]
+        },
+        {
+          "name": "POST /update/:source",
+          "request": {
+            "method": "POST",
+            "header": [ {"key":"Content-Type","value":"application/json"} ],
+            "body": { "mode": "raw", "raw": "{\n  \"last_n\": 100\n}" },
+            "url": { "raw": "{{baseUrl}}/update/{{source}}", "host": ["{{baseUrl}}"], "path": ["update","{{source}}"] }
+          },
+          "variable": [ {"key":"source","value":"dongchedi"} ]
+        },
+        {
+          "name": "GET /brands",
+          "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/brands", "host": ["{{baseUrl}}"], "path": ["brands"] } }
+        }
+      ]
+    },
+    {
+      "name": "Datahub (/api prefix)",
+      "item": [
+        {
+          "name": "GET /api/cars",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/cars?page=1&limit=20&source=che168",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","cars"],
+              "query": [
+                {"key":"page","value":"1"},
+                {"key":"limit","value":"20"},
+                {"key":"source","value":"che168"}
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/checkcar",
+          "request": {
+            "method": "POST",
+            "header": [ {"key":"Content-Type","value":"application/json"} ],
+            "body": { "mode": "raw", "raw": "{\n  \"source\": \"che168\",\n  \"car_id\": \"\",\n  \"car_url\": \"https://che168.com/car/xxx\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/checkcar", "host": ["{{baseUrl}}"], "path": ["api","checkcar"] }
+          }
+        },
+        {
+          "name": "GET /api/update/:source/full",
+          "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/update/{{source}}/full", "host": ["{{baseUrl}}"], "path": ["api","update","{{source}}","full"] } },
+          "variable": [ {"key":"source","value":"dongchedi"} ]
+        },
+        {
+          "name": "POST /api/update/:source",
+          "request": {
+            "method": "POST",
+            "header": [ {"key":"Content-Type","value":"application/json"} ],
+            "body": { "mode": "raw", "raw": "{\n  \"last_n\": 50\n}" },
+            "url": { "raw": "{{baseUrl}}/api/update/{{source}}", "host": ["{{baseUrl}}"], "path": ["api","update","{{source}}"] }
+          },
+          "variable": [ {"key":"source","value":"che168"} ]
+        },
+        {
+          "name": "GET /api/brands",
+          "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/brands", "host": ["{{baseUrl}}"], "path": ["api","brands"] } }
+        }
+      ]
+    },
+    {
+      "name": "Pyparsers",
+      "item": [
+        { "name": "GET /pyparsers/health", "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/pyparsers/health", "host": ["{{baseUrl}}"], "path": ["pyparsers","health"] } } },
+        { "name": "GET /pyparsers/cars/dongchedi", "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/pyparsers/cars/dongchedi", "host": ["{{baseUrl}}"], "path": ["pyparsers","cars","dongchedi"] } } },
+        { "name": "GET /pyparsers/cars/dongchedi/page/{page}", "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/pyparsers/cars/dongchedi/page/1", "host": ["{{baseUrl}}"], "path": ["pyparsers","cars","dongchedi","page","1"] } } },
+        { "name": "GET /pyparsers/cars/dongchedi/all", "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/pyparsers/cars/dongchedi/all", "host": ["{{baseUrl}}"], "path": ["pyparsers","cars","dongchedi","all"] } } },
+        {
+          "name": "POST /pyparsers/cars/dongchedi/incremental",
+          "request": {
+            "method": "POST",
+            "header": [ {"key":"Content-Type","value":"application/json"} ],
+            "body": { "mode": "raw", "raw": "{\n  \"existing_cars\": [\n    { \"car_id\": 123 },\n    { \"sku_id\": \"abc\" }\n  ]\n}" },
+            "url": { "raw": "{{baseUrl}}/pyparsers/cars/dongchedi/incremental", "host": ["{{baseUrl}}"], "path": ["pyparsers","cars","dongchedi","incremental"] }
+          }
+        },
+        { "name": "GET /pyparsers/cars/dongchedi/car/{car_id}", "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/pyparsers/cars/dongchedi/car/123456", "host": ["{{baseUrl}}"], "path": ["pyparsers","cars","dongchedi","car","123456"] } } },
+        {
+          "name": "POST /pyparsers/cars/dongchedi/cars",
+          "request": {
+            "method": "POST",
+            "header": [ {"key":"Content-Type","value":"application/json"} ],
+            "body": { "mode": "raw", "raw": "{\n  \"car_ids\": [\"123\", \"456\"]\n}" },
+            "url": { "raw": "{{baseUrl}}/pyparsers/cars/dongchedi/cars", "host": ["{{baseUrl}}"], "path": ["pyparsers","cars","dongchedi","cars"] }
+          }
+        },
+        { "name": "GET /pyparsers/cars/che168", "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/pyparsers/cars/che168", "host": ["{{baseUrl}}"], "path": ["pyparsers","cars","che168"] } } },
+        { "name": "GET /pyparsers/cars/che168/page/{page}", "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/pyparsers/cars/che168/page/1", "host": ["{{baseUrl}}"], "path": ["pyparsers","cars","che168","page","1"] } } },
+        { "name": "GET /pyparsers/cars/che168/all", "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/pyparsers/cars/che168/all", "host": ["{{baseUrl}}"], "path": ["pyparsers","cars","che168","all"] } } },
+        {
+          "name": "POST /pyparsers/cars/che168/incremental",
+          "request": {
+            "method": "POST",
+            "header": [ {"key":"Content-Type","value":"application/json"} ],
+            "body": { "mode": "raw", "raw": "{\n  \"existing_cars\": [\n    { \"car_id\": \"c1\" }\n  ]\n}" },
+            "url": { "raw": "{{baseUrl}}/pyparsers/cars/che168/incremental", "host": ["{{baseUrl}}"], "path": ["pyparsers","cars","che168","incremental"] }
+          }
+        },
+        {
+          "name": "POST /pyparsers/cars/che168/car",
+          "request": {
+            "method": "POST",
+            "header": [ {"key":"Content-Type","value":"application/json"} ],
+            "body": { "mode": "raw", "raw": "{\n  \"car_url\": \"https://example.com/car\"\n}" },
+            "url": { "raw": "{{baseUrl}}/pyparsers/cars/che168/car", "host": ["{{baseUrl}}"], "path": ["pyparsers","cars","che168","car"] }
+          }
+        },
+        { "name": "GET /pyparsers/update/dongchedi/full", "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/pyparsers/update/dongchedi/full", "host": ["{{baseUrl}}"], "path": ["pyparsers","update","dongchedi","full"] } } },
+        { "name": "GET /pyparsers/update/che168/full", "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/pyparsers/update/che168/full", "host": ["{{baseUrl}}"], "path": ["pyparsers","update","che168","full"] } } },
+        { "name": "POST /pyparsers/tasks", "request": { "method": "POST", "header": [ {"key":"Content-Type","value":"application/json"} ], "body": { "mode": "raw", "raw": "{\n  \"source\": \"dongchedi\",\n  \"task_type\": \"full\"\n}" }, "url": { "raw": "{{baseUrl}}/pyparsers/tasks", "host": ["{{baseUrl}}"], "path": ["pyparsers","tasks"] } } },
+        { "name": "GET /pyparsers/tasks/{task_id}", "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/pyparsers/tasks/sample-task-id", "host": ["{{baseUrl}}"], "path": ["pyparsers","tasks","sample-task-id"] } } }
+      ]
+    },
+    {
+      "name": "Telegram Bot",
+      "item": [
+        {
+          "name": "POST /lead",
+          "request": {
+            "method": "POST",
+            "header": [ {"key":"Content-Type","value":"application/json"} ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"car\": {\n    \"brand_name\": \"Toyota\",\n    \"car_name\": \"Harrier\",\n    \"year\": 2021,\n    \"city\": \"Москва\",\n    \"price\": \"2500000\",\n    \"link\": \"https://car-catch.ru/podbortg/\"\n  },\n  \"user\": \"@username\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/lead", "host": ["{{baseUrl}}"], "path": ["lead"] }
+          }
+        },
+        {
+          "name": "POST /bot (Telegram webhook)",
+          "request": {
+            "method": "POST",
+            "header": [ {"key":"Content-Type","value":"application/json"} ],
+            "body": { "mode": "raw", "raw": "{ }" },
+            "url": { "raw": "{{baseUrl}}/bot", "host": ["{{baseUrl}}"], "path": ["bot"] }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "https://car-catch.ru", "type": "string" }
+  ]
+}
+
+

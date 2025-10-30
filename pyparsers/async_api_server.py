@@ -11,6 +11,7 @@ from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends, Query, Res
 from fastapi.middleware.cors import CORSMiddleware        
 from fastapi.responses import JSONResponse
 from api.che168.parser import Che168Parser
+from api.che168.detailed_api import router as che168_detailed_router
 from api.dongchedi.models.response import DongchediApiResponse
 from api.dongchedi.models.car import DongchediCar
 from converters import decode_dongchedi_list_sh_price, decode_dongchedi_detail
@@ -94,6 +95,9 @@ app.add_middleware(
     allow_methods=cors_methods,
     allow_headers=cors_headers,
 )
+
+# Включаем роутеры для детального парсинга
+app.include_router(che168_detailed_router)
 
 # Middleware для измерения производительности
 @app.middleware("http")
@@ -1032,6 +1036,136 @@ async def get_task_status(task_id: str):
         "created_at": task.created_at,
         "updated_at": task.updated_at
     }
+
+@app.get("/cars/dongchedi/enhance/{sku_id}")
+async def enhance_dongchedi_car(sku_id: str, car_id: str = None):
+    """
+    Улучшает машину детальной информацией.
+    
+    Args:
+        sku_id: SKU ID машины
+        car_id: Car ID для технических характеристик (опционально)
+    """
+    try:
+        # Создаем пустой объект машины для обогащения
+        from api.dongchedi.models.car import DongchediCar
+        car_obj = DongchediCar(sku_id=sku_id, source='dongchedi')
+        
+        # Улучшаем машину детальной информацией
+        enhanced_car = dongchedi_parser_instance.enhance_car_with_details(
+            car_obj, sku_id, car_id
+        )
+        
+        if enhanced_car is None:
+            return {
+                "data": {"error": "Failed to enhance car"},
+                "message": "Не удалось обогатить машину",
+                "status": 500
+            }
+
+        # ВАЖНО: вернуть обёрнутый ответ {"data": ...}, чтобы клиент datahub смог десериализовать
+        return {
+            "data": enhanced_car.dict(),
+            "message": "Success",
+            "status": 200
+        }
+    except Exception as e:
+        logger.error(f"Error enhancing car {sku_id}: {str(e)}")
+        return {
+            "data": {"error": str(e)},
+            "message": "Ошибка при улучшении машины",
+            "status": 500
+        }
+
+@app.get("/cars/dongchedi/specs/{car_id}")
+async def get_dongchedi_car_specs(car_id: str):
+    """
+    Получает технические характеристики машины по car_id.
+    
+    Args:
+        car_id: Car ID для страницы характеристик
+    """
+    try:
+        specs, meta = dongchedi_parser_instance.fetch_car_specifications(car_id)
+        
+        return {
+            "data": specs,
+            "message": "Технические характеристики получены",
+            "status": meta.get("status", 200)
+        }
+    except Exception as e:
+        logger.error(f"Error getting car specs {car_id}: {str(e)}")
+        return {
+            "data": {"error": str(e)},
+            "message": "Ошибка при получении характеристик",
+            "status": 500
+        }
+
+@app.post("/cars/dongchedi/batch-enhance")
+async def batch_enhance_dongchedi_cars(request: dict):
+    """
+    Массовое улучшение машин детальной информацией.
+    
+    Args:
+        request: Словарь с car_ids и их соответствующими sku_ids
+        Пример: {"car_123": "sku_456", "car_789": "sku_012"}
+    """
+    try:
+        results = []
+        
+        for car_id, sku_id in request.items():
+            try:
+                # Получаем базовую информацию
+                car_obj, meta = await dongchedi_parser.async_fetch_car_detail(sku_id)
+                
+                if car_obj is None:
+                    results.append({
+                        "car_id": car_id,
+                        "sku_id": sku_id,
+                        "status": "error",
+                        "message": "Car not found"
+                    })
+                    continue
+                
+                # Улучшаем машину
+                enhanced_car = dongchedi_parser_instance.enhance_car_with_details(
+                    car_obj, sku_id, car_id
+                )
+                
+                results.append({
+                    "car_id": car_id,
+                    "sku_id": sku_id,
+                    "status": "success",
+                    "data": enhanced_car.dict()
+                })
+                
+            except Exception as e:
+                results.append({
+                    "car_id": car_id,
+                    "sku_id": sku_id,
+                    "status": "error",
+                    "message": str(e)
+                })
+        
+        successful = sum(1 for r in results if r["status"] == "success")
+        
+        return {
+            "data": {
+                "results": results,
+                "total": len(results),
+                "successful": successful,
+                "failed": len(results) - successful
+            },
+            "message": f"Обработано {len(results)} машин, успешно: {successful}",
+            "status": 200
+        }
+    except Exception as e:
+        logger.error(f"Error in batch enhance: {str(e)}")
+        return {
+            "data": {"error": str(e)},
+            "message": "Ошибка при массовом улучшении",
+            "status": 500
+        }
 
 @app.on_event("shutdown")
 async def shutdown_event():

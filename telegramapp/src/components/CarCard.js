@@ -1,13 +1,20 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { getProxiedImageUrl, shouldUseProxy } from '../utils/imageProxy';
 import { sendLeadRequest } from '../services/api';
 
 const CarCard = ({ car }) => {
+  const navigate = useNavigate();
+  
   // Beautiful placeholder for missing images
   const placeholder = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="350" height="220"><defs><linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:%23667eea;stop-opacity:0.1" /><stop offset="100%" style="stop-color:%23764ba2;stop-opacity:0.1" /></linearGradient></defs><rect width="100%" height="100%" fill="url(%23grad)"/><g transform="translate(175,110)"><circle cx="0" cy="0" r="30" fill="none" stroke="%23667eea" stroke-width="2" opacity="0.3"/><path d="M-20,-10 L20,-10 M-20,0 L20,0 M-20,10 L20,10" stroke="%23667eea" stroke-width="2" opacity="0.3"/><text x="0" y="35" text-anchor="middle" fill="%23667eea" font-size="14" font-family="Arial, sans-serif" opacity="0.6">Нет фото</text></g></svg>';
 
+  const handleCardClick = () => {
+    navigate(`/car/${car.uuid || car.id}`);
+  };
 
-  const handleWriteMessage = () => {
+  const handleWriteMessage = (e) => {
+    e.stopPropagation(); // Предотвращаем всплытие события
     // Получаем данные пользователя из Telegram WebApp
     const tg = window.Telegram?.WebApp;
     let username = 'Пользователь';
@@ -43,7 +50,8 @@ const CarCard = ({ car }) => {
     window.open(tgUrl, '_blank');
   };
 
-const handleLeadRequest = async () => {
+const handleLeadRequest = async (e) => {
+  e.stopPropagation(); // Предотвращаем всплытие события
   try {
     const tg = window.Telegram?.WebApp;
     let username = 'Пользователь сайта';
@@ -92,7 +100,7 @@ const handleLeadRequest = async () => {
   const proxiedUrl = getProxiedImageUrl(car.image);
 
   return (
-    <div className="car-card">
+    <div className="car-card" onClick={handleCardClick} style={{ cursor: 'pointer' }}>
       <img
         src={proxiedUrl || placeholder}
         alt={car.title || 'Без названия'}

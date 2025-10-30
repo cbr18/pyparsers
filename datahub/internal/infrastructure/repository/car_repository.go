@@ -303,7 +303,8 @@ func (r *CarRepository) CreateMany(ctx context.Context, cars []domain.Car) error
 	}
 
     // Вставляем все машины батчами, пропуская дубликаты на уровне базы
-    const batchSize = 1000
+    // С учетом 117+ полей, максимальный батч: 65535 / 117 ≈ 560
+    const batchSize = 500
     for i := 0; i < len(filtered); i += batchSize {
         end := i + batchSize
         if end > len(filtered) {
@@ -402,7 +403,8 @@ func (r *CarRepository) ReplaceBySource(ctx context.Context, source string, cars
     }
 
     // Вставляем все машины батчами в одной транзакции
-    const batchSize = 1000
+    // С учетом 117+ полей, максимальный батч: 65535 / 117 ≈ 560
+    const batchSize = 500
     for i := 0; i < len(dedup); i += batchSize {
         end := i + batchSize
         if end > len(dedup) {
@@ -513,7 +515,8 @@ func (r *CarRepository) CreateManyWithTranslation(ctx context.Context, cars []do
 	}
 
 	// Вставляем все машины батчами
-	const batchSize = 1000
+	// С учетом 117+ полей, максимальный батч: 65535 / 117 ≈ 560
+	const batchSize = 500
 	for i := 0; i < len(cars); i += batchSize {
 		end := i + batchSize
 		if end > len(cars) {
@@ -538,4 +541,111 @@ func (r *CarRepository) ReplaceBySourceWithTranslation(ctx context.Context, sour
 	
 	// Создаем новые записи с переводом
 	return r.CreateManyWithTranslation(ctx, cars, translationService)
+}
+
+// GetCarsWithoutDetails - получает машины без детальной информации
+func (r *CarRepository) GetCarsWithoutDetails(ctx context.Context, source string, limit int) ([]domain.Car, error) {
+	var cars []domain.Car
+	err := r.db.WithContext(ctx).
+		Where("source = ? AND (has_details = ? OR has_details IS NULL)", source, false).
+		Order("created_at DESC").
+		Limit(limit).
+		Find(&cars).Error
+	return cars, err
+}
+
+// UpdateCar - обновляет машину в БД (только детальные поля, не трогая ключевые поля source и car_id)
+func (r *CarRepository) UpdateCar(ctx context.Context, car domain.Car) error {
+	car.UpdatedAt = time.Now()
+	
+	// Используем Updates вместо Save, чтобы обновить только указанные поля
+	// и не трогать индексированные поля source и car_id
+	return r.db.WithContext(ctx).
+		Model(&domain.Car{}).
+		Where("uuid = ?", car.UUID).
+		Updates(map[string]interface{}{
+			"has_details":           car.HasDetails,
+			"last_detail_update":    car.LastDetailUpdate,
+			"power":                 car.Power,
+			"torque":                car.Torque,
+			"acceleration":          car.Acceleration,
+			"max_speed":             car.MaxSpeed,
+			"fuel_consumption":      car.FuelConsumption,
+			"emission_standard":     car.EmissionStandard,
+			"length":                car.Length,
+			"width":                 car.Width,
+			"height":                car.Height,
+			"wheelbase":             car.Wheelbase,
+			"curb_weight":           car.CurbWeight,
+			"gross_weight":          car.GrossWeight,
+			"engine_type":           car.EngineType,
+			"engine_code":           car.EngineCode,
+			"cylinder_count":        car.CylinderCount,
+			"valve_count":           car.ValveCount,
+			"compression_ratio":     car.CompressionRatio,
+			"turbo_type":            car.TurboType,
+			"battery_capacity":      car.BatteryCapacity,
+			"electric_range":        car.ElectricRange,
+			"charging_time":         car.ChargingTime,
+			"fast_charge_time":      car.FastChargeTime,
+			"charge_port_type":      car.ChargePortType,
+			"transmission_type":     car.TransmissionType,
+			"gear_count":            car.GearCount,
+			"differential_type":     car.DifferentialType,
+			"front_suspension":      car.FrontSuspension,
+			"rear_suspension":       car.RearSuspension,
+			"front_brakes":          car.FrontBrakes,
+			"rear_brakes":           car.RearBrakes,
+			"brake_system":          car.BrakeSystem,
+			"wheel_size":            car.WheelSize,
+			"tire_size":             car.TireSize,
+			"wheel_type":            car.WheelType,
+			"tire_type":             car.TireType,
+			"airbag_count":          car.AirbagCount,
+			"abs":                   car.ABS,
+			"esp":                   car.ESP,
+			"tcs":                   car.TCS,
+			"hill_assist":           car.HillAssist,
+			"blind_spot_monitor":    car.BlindSpotMonitor,
+			"lane_departure":        car.LaneDeparture,
+			"air_conditioning":      car.AirConditioning,
+			"climate_control":       car.ClimateControl,
+			"seat_heating":          car.SeatHeating,
+			"seat_ventilation":      car.SeatVentilation,
+			"seat_massage":          car.SeatMassage,
+			"steering_wheel_heating": car.SteeringWheelHeating,
+			"navigation":            car.Navigation,
+			"audio_system":          car.AudioSystem,
+			"speakers_count":        car.SpeakersCount,
+			"bluetooth":             car.Bluetooth,
+			"usb":                   car.USB,
+			"aux":                   car.Aux,
+			"headlight_type":        car.HeadlightType,
+			"fog_lights":            car.FogLights,
+			"led_lights":            car.LEDLights,
+			"daytime_running":       car.DaytimeRunning,
+			"owner_count":           car.OwnerCount,
+			"accident_history":      car.AccidentHistory,
+			"service_history":       car.ServiceHistory,
+			"warranty_info":         car.WarrantyInfo,
+			"inspection_date":       car.InspectionDate,
+			"insurance_info":        car.InsuranceInfo,
+			"interior_color":        car.InteriorColor,
+			"exterior_color":        car.ExteriorColor,
+			"upholstery":            car.Upholstery,
+			"sunroof":               car.Sunroof,
+			"panoramic_roof":        car.PanoramicRoof,
+			"view_count":            car.ViewCount,
+			"favorite_count":        car.FavoriteCount,
+			"contact_info":          car.ContactInfo,
+			"dealer_info":           car.DealerInfo,
+			"certification":         car.Certification,
+			"image_gallery":         car.ImageGallery,
+			"image_count":           car.ImageCount,
+			"seat_count":            car.SeatCount,
+			"door_count":            car.DoorCount,
+			"trunk_volume":          car.TrunkVolume,
+			"fuel_tank_volume":      car.FuelTankVolume,
+			"updated_at":            car.UpdatedAt,
+		}).Error
 }

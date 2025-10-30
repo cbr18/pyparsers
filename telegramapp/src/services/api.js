@@ -38,6 +38,24 @@ export const fetchCars = async (page = 1, limit = 10, filters = {}) => {
 };
 
 /**
+ * Fetch a single car by UUID
+ * @param {string} uuid - Car UUID
+ * @returns {Promise} - Promise with car data
+ */
+export const fetchCarByUUID = async (uuid) => {
+  try {
+    const response = await fetch(`/api/cars/uuid/${uuid}`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching car:', error);
+    throw error;
+  }
+};
+
+/**
  * Fetch brands from backend
  * @returns {Promise} - Promise with brands data
  */

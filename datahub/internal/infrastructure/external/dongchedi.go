@@ -1,4 +1,4 @@
-package external
+ package external
 
 import (
 	"bytes"
@@ -122,4 +122,101 @@ func (c *DongchediClient) CheckCar(ctx context.Context, carIDorURL string) (*dom
 		return nil, err
 	}
 	return &car, nil
+}
+
+// EnhanceCar — улучшает машину детальной информацией (GET /cars/dongchedi/enhance/{sku_id})
+func (c *DongchediClient) EnhanceCar(ctx context.Context, skuID string, carID string) (*domain.Car, error) {
+	url := fmt.Sprintf("%s/cars/dongchedi/enhance/%s", c.BaseURL, skuID)
+	if carID != "" {
+		url += "?car_id=" + carID
+	}
+	
+	// Создаем HTTP запрос с контекстом
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка создания запроса: %w", err)
+	}
+
+	// Устанавливаем увеличенный таймаут для клиента (парсинг деталей может занять время)
+	client := &http.Client{
+		Timeout: 10 * time.Minute, // Увеличенный таймаут для парсинга деталей
+	}
+
+	// Выполняем запрос
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка выполнения запроса: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	var result struct {
+		Data domain.Car `json:"data"`
+	}
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(b, &result); err != nil {
+		return nil, err
+	}
+	return &result.Data, nil
+}
+
+// BatchEnhanceCars — массовое улучшение машин детальной информацией
+func (c *DongchediClient) BatchEnhanceCars(ctx context.Context, carMappings map[string]string) ([]domain.Car, error) {
+	url := fmt.Sprintf("%s/cars/dongchedi/batch-enhance", c.BaseURL)
+	
+	// Сериализуем данные для запроса
+	body, err := json.Marshal(carMappings)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка сериализации данных: %w", err)
+	}
+
+	// Создаем HTTP запрос с контекстом
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("ошибка создания запроса: %w", err)
+	}
+
+	// Устанавливаем заголовок Content-Type
+	req.Header.Set("Content-Type", "application/json")
+
+	// Устанавливаем увеличенный таймаут для клиента
+	client := &http.Client{
+		Timeout: 30 * time.Minute, // Увеличенный таймаут для массового парсинга
+	}
+
+	// Выполняем запрос
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка выполнения запроса: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	var result struct {
+		Data struct {
+			Results []struct {
+				Status string      `json:"status"`
+				Data   domain.Car  `json:"data"`
+			} `json:"results"`
+		} `json:"data"`
+	}
+	
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(b, &result); err != nil {
+		return nil, err
+	}
+	
+	// Извлекаем только успешно обработанные машины
+	var cars []domain.Car
+	for _, item := range result.Data.Results {
+		if item.Status == "success" {
+			cars = append(cars, item.Data)
+		}
+	}
+	
+	return cars, nil
 }

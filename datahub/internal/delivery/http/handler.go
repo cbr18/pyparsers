@@ -14,15 +14,16 @@ import (
 )
 
 type Handler struct {
-	carService      *usecase.CarService
-	updateService   map[string]*usecase.UpdateService // ключ: source ("dongchedi", "che168")
-	brandService    *usecase.BrandService
-	taskService     *usecase.TaskService
-	pyparsersClient *external.PyparsersClient
+	carService        *usecase.CarService
+	updateService     map[string]*usecase.UpdateService // ключ: source ("dongchedi", "che168")
+	brandService      *usecase.BrandService
+	taskService       *usecase.TaskService
+	pyparsersClient   *external.PyparsersClient
+	enhancementWorker *usecase.EnhancementWorker
 }
 
-func NewHandler(carService *usecase.CarService, updateService map[string]*usecase.UpdateService, brandService *usecase.BrandService, taskService *usecase.TaskService, pyparsersClient *external.PyparsersClient) *Handler {
-	return &Handler{carService: carService, updateService: updateService, brandService: brandService, taskService: taskService, pyparsersClient: pyparsersClient}
+func NewHandler(carService *usecase.CarService, updateService map[string]*usecase.UpdateService, brandService *usecase.BrandService, taskService *usecase.TaskService, pyparsersClient *external.PyparsersClient, enhancementWorker *usecase.EnhancementWorker) *Handler {
+	return &Handler{carService: carService, updateService: updateService, brandService: brandService, taskService: taskService, pyparsersClient: pyparsersClient, enhancementWorker: enhancementWorker}
 }
 
 // GetCars godoc
@@ -346,4 +347,76 @@ func (h *Handler) CompleteTask(c *gin.Context) {
     }, nil)
 	
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// GetEnhancementStatus godoc
+// @Summary      Получить статус воркера улучшения машин
+// @Description  Возвращает информацию о работе фонового процесса улучшения машин
+// @Tags         enhancement
+// @Produce      json
+// @Success      200  {object}  map[string]interface{}
+// @Router       /enhancement/status [get]
+func (h *Handler) GetEnhancementStatus(c *gin.Context) {
+	status, err := h.enhancementWorker.GetStatus(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, status)
+}
+
+// StartEnhancement godoc
+// @Summary      Запустить воркер улучшения машин
+// @Description  Запускает фоновый процесс улучшения машин детальной информацией
+// @Tags         enhancement
+// @Produce      json
+// @Success      200  {object}  map[string]interface{}
+// @Router       /enhancement/start [post]
+func (h *Handler) StartEnhancement(c *gin.Context) {
+	h.enhancementWorker.Start()
+	c.JSON(http.StatusOK, gin.H{"status": "started"})
+}
+
+// StopEnhancement godoc
+// @Summary      Остановить воркер улучшения машин
+// @Description  Останавливает фоновый процесс улучшения машин
+// @Tags         enhancement
+// @Produce      json
+// @Success      200  {object}  map[string]interface{}
+// @Router       /enhancement/stop [post]
+func (h *Handler) StopEnhancement(c *gin.Context) {
+	h.enhancementWorker.Stop()
+	c.JSON(http.StatusOK, gin.H{"status": "stopped"})
+}
+
+// ConfigureEnhancement godoc
+// @Summary      Настроить воркер улучшения машин
+// @Description  Обновляет конфигурацию фонового процесса улучшения машин
+// @Tags         enhancement
+// @Accept       json
+// @Produce      json
+// @Param        config  body  object  true  "Конфигурация"
+// @Success      200  {object}  map[string]interface{}
+// @Router       /enhancement/config [post]
+func (h *Handler) ConfigureEnhancement(c *gin.Context) {
+	var config struct {
+		BatchSize          int `json:"batch_size"`
+		DelayBetweenBatchesSec int `json:"delay_between_batches_sec"`
+		DelayBetweenCarsSec    int `json:"delay_between_cars_sec"`
+		MaxConcurrent      int `json:"max_concurrent"`
+	}
+
+	if err := c.ShouldBindJSON(&config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	h.enhancementWorker.SetConfig(
+		config.BatchSize,
+		time.Duration(config.DelayBetweenBatchesSec)*time.Second,
+		time.Duration(config.DelayBetweenCarsSec)*time.Second,
+		config.MaxConcurrent,
+	)
+
+	c.JSON(http.StatusOK, gin.H{"status": "configured"})
 }

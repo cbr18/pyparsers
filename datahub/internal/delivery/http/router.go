@@ -23,6 +23,13 @@ func (r *Router) Setup() *gin.Engine {
    e.POST("/update/:source", r.handler.IncrementalUpdate)
    e.GET("/brands", r.handler.GetBrands)
    e.POST("/api/tasks/:id/complete", r.handler.CompleteTask)
+   
+   // Enhancement endpoints
+   e.GET("/enhancement/status", r.handler.GetEnhancementStatus)
+   e.POST("/enhancement/start", r.handler.StartEnhancement)
+   e.POST("/enhancement/stop", r.handler.StopEnhancement)
+   e.POST("/enhancement/config", r.handler.ConfigureEnhancement)
+   
    // Swagger UI
    e.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
    return e

@@ -90,7 +90,14 @@ func main() {
 		"che168":    usecase.NewUpdateServiceWithTranslation(repo, che168Client, "che168", translationService),
 	}
 
-	handler := httpdelivery.NewHandler(carService, updateService, brandService, taskService, pyparsersClient)
+	// Инициализация воркера для улучшения машин
+	enhancementWorker := usecase.NewEnhancementWorker(repo, dongchediClient, che168Client, translationService)
+	
+	// Запускаем воркер в фоне
+	enhancementWorker.Start()
+	log.Println("Enhancement worker started in background")
+
+	handler := httpdelivery.NewHandler(carService, updateService, brandService, taskService, pyparsersClient, enhancementWorker)
 	router := httpdelivery.NewRouter(handler)
 
 	if err := router.Setup().Run(":8080"); err != nil {

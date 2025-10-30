@@ -49,6 +49,9 @@ body::before {
   padding: 20px;
   position: relative;
   z-index: 1;
+  width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 
 /* Header styles */
@@ -158,10 +161,13 @@ body::before {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
   margin-bottom: 30px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 20px;
   border: 1px solid rgba(255, 255, 255, 0.2);
   animation: slideDown 0.3s ease-out;
+  overflow: hidden;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 @keyframes slideDown {
@@ -179,6 +185,8 @@ body::before {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .filter-group label {
@@ -198,6 +206,9 @@ body::before {
   color: #2d3748;
   transition: all 0.3s ease;
   backdrop-filter: blur(10px);
+  width: 100%;
+  box-sizing: border-box;
+  max-width: 100%;
 }
 
 .filter-group input:focus,
@@ -220,6 +231,9 @@ body::before {
   margin-top: 20px;
   padding-top: 20px;
   border-top: 1px solid rgba(102, 126, 234, 0.1);
+  flex-wrap: wrap;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .filter-actions button {
@@ -672,6 +686,16 @@ body::before {
     grid-template-columns: 1fr;
     padding: 20px;
     gap: 15px;
+    overflow-x: hidden;
+    width: 100%;
+  }
+  
+  .filter-actions {
+    flex-direction: column;
+  }
+  
+  .filter-actions button {
+    width: 100%;
   }
 
   .car-list {

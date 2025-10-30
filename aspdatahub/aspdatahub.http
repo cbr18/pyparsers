@@ -1,6 +1,0 @@
-@aspdatahub_HostAddress = http://localhost:5078
-
-GET {{aspdatahub_HostAddress}}/weatherforecast/
-Accept: application/json
-
-###

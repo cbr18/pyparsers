@@ -19,4 +19,6 @@ type CarRepository interface {
 	DeleteBySource(ctx context.Context, source string) error
     ReplaceBySource(ctx context.Context, source string, cars []domain.Car) error
     ReplaceBySourceWithTranslation(ctx context.Context, source string, cars []domain.Car, translationService interface{}) error
+	GetCarsWithoutDetails(ctx context.Context, source string, limit int) ([]domain.Car, error)
+	UpdateCar(ctx context.Context, car domain.Car) error
 }

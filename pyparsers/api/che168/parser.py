@@ -92,6 +92,11 @@ class Che168Parser(BaseCarParser):
             if chrome_bin:
                 chrome_options.binary_location = chrome_bin
 
+            # Добавляем уникальный user-data-dir для избежания конфликтов
+            import tempfile
+            temp_dir = tempfile.mkdtemp()
+            chrome_options.add_argument(f"--user-data-dir={temp_dir}")
+
             driver_path = os.environ.get("CHROMEDRIVER_PATH")
             if driver_path:
                 self.driver = webdriver.Chrome(service=Service(driver_path), options=chrome_options)
@@ -467,6 +472,10 @@ class Che168Parser(BaseCarParser):
         chrome_options.add_argument("--disable-extensions")
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--disable-web-security")
+        # Добавляем уникальный user-data-dir для избежания конфликтов
+        import tempfile
+        temp_dir = tempfile.mkdtemp()
+        chrome_options.add_argument(f"--user-data-dir={temp_dir}")
         user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",

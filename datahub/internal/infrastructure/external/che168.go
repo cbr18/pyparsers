@@ -293,3 +293,139 @@ func (c *Che168Client) CheckCar(ctx context.Context, carIDorURL string) (*domain
 	car := che168Car.ToCar()
 	return &car, nil
 }
+
+// EnhanceCar — улучшает машину детальной информацией (POST /cars/che168/detailed/parse)
+func (c *Che168Client) EnhanceCar(ctx context.Context, carID int64) (*domain.Car, error) {
+	url := fmt.Sprintf("%s/che168/detailed/parse", c.BaseURL)
+	
+	requestBody := map[string]interface{}{
+		"car_id":       carID,
+		"force_update": true,
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка сериализации запроса: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("ошибка создания запроса: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	// Устанавливаем увеличенный таймаут для клиента (парсинг деталей может занять время)
+	client := &http.Client{
+		Timeout: 10 * time.Minute, // Увеличенный таймаут для парсинга деталей
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка выполнения запроса: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка чтения ответа: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ошибка API: статус %d, тело: %s", resp.StatusCode, string(body))
+	}
+
+	var response struct {
+		Success bool        `json:"success"`
+		CarID   int64       `json:"car_id"`
+		Data    *Che168Car  `json:"data"`
+		Error   string      `json:"error,omitempty"`
+	}
+
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("ошибка десериализации ответа: %w", err)
+	}
+
+	if !response.Success {
+		return nil, fmt.Errorf("ошибка парсинга: %s", response.Error)
+	}
+
+	// Преобразуем Che168Car в domain.Car
+	car := response.Data.ToCar()
+	car.HasDetails = true
+	car.LastDetailUpdate = time.Now()
+	
+	return &car, nil
+}
+
+// BatchEnhanceCars — массовое улучшение машин детальной информацией
+func (c *Che168Client) BatchEnhanceCars(ctx context.Context, carIDs []int64) ([]domain.Car, error) {
+	url := fmt.Sprintf("%s/che168/detailed/parse-batch", c.BaseURL)
+	
+	requestBody := map[string]interface{}{
+		"car_ids":      carIDs,
+		"force_update": true,
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка сериализации запроса: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("ошибка создания запроса: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	// Устанавливаем увеличенный таймаут для клиента
+	client := &http.Client{
+		Timeout: 30 * time.Minute, // Увеличенный таймаут для массового парсинга
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка выполнения запроса: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка чтения ответа: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ошибка API: статус %d, тело: %s", resp.StatusCode, string(body))
+	}
+
+	var response struct {
+		Success    bool                      `json:"success"`
+		Processed  int                       `json:"processed"`
+		Successful int                       `json:"successful"`
+		Failed     int                       `json:"failed"`
+		Results    []struct {
+			Success bool       `json:"success"`
+			CarID   int64      `json:"car_id"`
+			Data    *Che168Car `json:"data"`
+			Error   string     `json:"error,omitempty"`
+		} `json:"results"`
+	}
+
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("ошибка десериализации ответа: %w", err)
+	}
+
+	// Извлекаем только успешно обработанные машины
+	var cars []domain.Car
+	for _, result := range response.Results {
+		if result.Success && result.Data != nil {
+			car := result.Data.ToCar()
+			car.HasDetails = true
+			car.LastDetailUpdate = time.Now()
+			cars = append(cars, car)
+		}
+	}
+
+	return cars, nil
+}

@@ -256,6 +256,10 @@ class DongchediParser(BaseCarParser):
         chrome_options.add_argument("--disable-extensions")
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--disable-web-security")
+        # Добавляем уникальный user-data-dir для избежания конфликтов
+        import tempfile
+        temp_dir = tempfile.mkdtemp()
+        chrome_options.add_argument(f"--user-data-dir={temp_dir}")
         user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
@@ -333,51 +337,214 @@ class DongchediParser(BaseCarParser):
             "drive_type": None,
             "condition": None,
             "created_at": current_time,
-            "updated_at": current_time
+            "updated_at": current_time,
+            # Новые поля для детальной информации
+            "has_details": False,
+            "last_detail_update": None,
+            "power": None,
+            "torque": None,
+            "acceleration": None,
+            "max_speed": None,
+            "fuel_consumption": None,
+            "emission_standard": None,
+            "length": None,
+            "width": None,
+            "height": None,
+            "wheelbase": None,
+            "curb_weight": None,
+            "gross_weight": None,
+            "engine_type": None,
+            "engine_code": None,
+            "cylinder_count": None,
+            "valve_count": None,
+            "compression_ratio": None,
+            "turbo_type": None,
+            "battery_capacity": None,
+            "electric_range": None,
+            "charging_time": None,
+            "fast_charge_time": None,
+            "charge_port_type": None,
+            "transmission_type": None,
+            "gear_count": None,
+            "differential_type": None,
+            "front_suspension": None,
+            "rear_suspension": None,
+            "front_brakes": None,
+            "rear_brakes": None,
+            "brake_system": None,
+            "wheel_size": None,
+            "tire_size": None,
+            "wheel_type": None,
+            "tire_type": None,
+            "airbag_count": None,
+            "abs": None,
+            "esp": None,
+            "tcs": None,
+            "hill_assist": None,
+            "blind_spot_monitor": None,
+            "lane_departure": None,
+            "air_conditioning": None,
+            "climate_control": None,
+            "seat_heating": None,
+            "seat_ventilation": None,
+            "seat_massage": None,
+            "steering_wheel_heating": None,
+            "navigation": None,
+            "audio_system": None,
+            "speakers_count": None,
+            "bluetooth": None,
+            "usb": None,
+            "aux": None,
+            "headlight_type": None,
+            "fog_lights": None,
+            "led_lights": None,
+            "daytime_running": None,
+            "owner_count": 0,
+            "accident_history": None,
+            "service_history": None,
+            "warranty_info": None,
+            "inspection_date": None,
+            "insurance_info": None,
+            "interior_color": None,
+            "exterior_color": None,
+            "upholstery": None,
+            "sunroof": None,
+            "panoramic_roof": None,
+            "view_count": 0,
+            "favorite_count": 0,
+            "contact_info": None,
+            "dealer_info": None,
+            "certification": None,
+            "image_gallery": None,
+            "image_count": 0,
+            "seat_count": None,
+            "door_count": None,
+            "trunk_volume": None,
+            "fuel_tank_volume": None
         }
-        scripts = soup.find_all('script')
+        # Ищем скрипт с __NEXT_DATA__ по id
+        script_tag = soup.find('script', {'id': '__NEXT_DATA__'})
         json_data_found = False
-        for script in scripts:
-            if hasattr(script, 'string') and script.string:
-                script_content = script.string
-                if '__NEXT_DATA__' in script_content:
-                    try:
-                        start = script_content.find('{')
-                        end = script_content.rfind('}') + 1
-                        if start != -1 and end != 0:
-                            json_data = json.loads(script_content[start:end])
-                            if 'props' in json_data and 'pageProps' in json_data['props']:
-                                page_props = json_data['props']['pageProps']
-                                if 'skuDetail' in page_props:
-                                    sku_detail = page_props['skuDetail']
-                                    car_info.update({
-                                        'title': sku_detail.get('title', ''),
-                                        'sh_price': sku_detail.get('sh_price', ''),
-                                        'car_mileage': sku_detail.get('car_info', {}).get('mileage', ''),
-                                        'car_year': sku_detail.get('car_info', {}).get('year', ''),
-                                        'year': sku_detail.get('car_info', {}).get('year', ''),
-                                        'brand_name': sku_detail.get('car_info', {}).get('brand_name', ''),
-                                        'series_name': sku_detail.get('car_info', {}).get('series_name', ''),
-                                        'car_name': sku_detail.get('car_info', {}).get('car_name', ''),
-                                        'image': sku_detail.get('image', ''),
-                                        'shop_id': sku_detail.get('shop_info', {}).get('shop_id', ''),
-                                        'brand_id': sku_detail.get('car_info', {}).get('brand_id', 0),
-                                        'series_id': sku_detail.get('car_info', {}).get('series_id', 0),
-                                        'car_source_city_name': sku_detail.get('car_info', {}).get('city', ''),
-                                        'city': sku_detail.get('car_info', {}).get('city', ''),
-                                        'description': sku_detail.get('description', ''),
-                                        'color': sku_detail.get('car_info', {}).get('color', ''),
-                                        'transmission': sku_detail.get('car_info', {}).get('transmission', ''),
-                                        'fuel_type': sku_detail.get('car_info', {}).get('fuel_type', ''),
-                                        'engine_volume': sku_detail.get('car_info', {}).get('engine_volume', ''),
-                                        'body_type': sku_detail.get('car_info', {}).get('body_type', ''),
-                                        'drive_type': sku_detail.get('car_info', {}).get('drive_type', ''),
-                                        'condition': sku_detail.get('car_info', {}).get('condition', ''),
-                                    })
-                                    json_data_found = True
-                                    break
-                    except (json.JSONDecodeError, KeyError):
-                        continue
+        if script_tag and script_tag.string:
+            try:
+                json_data = json.loads(script_tag.string)
+                if 'props' in json_data and 'pageProps' in json_data['props']:
+                    page_props = json_data['props']['pageProps']
+                    if 'skuDetail' in page_props:
+                        sku_detail = page_props['skuDetail']
+                        
+                        # Парсим галерею изображений
+                        head_images = sku_detail.get('head_images', [])
+                        if head_images and isinstance(head_images, list):
+                            # Сохраняем первую картинку в image
+                            car_info['image'] = head_images[0] if len(head_images) > 0 else ''
+                            # Сохраняем все картинки через пробел
+                            car_info['image_gallery'] = ' '.join(head_images)
+                            car_info['image_count'] = len(head_images)
+                        else:
+                            car_info['image'] = sku_detail.get('image', '')
+                        
+                        # Парсим дополнительные данные
+                        shop_info = sku_detail.get('shop_info', {})
+                        other_params = sku_detail.get('other_params', [])
+                        
+                        # Извлекаем информацию о владельцах, пробеге и т.д. из other_params
+                        for param in other_params:
+                            param_name = param.get('name', '')
+                            param_value = param.get('value', '')
+                            
+                            if param_name == '过户次数':
+                                # Количество владельцев
+                                try:
+                                    car_info['owner_count'] = int(param_value.replace('次', '').strip())
+                                except:
+                                    pass
+                            elif param_name == '上牌地':
+                                car_info['inspection_date'] = param_value
+                            elif param_name == '内饰颜色':
+                                car_info['interior_color'] = param_value
+                            elif param_name == '车身颜色':
+                                car_info['exterior_color'] = param_value
+                        
+                        # Извлекаем информацию о дилере
+                        if shop_info:
+                            dealer_parts = []
+                            if shop_info.get('shop_name'):
+                                dealer_parts.append(f"Название: {shop_info['shop_name']}")
+                            if shop_info.get('shop_address'):
+                                dealer_parts.append(f"Адрес: {shop_info['shop_address']}")
+                            if shop_info.get('business_time'):
+                                dealer_parts.append(f"Время работы: {shop_info['business_time']}")
+                            if shop_info.get('sales_car_num'):
+                                dealer_parts.append(f"Машин в продаже: {shop_info['sales_car_num']}")
+                            car_info['dealer_info'] = '; '.join(dealer_parts)
+                        
+                        # Извлекаем сертификацию
+                        tags = sku_detail.get('tags', [])
+                        if tags and isinstance(tags, list):
+                            cert_parts = []
+                            for tag in tags:
+                                if isinstance(tag, dict) and tag.get('text'):
+                                    cert_parts.append(tag['text'])
+                            if cert_parts:
+                                car_info['certification'] = '; '.join(cert_parts)
+                        
+                        # Извлекаем количество просмотров и избранного
+                        car_info['favorite_count'] = sku_detail.get('favored_count', 0)
+                        
+                        # Парсим car_config_overview для дополнительных характеристик
+                        car_config = sku_detail.get('car_config_overview', {})
+                        if car_config:
+                            # Подвеска из manipulation
+                            manipulation = car_config.get('manipulation', {})
+                            if manipulation:
+                                car_info['front_suspension'] = manipulation.get('front_suspension_form', '')
+                                car_info['rear_suspension'] = manipulation.get('rear_suspension_form', '')
+                                if manipulation.get('driver_form'):
+                                    car_info['drive_type'] = manipulation.get('driver_form', '')
+                            
+                            # Характеристики электромобиля
+                            new_energy = car_config.get('new_energy_power', {})
+                            if new_energy:
+                                car_info['acceleration'] = new_energy.get('acceleration_time', '')
+                                car_info['fuel_type'] = new_energy.get('fuel_form', '')
+                                car_info['transmission_type'] = new_energy.get('gearbox_description', '')
+                                car_info['power'] = new_energy.get('horsepower', '')
+                            
+                            # Размеры из space
+                            space = car_config.get('space', {})
+                            if space:
+                                car_info['height'] = space.get('height', '')
+                                car_info['length'] = space.get('length', '')
+                                car_info['width'] = space.get('width', '')
+                                car_info['wheelbase'] = space.get('wheelbase', '')
+                        
+                        car_info.update({
+                            'title': sku_detail.get('title', ''),
+                            'sh_price': sku_detail.get('sh_price', ''),
+                            'car_mileage': sku_detail.get('car_info', {}).get('mileage', ''),
+                            'car_year': sku_detail.get('car_info', {}).get('year', ''),
+                            'year': sku_detail.get('car_info', {}).get('year', ''),
+                            'brand_name': sku_detail.get('car_info', {}).get('brand_name', ''),
+                            'series_name': sku_detail.get('car_info', {}).get('series_name', ''),
+                            'car_name': sku_detail.get('car_info', {}).get('car_name', ''),
+                            'shop_id': shop_info.get('shop_id', ''),
+                            'brand_id': sku_detail.get('car_info', {}).get('brand_id', 0),
+                            'series_id': sku_detail.get('car_info', {}).get('series_id', 0),
+                            'car_source_city_name': sku_detail.get('car_info', {}).get('city', ''),
+                            'city': sku_detail.get('car_info', {}).get('city', ''),
+                            'description': sku_detail.get('sh_car_desc', ''),
+                            'color': sku_detail.get('car_info', {}).get('color', ''),
+                            'transmission': sku_detail.get('car_info', {}).get('transmission', ''),
+                            'fuel_type': sku_detail.get('car_info', {}).get('fuel_type', '') or car_info.get('fuel_type', ''),
+                            'engine_volume': sku_detail.get('car_info', {}).get('engine_volume', ''),
+                            'body_type': sku_detail.get('car_info', {}).get('body_type', ''),
+                            'drive_type': sku_detail.get('car_info', {}).get('drive_type', '') or car_info.get('drive_type', ''),
+                            'condition': sku_detail.get('car_info', {}).get('condition', ''),
+                        })
+                        json_data_found = True
+            except (json.JSONDecodeError, KeyError):
+                pass
         if not json_data_found:
             title_tag = soup.find('title')
             if title_tag:
@@ -513,3 +680,220 @@ class DongchediParser(BaseCarParser):
             car_obj, meta = self.fetch_car_detail(car_id)
             results.append((car_obj, meta))
         return results
+
+    def fetch_car_specifications(self, car_id: str):
+        """
+        Парсит технические характеристики машины по car_id через страницу параметров.
+        Возвращает (dict | None, meta: dict)
+        """
+        import time
+        import random
+        import json
+        from selenium import webdriver
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
+        from selenium.common.exceptions import TimeoutException, WebDriverException
+        from bs4 import BeautifulSoup
+
+        url = f"https://www.dongchedi.com/auto/params-carIds-{car_id}"
+        chrome_options = Options()
+        chrome_options.add_argument("--headless=new")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
+        prefs = {
+            "profile.managed_default_content_settings.images": 2,
+            "profile.managed_default_content_settings.media_stream": 2,
+            "profile.managed_default_content_settings.plugins": 2,
+        }
+        chrome_options.add_experimental_option("prefs", prefs)
+        chrome_options.add_argument("--disable-extensions")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--disable-web-security")
+        # Добавляем уникальный user-data-dir для избежания конфликтов
+        import tempfile
+        temp_dir = tempfile.mkdtemp()
+        chrome_options.add_argument(f"--user-data-dir={temp_dir}")
+        user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        ]
+        chrome_options.add_argument(f"--user-agent={random.choice(user_agents)}")
+        driver = None
+        try:
+            import os
+            chrome_bin = os.environ.get("CHROME_BIN")
+            if chrome_bin:
+                chrome_options.binary_location = chrome_bin
+            driver_path = os.environ.get("CHROMEDRIVER_PATH")
+            if driver_path:
+                driver = webdriver.Chrome(service=Service(driver_path), options=chrome_options)
+            else:
+                driver = webdriver.Chrome(options=chrome_options)
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            driver.get(url)
+            time.sleep(random.uniform(2, 3))
+            try:
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+            except TimeoutException:
+                pass
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(1)
+            driver.execute_script("window.scrollTo(0, 0);")
+            time.sleep(1)
+            page_source = driver.page_source
+            soup = BeautifulSoup(page_source, 'html.parser')
+        finally:
+            if driver:
+                driver.quit()
+
+        # Парсим технические характеристики из таблицы
+        specs = {}
+        
+        # Ищем таблицы с параметрами
+        table_rows = soup.find_all('div', class_='table_row__yVX1h')
+        
+        for row in table_rows:
+            try:
+                label_elem = row.find('label', class_='cell_label__ZtXlw')
+                value_elem = row.find('div', class_='cell_normal__37nRi')
+                
+                if label_elem and value_elem:
+                    label = label_elem.get_text().strip()
+                    value = value_elem.get_text().strip()
+                    
+                    # Маппинг китайских названий на английские поля
+                    field_mapping = {
+                        '最大功率(kW)': 'power',
+                        '最大扭矩(N·m)': 'torque',
+                        '官方百公里加速时间(s)': 'acceleration',
+                        '最高车速(km/h)': 'max_speed',
+                        '百公里耗电量(kWh/100km)': 'fuel_consumption',
+                        '长x宽x高(mm)': 'dimensions',
+                        '车身结构': 'body_structure',
+                        '纯电续航里程(km)': 'electric_range',
+                        '充电时间(小时)': 'charging_time',
+                        '快充时间(小时)': 'fast_charge_time',
+                        '发动机': 'engine_type',
+                        '排量(mL)': 'engine_volume',
+                        '变速箱': 'transmission_type',
+                        '驱动方式': 'drive_type',
+                        '前悬架类型': 'front_suspension',
+                        '后悬架类型': 'rear_suspension',
+                        '前制动器类型': 'front_brakes',
+                        '后制动器类型': 'rear_brakes',
+                        '轮胎规格': 'tire_size',
+                        '轮毂规格': 'wheel_size',
+                        '主/副驾驶座安全气囊': 'airbag_count',
+                        'ABS防抱死': 'abs',
+                        'ESP车身稳定系统': 'esp',
+                        'TCS牵引力控制': 'tcs',
+                        '上坡辅助': 'hill_assist',
+                        '盲区监测': 'blind_spot_monitor',
+                        '车道偏离预警': 'lane_departure',
+                        '空调': 'air_conditioning',
+                        '自动空调': 'climate_control',
+                        '座椅加热': 'seat_heating',
+                        '座椅通风': 'seat_ventilation',
+                        '座椅按摩': 'seat_massage',
+                        '方向盘加热': 'steering_wheel_heating',
+                        'GPS导航': 'navigation',
+                        '音响系统': 'audio_system',
+                        '扬声器数量': 'speakers_count',
+                        '蓝牙': 'bluetooth',
+                        'USB接口': 'usb',
+                        'AUX接口': 'aux',
+                        '前大灯类型': 'headlight_type',
+                        '前雾灯': 'fog_lights',
+                        'LED大灯': 'led_lights',
+                        '日间行车灯': 'daytime_running',
+                        '座位数': 'seat_count',
+                        '车门数': 'door_count',
+                        '行李厢容积(L)': 'trunk_volume',
+                        '油箱容积(L)': 'fuel_tank_volume'
+                    }
+                    
+                    if label in field_mapping:
+                        field_name = field_mapping[label]
+                        specs[field_name] = value
+                        
+                        # Обработка специальных случаев
+                        if field_name == 'dimensions':
+                            # Парсим размеры из строки "5200x2062x1618"
+                            try:
+                                parts = value.split('x')
+                                if len(parts) == 3:
+                                    specs['length'] = parts[0]
+                                    specs['width'] = parts[1]
+                                    specs['height'] = parts[2]
+                            except:
+                                pass
+                        
+            except Exception:
+                continue
+
+        return specs, {"status": 200, "link": url}
+
+    def enhance_car_with_details(self, car_obj, sku_id: str, car_id: str = None):
+        """
+        Улучшает объект машины детальной информацией.
+        
+        Args:
+            car_obj: Объект DongchediCar
+            sku_id: SKU ID для детальной страницы
+            car_id: Car ID для страницы характеристик (опционально)
+            
+        Returns:
+            Улучшенный объект DongchediCar
+        """
+        import datetime
+        
+        # Получаем детальную информацию
+        detail_car, detail_meta = self.fetch_car_detail(sku_id)
+        
+        # Получаем технические характеристики, если car_id предоставлен
+        specs = {}
+        if car_id:
+            specs, specs_meta = self.fetch_car_specifications(car_id)
+        
+        # Обновляем объект машины
+        if detail_car:
+            # Копируем детальную информацию
+            for field in ['power', 'torque', 'acceleration', 'max_speed', 'fuel_consumption',
+                         'emission_standard', 'length', 'width', 'height', 'wheelbase',
+                         'curb_weight', 'gross_weight', 'engine_type', 'engine_code',
+                         'cylinder_count', 'valve_count', 'compression_ratio', 'turbo_type',
+                         'battery_capacity', 'electric_range', 'charging_time', 'fast_charge_time',
+                         'charge_port_type', 'transmission_type', 'gear_count', 'differential_type',
+                         'front_suspension', 'rear_suspension', 'front_brakes', 'rear_brakes',
+                         'brake_system', 'wheel_size', 'tire_size', 'wheel_type', 'tire_type',
+                         'airbag_count', 'abs', 'esp', 'tcs', 'hill_assist', 'blind_spot_monitor',
+                         'lane_departure', 'air_conditioning', 'climate_control', 'seat_heating',
+                         'seat_ventilation', 'seat_massage', 'steering_wheel_heating', 'navigation',
+                         'audio_system', 'speakers_count', 'bluetooth', 'usb', 'aux', 'headlight_type',
+                         'fog_lights', 'led_lights', 'daytime_running', 'owner_count', 'accident_history',
+                         'service_history', 'warranty_info', 'inspection_date', 'insurance_info',
+                         'interior_color', 'exterior_color', 'upholstery', 'sunroof', 'panoramic_roof',
+                         'view_count', 'favorite_count', 'contact_info', 'dealer_info', 'certification',
+                         'image_gallery', 'image_count', 'seat_count', 'door_count', 'trunk_volume',
+                         'fuel_tank_volume']:
+                if hasattr(detail_car, field) and getattr(detail_car, field) is not None:
+                    setattr(car_obj, field, getattr(detail_car, field))
+        
+        # Добавляем технические характеристики
+        for field, value in specs.items():
+            if hasattr(car_obj, field):
+                setattr(car_obj, field, value)
+        
+        # Устанавливаем флаги
+        car_obj.has_details = True
+        car_obj.last_detail_update = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        
+        return car_obj

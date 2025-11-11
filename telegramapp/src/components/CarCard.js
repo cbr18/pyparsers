@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getProxiedImageUrl, shouldUseProxy } from '../utils/imageProxy';
-import { sendLeadRequest } from '../services/api';
+import { getProxiedImageUrl } from '../utils/imageProxy';
+import { createOrder } from '../services/api';
 
 const CarCard = ({ car }) => {
   const navigate = useNavigate();
@@ -50,49 +50,75 @@ const CarCard = ({ car }) => {
     window.open(tgUrl, '_blank');
   };
 
-const handleLeadRequest = async (e) => {
+const handleLeadRequest = (e) => {
   e.stopPropagation(); // Предотвращаем всплытие события
-  try {
-    const tg = window.Telegram?.WebApp;
-    let username = 'Пользователь сайта';
+  const tg = window.Telegram?.WebApp;
+  alert('Заявка отправлена');
 
-    // Получаем данные пользователя из Telegram WebApp
+  let username = 'Пользователь сайта';
+  let chatId = null;
 
-    if (tg?.initDataUnsafe?.user) {
-      const user = tg.initDataUnsafe.user; // <-- исправлено
-      console.log('User from initDataUnsafe:', user);
-      username = user.username
-        ? `@${user.username}`
-        : user.first_name
-        ? user.first_name
-        : 'Пользователь сайта';
-    } else if (tg?.initData) {
-      try {
-        const params = new URLSearchParams(tg.initData);
-        const userParam = params.get('user');
-        console.log('User param from initData:', userParam);
-        if (userParam) {
-          const user = JSON.parse(decodeURIComponent(userParam));
-          console.log('Parsed user:', user);
-          username = user.username
-            ? `@${user.username}`
-            : user.first_name
-            ? user.first_name
-            : 'Пользователь сайта';
-        }
-      } catch (e) {
-        console.log('Could not parse user data:', e);
+  if (tg?.initDataUnsafe?.user) {
+    const user = tg.initDataUnsafe.user;
+    username = user.username
+      ? `@${user.username}`
+      : user.first_name
+      ? user.first_name
+      : 'Пользователь сайта';
+    chatId = user.id ?? null;
+  } else if (tg?.initData) {
+    try {
+      const params = new URLSearchParams(tg.initData);
+      const userParam = params.get('user');
+      if (userParam) {
+        const user = JSON.parse(decodeURIComponent(userParam));
+        username = user.username
+          ? `@${user.username}`
+          : user.first_name
+          ? user.first_name
+          : 'Пользователь сайта';
+        chatId = user.id ?? null;
       }
+    } catch (err) {
+      console.log('Could not parse user data:', err);
     }
-
-    console.log('Final username:', username);
-
-    await sendLeadRequest(car, username);
-    alert('Заявка успешно отправлена! Администратор свяжется с вами в ближайшее время.');
-  } catch (error) {
-    console.error('Error sending lead request:', error);
-    alert('Ошибка при отправке заявки. Попробуйте позже или свяжитесь с нами напрямую.');
   }
+
+  createOrder({
+    carUuid: car?.uuid || car?.id,
+    clientTelegramId: username,
+    clientChatId: chatId,
+    car
+  })
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+
+      const title = car?.title || car?.car_name || car?.car_model || 'Без названия';
+      const brand = car?.brand_name || car?.brand || '';
+      const model = car?.car_name || car?.model || '';
+      const image = car?.image || null;
+
+      tg?.sendData?.(JSON.stringify({
+        type: 'order_success',
+        car: {
+          uuid: car?.uuid || car?.id || '',
+          title,
+          brand,
+          model,
+          image
+        }
+      }));
+    })
+    .catch((error) => {
+      console.error('Error sending lead request:', error);
+      tg?.showPopup?.({
+        title: 'Ошибка',
+        message: 'Не удалось отправить заявку. Попробуйте позже.',
+        buttons: [{ type: 'ok', text: 'Ок' }]
+      });
+    });
 };
 
 
@@ -136,3 +162,4 @@ const handleLeadRequest = async (e) => {
 };
 
 export default CarCard;
+

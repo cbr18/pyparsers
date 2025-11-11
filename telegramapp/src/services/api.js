@@ -72,25 +72,29 @@ export const fetchBrands = async () => {
   }
 };
 
-/**
- * Send a lead request to the CBR18 admin bot
- * @param {object} car - Car object
- * @param {string} user - Optional user info
- * @returns {Promise}
- */
-export const sendLeadRequest = async (car, user = '') => {
+export const createOrder = async ({
+  carUuid,
+  clientTelegramId = '',
+  clientChatId = null,
+  car = null,
+  tgIdId = null
+}) => {
   try {
-    const response = await fetch('/admin-lead', {
+    const response = await fetch('/api/admin-service/orders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ car, user })
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
-    }
-    return await response.json();
+      body: JSON.stringify({
+        carUuid,
+        clientTelegramId,
+        clientChatId,
+        tgIdId,
+        car
+      })
+    })
+
+    return response
   } catch (error) {
-    console.error('Error sending lead:', error);
-    throw error;
+    console.error('Error creating order:', error)
+    throw error
   }
-};
+}

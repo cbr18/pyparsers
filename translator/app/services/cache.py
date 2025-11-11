@@ -4,6 +4,7 @@
 import hashlib
 import json
 import logging
+import os
 from typing import Optional, List
 import redis.asyncio as redis
 
@@ -13,9 +14,16 @@ logger = logging.getLogger(__name__)
 class CacheService:
     """Сервис для работы с кэшем переводов"""
     
-    def __init__(self, redis_url: str = "redis://redis:6379"):
+    def __init__(self, redis_url: str = "redis://redis:6379", default_ttl: Optional[int] = None):
         self.redis_url = redis_url
         self.redis: Optional[redis.Redis] = None
+        env_ttl = os.getenv("TRANSLATOR_CACHE_TTL")
+        try:
+            env_ttl_value = int(env_ttl) if env_ttl else None
+        except ValueError:
+            logger.warning("Некорректное значение TRANSLATOR_CACHE_TTL: %s. Используется значение по умолчанию.", env_ttl)
+            env_ttl_value = None
+        self.default_ttl = default_ttl if default_ttl is not None else (env_ttl_value if env_ttl_value is not None else 86400)
     
     async def connect(self):
         """Подключение к Redis"""
@@ -72,6 +80,11 @@ class CacheService:
             
             if cached_translation:
                 logger.info(f"Перевод найден в кэше для текста: {text[:50]}...")
+                if self.default_ttl:
+                    try:
+                        await self.redis.expire(key, self.default_ttl)
+                    except Exception as ttl_error:
+                        logger.warning(f"Не удалось обновить TTL для ключа {key}: {ttl_error}")
                 return cached_translation.decode('utf-8')
             
             return None
@@ -79,7 +92,7 @@ class CacheService:
             logger.error(f"Ошибка получения из кэша: {e}")
             return None
     
-    async def set_translation(self, text: str, translation: str, source_lang: str = "zh", target_lang: str = "ru", ttl: int = 86400):
+    async def set_translation(self, text: str, translation: str, source_lang: str = "zh", target_lang: str = "ru", ttl: Optional[int] = None):
         """
         Сохраняет перевод в кэш
         
@@ -95,7 +108,11 @@ class CacheService:
         
         try:
             key = self._generate_key(text, source_lang, target_lang)
-            await self.redis.set(key, translation, ex=ttl)
+            ttl_to_use = ttl if ttl is not None else self.default_ttl
+            if ttl_to_use:
+                await self.redis.set(key, translation, ex=ttl_to_use)
+            else:
+                await self.redis.set(key, translation)
             logger.info(f"Перевод сохранен в кэш для текста: {text[:50]}...")
         except Exception as e:
             logger.error(f"Ошибка сохранения в кэш: {e}")
@@ -120,19 +137,27 @@ class CacheService:
             cached_translations = await self.redis.mget(keys)
             
             result = []
+            keys_to_refresh = []
             for i, cached in enumerate(cached_translations):
                 if cached:
                     result.append(cached.decode('utf-8'))
                     logger.info(f"Перевод найден в кэше для текста: {texts[i][:50]}...")
+                    keys_to_refresh.append(keys[i])
                 else:
                     result.append(None)
+            
+            if keys_to_refresh and self.default_ttl:
+                pipe = self.redis.pipeline()
+                for key in keys_to_refresh:
+                    pipe.expire(key, self.default_ttl)
+                await pipe.execute()
             
             return result
         except Exception as e:
             logger.error(f"Ошибка получения батча из кэша: {e}")
             return [None] * len(texts)
     
-    async def set_batch_translations(self, texts: List[str], translations: List[str], source_lang: str = "zh", target_lang: str = "ru", ttl: int = 86400):
+    async def set_batch_translations(self, texts: List[str], translations: List[str], source_lang: str = "zh", target_lang: str = "ru", ttl: Optional[int] = None):
         """
         Сохраняет переводы для списка текстов в кэш
         
@@ -148,9 +173,13 @@ class CacheService:
         
         try:
             pipe = self.redis.pipeline()
+            ttl_to_use = ttl if ttl is not None else self.default_ttl
             for text, translation in zip(texts, translations):
                 key = self._generate_key(text, source_lang, target_lang)
-                pipe.set(key, translation, ex=ttl)
+                if ttl_to_use:
+                    pipe.set(key, translation, ex=ttl_to_use)
+                else:
+                    pipe.set(key, translation)
             
             await pipe.execute()
             logger.info(f"Сохранено {len(texts)} переводов в кэш")

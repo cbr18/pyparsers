@@ -116,11 +116,11 @@ services:
       - "5000"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "--timeout=5", "http://127.0.0.1:5000/health"]
       interval: 15s
-      timeout: 5s
+      timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 60s
     networks:
       - carcatch-network
     security_opt:
@@ -167,14 +167,99 @@ services:
       - .env
     environment:
       - DATAHUB_URL=http://datahub:8080
+      - ADMIN_SERVICE_URL=http://adminservice:8080
     expose:
-      - "8002"
+      - "8000"
     restart: unless-stopped
     depends_on:
       datahub:
         condition: service_started
+      adminservice:
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - carcatch-network
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+
+  # Admin PostgreSQL Database
+  admin-postgres:
+    image: postgres:17.5-alpine
+    container_name: carcatch-admin-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${ADMIN_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${ADMIN_POSTGRES_PASSWORD}
+      POSTGRES_DB: adminservice
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    expose:
+      - "5432"
+    volumes:
+      - carsparser_admin_pg_data:/var/lib/postgresql/data
+    networks:
+      - carcatch-network
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+
+  # Admin Service (.NET 8)
+  adminservice:
+    build:
+      context: ./adminservice/Adminservice
+      dockerfile: Dockerfile
+    container_name: carcatch-adminservice
+    env_file:
+      - .env
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:8080
+      - ADMIN_POSTGRES_HOST=admin-postgres
+      - ADMIN_POSTGRES_USER=${ADMIN_POSTGRES_USER}
+      - ADMIN_POSTGRES_PASSWORD=${ADMIN_POSTGRES_PASSWORD}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - ADMIN_BOT_INTERNAL_URL=http://adminbot:8000
+    expose:
+      - "8080"
+    depends_on:
+      admin-postgres:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    networks:
+      - carcatch-network
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+
+  # Admin Web (React)
+  adminweb:
+    build:
+      context: ./adminweb
+      dockerfile: Dockerfile
+    container_name: carcatch-adminweb
+    restart: unless-stopped
+    expose:
+      - "80"
+    depends_on:
+      adminservice:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/health"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -236,6 +321,8 @@ services:
         condition: service_started
       telegramapp:
         condition: service_healthy
+      adminweb:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:80/health"]
@@ -279,6 +366,8 @@ services:
 
 volumes:
   carsparser_pg_data:
+    driver: local
+  carsparser_admin_pg_data:
     driver: local
   nginx_cache:
     driver: local

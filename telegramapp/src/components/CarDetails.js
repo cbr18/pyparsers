@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { fetchCarByUUID } from '../services/api';
+import { fetchCarByUUID, createOrder } from '../services/api';
 import { getProxiedImageUrl } from '../utils/imageProxy';
 import './CarDetails.css';
 
@@ -62,46 +62,71 @@ const CarDetails = () => {
     window.open(tgUrl, '_blank');
   };
 
-  const handleLeadRequest = async () => {
-    try {
-      const tg = window.Telegram?.WebApp;
-      let username = 'Пользователь сайта';
+  const handleLeadRequest = () => {
+    const tg = window.Telegram?.WebApp;
+    alert('Заявка отправлена');
 
-      if (tg?.initDataUnsafe?.user) {
-        const user = tg.initDataUnsafe.user;
-        username = user.username ? `@${user.username}` : 
-                   user.first_name ? user.first_name : 
-                   'Пользователь сайта';
-      } else if (tg?.initData) {
-        try {
-          const params = new URLSearchParams(tg.initData);
-          const userParam = params.get('user');
-          if (userParam) {
-            const user = JSON.parse(decodeURIComponent(userParam));
-            username = user.username ? `@${user.username}` : 
-                       user.first_name ? user.first_name : 
-                       'Пользователь сайта';
-          }
-        } catch (e) {
-          console.log('Could not parse user data:', e);
+    let username = 'Пользователь сайта';
+
+    let chatId = null;
+
+    if (tg?.initDataUnsafe?.user) {
+      const user = tg.initDataUnsafe.user;
+      username = user.username ? `@${user.username}` : 
+                 user.first_name ? user.first_name : 
+                 'Пользователь сайта';
+      chatId = user.id ?? null;
+    } else if (tg?.initData) {
+      try {
+        const params = new URLSearchParams(tg.initData);
+        const userParam = params.get('user');
+        if (userParam) {
+          const user = JSON.parse(decodeURIComponent(userParam));
+          username = user.username ? `@${user.username}` : 
+                     user.first_name ? user.first_name : 
+                     'Пользователь сайта';
+          chatId = user.id ?? null;
         }
+      } catch (e) {
+        console.log('Could not parse user data:', e);
       }
-
-      const response = await fetch('/admin-lead', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ car, user: username })
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
-      }
-
-      alert('Заявка успешно отправлена! Администратор свяжется с вами в ближайшее время.');
-    } catch (error) {
-      console.error('Error sending lead request:', error);
-      alert('Ошибка при отправке заявки. Попробуйте позже или свяжитесь с нами напрямую.');
     }
+
+    createOrder({
+      carUuid: car?.uuid || uuid,
+      clientTelegramId: username,
+      clientChatId: chatId,
+      car
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+
+        const title = car?.title || car?.car_name || 'Без названия';
+        const brand = car?.brand_name || car?.brand || '';
+        const model = car?.car_name || car?.model || '';
+        const image = car?.image || null;
+
+        tg?.sendData?.(JSON.stringify({
+          type: 'order_success',
+          car: {
+            uuid: car?.uuid || uuid || '',
+            title,
+            brand,
+            model,
+            image
+          }
+        }));
+      })
+      .catch((error) => {
+        console.error('Error sending lead request:', error);
+        tg?.showPopup?.({
+          title: 'Ошибка',
+          message: 'Не удалось отправить заявку. Попробуйте позже.',
+          buttons: [{ type: 'ok', text: 'Ок' }]
+        });
+      });
   };
 
   if (loading) {

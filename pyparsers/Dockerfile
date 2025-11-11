@@ -1,8 +1,15 @@
-FROM python:3.11-slim
+FROM python:3.13-slim
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    PATH="/app/.venv/bin:${PATH}"
 
 WORKDIR /app
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir fastapi uvicorn[standard] requests aiohttp beautifulsoup4 selenium playwright pydantic googletrans==4.0.2
 
 # Install Chromium browser and chromedriver with needed system deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -12,9 +19,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrandr2 libgbm1 libglib2.0-0 libgtk-3-0 libpango-1.0-0 libxshmfence1 \
     && rm -rf /var/lib/apt/lists/*
 
-ENV CHROME_BIN=/usr/bin/chromium
-ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
 
 COPY . .
 
-CMD ["uvicorn", "async_api_server:app", "--host", "0.0.0.0", "--port", "5000", "--reload", "--timeout-keep-alive", "3600"]
+ENV CHROME_BIN=/usr/bin/chromium
+ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
+
+EXPOSE 5000
+
+CMD ["uvicorn", "async_api_server:app", "--host", "0.0.0.0", "--port", "5000", "--timeout-keep-alive", "3600"]

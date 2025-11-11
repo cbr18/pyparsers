@@ -1,4 +1,5 @@
 import os
+import json
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request
@@ -48,6 +49,55 @@ async def handle_begin(message: Message):
     )
 
 
+@dispatcher.message(F.web_app_data)
+async def handle_web_app_data(message: Message):
+    data = message.web_app_data.data if message.web_app_data else None
+    if not data:
+        await message.answer("Не удалось обработать данные мини‑приложения.")
+        return
+
+    try:
+        payload = json.loads(data)
+    except json.JSONDecodeError:
+        await message.answer("Получены некорректные данные мини‑приложения.")
+        return
+
+    if payload.get("type") != "order_success":
+        return
+
+    car_payload = payload.get("car") or {}
+    title = car_payload.get("title") or car_payload.get("car_name") or car_payload.get("model") or "Без названия"
+    brand = car_payload.get("brand") or car_payload.get("brand_name")
+    model = car_payload.get("model") or car_payload.get("car_name")
+    price = car_payload.get("price")
+    city = car_payload.get("city")
+    image_url = car_payload.get("image")
+
+    lines = [f"✅ Заявка по машине «{title}» успешно отправлена."]
+    if brand or model:
+        lines.append("")
+        if brand:
+            lines.append(f"Марка: {brand}")
+        if model:
+            lines.append(f"Модель: {model}")
+    if price:
+        lines.append(f"Цена: {price}")
+    if city:
+        lines.append(f"Город: {city}")
+    lines.append("")
+    lines.append("Мы свяжемся с вами в ближайшее время.")
+
+    message_text = "\n".join(lines)
+
+    try:
+        if image_url:
+            await message.answer_photo(photo=image_url, caption=message_text)
+        else:
+            await message.answer(message_text)
+    except Exception:
+        await message.answer("Заявка отправлена! Мы свяжемся с вами в ближайшее время.")
+
+
 # --- API Schemas ---
 class CarPayload(BaseModel):
     brand_name: Optional[str] = None
@@ -61,6 +111,12 @@ class CarPayload(BaseModel):
 class LeadRequest(BaseModel):
     car: CarPayload
     user: Optional[str] = None
+
+
+class NotifyUserRequest(BaseModel):
+    chatId: int
+    message: str
+    imageUrl: Optional[str] = None
 
 
 # --- Service Endpoints ---
@@ -103,6 +159,25 @@ async def lead(payload: LeadRequest):
         return {"ok": True}
     except Exception as exc:
         # Mirror Node.js behavior with 500 on send failure
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/notify-user")
+async def notify_user(payload: NotifyUserRequest):
+    try:
+        if payload.imageUrl:
+            await bot.send_photo(
+                chat_id=payload.chatId,
+                photo=payload.imageUrl,
+                caption=payload.message
+            )
+        else:
+            await bot.send_message(
+                chat_id=payload.chatId,
+                text=payload.message
+            )
+        return {"ok": True}
+    except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

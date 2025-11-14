@@ -892,8 +892,22 @@ class DongchediParser(BaseCarParser):
             if hasattr(car_obj, field):
                 setattr(car_obj, field, value)
         
-        # Устанавливаем флаги
-        car_obj.has_details = True
-        car_obj.last_detail_update = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Проверяем, что хотя бы power был успешно распарсен
+        # power может быть из detail_car или из specs
+        power_value = None
+        if hasattr(car_obj, 'power'):
+            power_value = getattr(car_obj, 'power')
+        
+        # Проверяем, что power не None и не пустая строка
+        has_power = power_value is not None and str(power_value).strip() != ''
+        
+        # Устанавливаем флаги только если power был успешно распарсен
+        if has_power:
+            car_obj.has_details = True
+            car_obj.last_detail_update = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        else:
+            # Если power не был распарсен, оставляем has_details = False
+            car_obj.has_details = False
+            # Не обновляем last_detail_update, если парсинг не удался
         
         return car_obj

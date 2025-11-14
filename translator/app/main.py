@@ -43,6 +43,15 @@ async def lifespan(app: FastAPI):
         folder_id = os.getenv("YANDEX_FOLDER_ID")
         redis_host = os.getenv("REDIS_HOST", "redis")
         redis_port = os.getenv("REDIS_PORT", "6379")
+        max_concurrent_env = os.getenv("TRANSLATOR_MAX_CONCURRENT_BATCHES")
+        try:
+            max_concurrent_batches = int(max_concurrent_env) if max_concurrent_env else 3
+        except (TypeError, ValueError):
+            logger.warning(
+                "Некорректное значение TRANSLATOR_MAX_CONCURRENT_BATCHES: %s. Используется значение по умолчанию.",
+                max_concurrent_env,
+            )
+            max_concurrent_batches = 3
         
         if not api_key or not folder_id:
             raise ValueError("Не указаны YANDEX_API_KEY или YANDEX_FOLDER_ID в переменных окружения")
@@ -52,7 +61,12 @@ async def lifespan(app: FastAPI):
         await cache_service.connect()
         
         # Инициализируем сервис переводчика
-        translator_service = TranslatorService(api_key, folder_id, cache_service)
+        translator_service = TranslatorService(
+            api_key,
+            folder_id,
+            cache_service,
+            max_concurrent_batches=max_concurrent_batches,
+        )
         
         # Сервисы доступны через глобальные переменные модуля
         

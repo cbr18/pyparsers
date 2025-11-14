@@ -4,6 +4,7 @@ import { useAuth } from './contexts/AuthContext'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
+import CarDetailsPage from './pages/CarDetails'
 import './App.css'
 
 function ProtectedRoute({ children }) {
@@ -37,6 +38,22 @@ function App() {
               <Dashboard />
             </ProtectedRoute>
           } 
+        />
+        <Route
+          path="/cars"
+          element={
+            <ProtectedRoute>
+              <CarDetailsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/cars/:uuid"
+          element={
+            <ProtectedRoute>
+              <CarDetailsPage />
+            </ProtectedRoute>
+          }
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

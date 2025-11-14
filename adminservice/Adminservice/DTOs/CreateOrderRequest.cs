@@ -14,7 +14,8 @@ public class CreateOrderRequest
 
     public long? ClientChatId { get; set; }
 
-    public Guid? TgIdId { get; set; }
+    [MaxLength(50)]
+    public string? TgId { get; set; }
 
     public JsonElement? Car { get; set; }
 }

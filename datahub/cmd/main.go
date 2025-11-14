@@ -18,6 +18,7 @@ package main
 import (
 	"log"
 	"os"
+	"strings"
 
 	_ "datahub/docs"
 
@@ -41,7 +42,7 @@ func main() {
 	apiBaseURL := os.Getenv("API_BASE_URL")
 	translatorURL := os.Getenv("TRANSLATOR_URL")
 	translationEnabled := os.Getenv("TRANSLATION_ENABLED") == "true"
-	
+
 	log.Printf("API_BASE_URL: '%s'", apiBaseURL)
 	log.Printf("TRANSLATOR_URL: '%s'", translatorURL)
 	log.Printf("TRANSLATION_ENABLED: %t", translationEnabled)
@@ -72,19 +73,24 @@ func main() {
 
 	dongchediClient := external.NewDongchediClient(apiBaseURL)
 	che168Client := external.NewChe168Client(apiBaseURL)
-    pyparsersClient := external.NewPyparsersClient(apiBaseURL)
-    
-    // Инициализация сервиса перевода
-    var translationService *usecase.TranslationService
-    if translationEnabled && translatorURL != "" {
-        translatorClient := external.NewTranslatorClient(translatorURL)
-        translationService = usecase.NewTranslationService(translatorClient, true)
-        log.Printf("Translation service initialized with URL: %s", translatorURL)
-    } else {
-        translationService = usecase.NewTranslationService(nil, false)
-        log.Printf("Translation service disabled")
-    }
-    
+	pyparsersClient := external.NewPyparsersClient(apiBaseURL)
+
+	// Инициализация сервиса перевода
+	var translationService *usecase.TranslationService
+	brandsCSVPath := os.Getenv("TRANSLATION_BRANDS_CSV_PATH")
+	if brandsCSVPath == "" {
+		brandsCSVPath = "./resources/brands.csv"
+	}
+
+	if translationEnabled && translatorURL != "" {
+		translatorClient := external.NewTranslatorClient(translatorURL)
+		translationService = usecase.NewTranslationService(translatorClient, true, brandsCSVPath)
+		log.Printf("Translation service initialized with URL: %s", translatorURL)
+	} else {
+		translationService = usecase.NewTranslationService(nil, false, brandsCSVPath)
+		log.Printf("Translation service disabled")
+	}
+
 	updateService := map[string]*usecase.UpdateService{
 		"dongchedi": usecase.NewUpdateServiceWithTranslation(repo, dongchediClient, "dongchedi", translationService),
 		"che168":    usecase.NewUpdateServiceWithTranslation(repo, che168Client, "che168", translationService),
@@ -92,10 +98,27 @@ func main() {
 
 	// Инициализация воркера для улучшения машин
 	enhancementWorker := usecase.NewEnhancementWorker(repo, dongchediClient, che168Client, translationService)
-	
-	// Запускаем воркер в фоне
-	enhancementWorker.Start()
-	log.Println("Enhancement worker started in background")
+
+	autoStartWorker := true
+	if raw := strings.TrimSpace(os.Getenv("ENHANCEMENT_WORKER_AUTO_START")); raw != "" {
+		autoStartWorker = true
+		switch strings.ToLower(raw) {
+		case "false", "0", "off", "no":
+			autoStartWorker = false
+		}
+	}
+
+	if autoStartWorker {
+		enhancementWorker.Start()
+		log.Println("Enhancement worker auto-started")
+		defer func() {
+			if enhancementWorker.IsRunning() {
+				enhancementWorker.Stop()
+			}
+		}()
+	} else {
+		log.Println("Enhancement worker auto-start disabled; use /enhancement/start to run manually")
+	}
 
 	handler := httpdelivery.NewHandler(carService, updateService, brandService, taskService, pyparsersClient, enhancementWorker)
 	router := httpdelivery.NewRouter(handler)

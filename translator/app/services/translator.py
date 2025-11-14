@@ -14,13 +14,22 @@ logger = logging.getLogger(__name__)
 class TranslatorService:
     """Сервис для перевода текстов через Yandex Translate API"""
     
-    def __init__(self, api_key: str, folder_id: str, cache_service: CacheService):
+    def __init__(
+        self,
+        api_key: str,
+        folder_id: str,
+        cache_service: CacheService,
+        *,
+        max_concurrent_batches: int = 3,
+    ):
         self.api_key = api_key
         self.folder_id = folder_id
         self.cache_service = cache_service
         self.base_url = "https://translate.api.cloud.yandex.net/translate/v2/translate"
         self.max_retries = 3
         self.retry_delay = 1.0
+        self.max_concurrent_batches = max(1, max_concurrent_batches)
+        self._numeric_allowed_chars = set("0123456789.,:;+-–—/\\%()[]{}° ")
         
     async def _make_api_request(self, texts: List[str], source_lang: str = "zh", target_lang: str = "ru") -> List[str]:
         """
@@ -98,6 +107,9 @@ class TranslatorService:
         """
         if not text.strip():
             return text
+
+        if self._is_numeric_only(text):
+            return text
         
         # Проверяем кэш
         cached_translation = await self.cache_service.get_translation(text, source_lang, target_lang)
@@ -133,6 +145,8 @@ class TranslatorService:
         if not non_empty_texts:
             return [""] * len(texts)
         
+        numeric_texts = {text for text in non_empty_texts if self._is_numeric_only(text)}
+        
         # Проверяем кэш для всех текстов
         cached_translations = await self.cache_service.get_batch_translations(non_empty_texts, source_lang, target_lang)
         
@@ -140,7 +154,11 @@ class TranslatorService:
         texts_to_translate = []
         translation_map = {}
         
-        for i, (text, cached) in enumerate(zip(non_empty_texts, cached_translations)):
+        for text, cached in zip(non_empty_texts, cached_translations):
+            if text in numeric_texts:
+                translation_map[text] = text
+                continue
+
             if cached:
                 translation_map[text] = cached
             else:
@@ -148,24 +166,26 @@ class TranslatorService:
         
         # Переводим оставшиеся тексты батчами
         if texts_to_translate:
-            all_translations = []
-            
-            for batch in batch_items(texts_to_translate, 10):
-                try:
-                    batch_translations = await self._make_api_request(batch, source_lang, target_lang)
-                    all_translations.extend(batch_translations)
-                    
-                    # Сохраняем в кэш
-                    await self.cache_service.set_batch_translations(batch, batch_translations, source_lang, target_lang)
-                    
-                except Exception as e:
-                    logger.error(f"Ошибка перевода батча: {e}")
-                    # В случае ошибки возвращаем исходные тексты
-                    all_translations.extend(batch)
-            
-            # Добавляем новые переводы в карту
-            for text, translation in zip(texts_to_translate, all_translations):
-                translation_map[text] = translation
+            batches = [batch for batch in batch_items(texts_to_translate, 10)]
+            semaphore = asyncio.Semaphore(self.max_concurrent_batches)
+
+            async def process_batch(batch: List[str]) -> List[str]:
+                async with semaphore:
+                    translations = await self._make_api_request(batch, source_lang, target_lang)
+                await self.cache_service.set_batch_translations(batch, translations, source_lang, target_lang)
+                return translations
+
+            tasks = [process_batch(batch) for batch in batches]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for batch, result in zip(batches, results):
+                if isinstance(result, Exception):
+                    logger.error(f"Ошибка перевода батча: {result}")
+                    for text in batch:
+                        translation_map[text] = text
+                else:
+                    for text, translation in zip(batch, result):
+                        translation_map[text] = translation
         
         # Формируем результат в том же порядке
         result = []
@@ -245,3 +265,21 @@ class TranslatorService:
             "api_key_configured": bool(self.api_key),
             "folder_id_configured": bool(self.folder_id)
         }
+
+    def _is_numeric_only(self, text: str) -> bool:
+        if not text:
+            return False
+
+        stripped = text.strip()
+        if not stripped:
+            return False
+
+        has_digit = False
+        for char in stripped:
+            if char.isdigit():
+                has_digit = True
+                continue
+            if char not in self._numeric_allowed_chars:
+                return False
+
+        return has_digit

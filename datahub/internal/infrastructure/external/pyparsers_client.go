@@ -30,7 +30,7 @@ func NewPyparsersClient(baseURL string) *PyparsersClient {
 	return &PyparsersClient{
 		baseURL: baseURL,
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second, // Короткий таймаут для создания задачи
+			Timeout: 60 * time.Second,
 		},
 	}
 }

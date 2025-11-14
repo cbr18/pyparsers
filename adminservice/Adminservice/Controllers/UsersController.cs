@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -53,14 +54,42 @@ public class UsersController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<List<UserDto>>> GetUsers()
+    public async Task<ActionResult<PagedResult<UserDto>>> GetUsers(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20)
     {
-        var users = await _context.Users
-            .OrderByDescending(u => u.CreatedAt)
+        const int maxPageSize = 100;
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, maxPageSize);
+
+        var query = _context.Users
+            .AsNoTracking()
+            .OrderByDescending(u => u.CreatedAt);
+
+        var totalCount = await query.CountAsync();
+        var totalPages = totalCount == 0
+            ? 0
+            : (int)Math.Ceiling(totalCount / (double)pageSize);
+
+        if (totalCount == 0)
+        {
+            page = 1;
+        }
+        else if (page > totalPages)
+        {
+            page = totalPages;
+        }
+
+        var skip = (page - 1) * pageSize;
+
+        var items = await query
+            .Skip(skip)
+            .Take(pageSize)
             .Select(u => ToDto(u))
             .ToListAsync();
 
-        return Ok(users);
+        var result = new PagedResult<UserDto>(items, page, pageSize, totalCount);
+        return Ok(result);
     }
 
     [HttpGet("{id}")]

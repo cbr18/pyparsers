@@ -7,6 +7,7 @@ import (
 	"datahub/internal/repository"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -35,10 +36,10 @@ func NewEnhancementWorker(repo repository.CarRepository, dongchediClient *extern
 		che168Client:       che168Client,
 		translationService: translationService,
 		stopChan:           make(chan struct{}),
-		batchSize:          10,  // Обрабатываем по 10 машин за раз
+		batchSize:           10,               // Обрабатываем по 10 машин за раз
 		delayBetweenBatches: 5 * time.Minute,  // Пауза между батчами
-		delayBetweenCars:   2 * time.Second,    // Пауза между машинами
-		maxConcurrent:      3,                   // Максимум 3 одновременных запроса
+		delayBetweenCars:    2 * time.Second,  // Пауза между машинами
+		maxConcurrent:       7,                // Максимум 7 одновременных запросов
 	}
 }
 
@@ -66,9 +67,10 @@ func (w *EnhancementWorker) Stop() {
 		return
 	}
 	w.isRunning = false
+	close(w.stopChan)
+	w.stopChan = make(chan struct{})
 	w.mu.Unlock()
 
-	close(w.stopChan)
 	log.Println("Enhancement worker stopped")
 }
 
@@ -81,25 +83,46 @@ func (w *EnhancementWorker) IsRunning() bool {
 
 // run — основной цикл воркера
 func (w *EnhancementWorker) run() {
-	ticker := time.NewTicker(w.delayBetweenBatches)
-	defer ticker.Stop()
-
-	// Запускаем первую обработку сразу
-	w.processBatch(context.Background())
-
 	for {
 		select {
 		case <-w.stopChan:
 			log.Println("Enhancement worker received stop signal")
 			return
-		case <-ticker.C:
-			w.processBatch(context.Background())
+		default:
+			// Обрабатываем батч
+			carsFound, carsProcessed := w.processBatch(context.Background())
+			
+			if carsFound == 0 {
+				// Машин не было - делаем длинную паузу перед следующей проверкой
+				log.Println("No cars found, waiting before next check...")
+				select {
+				case <-w.stopChan:
+					log.Println("Enhancement worker received stop signal")
+					return
+				case <-time.After(w.delayBetweenBatches):
+					// Продолжаем цикл после паузы
+				}
+			} else if carsProcessed == 0 {
+				// Машины были, но все не обработались (возможны временные ошибки)
+				// Делаем короткую паузу и повторяем
+				log.Println("Cars found but none processed (possible service errors), retrying soon...")
+				select {
+				case <-w.stopChan:
+					log.Println("Enhancement worker received stop signal")
+					return
+				case <-time.After(30 * time.Second):
+					// Короткая пауза перед повторной попыткой
+				}
+			} else {
+				// Машины были обработаны - сразу переходим к следующему батчу
+			}
 		}
 	}
 }
 
 // processBatch — обрабатывает один батч машин без деталей
-func (w *EnhancementWorker) processBatch(ctx context.Context) {
+// Возвращает (количество найденных машин, количество успешно обработанных машин)
+func (w *EnhancementWorker) processBatch(ctx context.Context) (int, int) {
 	log.Println("Starting enhancement batch processing...")
 
 	// Получаем машины без детальной информации для всех источников
@@ -117,7 +140,7 @@ func (w *EnhancementWorker) processBatch(ctx context.Context) {
 
 	if len(allCars) == 0 {
 		log.Println("No cars without details found")
-		return
+		return 0, 0
 	}
 
 	log.Printf("Found %d cars without details, processing...", len(allCars))
@@ -155,6 +178,7 @@ func (w *EnhancementWorker) processBatch(ctx context.Context) {
 
 	wg.Wait()
 	log.Printf("Batch processing completed: enhanced %d out of %d cars", enhancedCount, len(allCars))
+	return len(allCars), enhancedCount
 }
 
 // enhanceSingleCar — улучшает одну машину
@@ -193,8 +217,21 @@ func (w *EnhancementWorker) enhanceSingleCar(ctx context.Context, car domain.Car
 	enhancedCar.UUID = car.UUID
 	enhancedCar.CreatedAt = car.CreatedAt
 	enhancedCar.UpdatedAt = time.Now()
-	enhancedCar.HasDetails = true
-	enhancedCar.LastDetailUpdate = time.Now()
+	// Сохраняем mybrand_id из оригинальной машины, чтобы не потерять связь с брендом
+	enhancedCar.MybrandID = car.MybrandID
+	
+	// Проверяем, что power был успешно распарсен перед установкой has_details
+	// Это дополнительная проверка на случай, если парсер вернул данные без power
+	hasPower := enhancedCar.Power != "" && strings.TrimSpace(enhancedCar.Power) != ""
+	if hasPower {
+		enhancedCar.HasDetails = true
+		enhancedCar.LastDetailUpdate = time.Now()
+	} else {
+		// Если power не был распарсен, не устанавливаем has_details
+		enhancedCar.HasDetails = false
+		// Не обновляем last_detail_update, если парсинг не удался
+		log.Printf("Car %s: power not parsed, keeping has_details=false", car.UUID)
+	}
 
 	// Переводим данные если сервис перевода доступен
 	if w.translationService != nil && w.translationService.IsEnabled() {

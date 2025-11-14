@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -34,21 +36,52 @@ public class OrdersController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<OrderDto>>> GetOrders()
+    public async Task<ActionResult<PagedResult<OrderDto>>> GetOrders(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20)
     {
-        var orders = await _context.Orders
-            .Include(o => o.TgId)
-            .OrderByDescending(o => o.CreatedAt)
+        const int maxPageSize = 100;
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, maxPageSize);
+
+        var query = _context.Orders
+            .AsNoTracking()
+            .OrderByDescending(o => o.CreatedAt);
+
+        var totalCount = await query.CountAsync();
+        var totalPages = totalCount == 0
+            ? 0
+            : (int)Math.Ceiling(totalCount / (double)pageSize);
+
+        if (totalCount == 0)
+        {
+            page = 1;
+        }
+        else if (page > totalPages)
+        {
+            page = totalPages;
+        }
+
+        var skip = (page - 1) * pageSize;
+
+        var orders = await query
+            .Skip(skip)
+            .Take(pageSize)
             .ToListAsync();
 
-        return Ok(orders.Select(OrderDto.FromEntity));
+        var items = orders
+            .Select(OrderDto.FromEntity)
+            .ToList();
+
+        var result = new PagedResult<OrderDto>(items, page, pageSize, totalCount);
+        return Ok(result);
     }
 
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<OrderDto>> GetOrder(Guid id)
     {
         var order = await _context.Orders
-            .Include(o => o.TgId)
+            .AsNoTracking()
             .FirstOrDefaultAsync(o => o.Id == id);
 
         if (order == null)
@@ -63,20 +96,12 @@ public class OrdersController : ControllerBase
     [AllowAnonymous]
     public async Task<ActionResult<OrderDto>> CreateOrder([FromBody] CreateOrderRequest request)
     {
-        if (request.TgIdId.HasValue)
-        {
-            var exists = await _context.TgIds.AnyAsync(t => t.Id == request.TgIdId);
-            if (!exists)
-            {
-                return BadRequest(new { message = "Specified TgIdId does not exist" });
-            }
-        }
-
         var order = new Order
         {
             CarUuid = request.CarUuid,
             ClientTelegramId = request.ClientTelegramId,
-            TgIdId = request.TgIdId,
+            ClientChatId = request.ClientChatId,
+            TgId = string.IsNullOrWhiteSpace(request.TgId) ? request.ClientTelegramId : request.TgId,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };
@@ -84,12 +109,12 @@ public class OrdersController : ControllerBase
         _context.Orders.Add(order);
         await _context.SaveChangesAsync();
 
-        await _context.Entry(order).Reference(o => o.TgId).LoadAsync();
-
         var carPayload = BuildCarPayload(request, order);
-        var userLabel = string.IsNullOrWhiteSpace(request.ClientTelegramId)
-            ? "Не указан"
-            : request.ClientTelegramId;
+        var userLabel = !string.IsNullOrWhiteSpace(order.TgId)
+            ? order.TgId!
+            : (string.IsNullOrWhiteSpace(request.ClientTelegramId)
+                ? "Не указан"
+                : request.ClientTelegramId);
 
         await NotifyAdminBotAsync(order, carPayload, userLabel);
         await NotifyTelegramBotUserAsync(order, carPayload, request.ClientChatId);

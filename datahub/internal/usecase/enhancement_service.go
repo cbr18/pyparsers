@@ -121,6 +121,8 @@ func (s *EnhancementService) enhanceSingleCar(ctx context.Context, car domain.Ca
 	enhancedCar.UUID = car.UUID
 	enhancedCar.CreatedAt = car.CreatedAt
 	enhancedCar.UpdatedAt = time.Now()
+	// Сохраняем mybrand_id из оригинальной машины, чтобы не потерять связь с брендом
+	enhancedCar.MybrandID = car.MybrandID
 
 	return enhancedCar, nil
 }

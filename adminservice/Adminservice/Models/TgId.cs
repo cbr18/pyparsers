@@ -18,5 +18,4 @@ public class TgId : BaseRecord
     public bool IsActive { get; set; } = true;
 
     public virtual ICollection<User> Users { get; set; } = new List<User>();
-    public virtual ICollection<Order> Orders { get; set; } = new List<Order>();
 } 

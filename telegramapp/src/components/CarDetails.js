@@ -96,6 +96,7 @@ const CarDetails = () => {
       carUuid: car?.uuid || uuid,
       clientTelegramId: username,
       clientChatId: chatId,
+      tgId: username,
       car
     })
       .then((response) => {

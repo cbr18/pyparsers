@@ -62,6 +62,8 @@ services:
     expose:
       - "6379"
     restart: unless-stopped
+    volumes:
+      - carcatch_redis_data:/data
     networks:
       - carcatch-network
     security_opt:
@@ -368,6 +370,8 @@ volumes:
   carsparser_pg_data:
     driver: local
   carsparser_admin_pg_data:
+    driver: local
+  carcatch_redis_data:
     driver: local
   nginx_cache:
     driver: local

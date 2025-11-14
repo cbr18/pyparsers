@@ -77,7 +77,7 @@ export const createOrder = async ({
   clientTelegramId = '',
   clientChatId = null,
   car = null,
-  tgIdId = null
+  tgId = ''
 }) => {
   try {
     const response = await fetch('/api/admin-service/orders', {
@@ -87,7 +87,7 @@ export const createOrder = async ({
         carUuid,
         clientTelegramId,
         clientChatId,
-        tgIdId,
+        tgId,
         car
       })
     })

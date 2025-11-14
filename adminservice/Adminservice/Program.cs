@@ -1,6 +1,7 @@
 using System.Text;
 using System.Linq;
 using System.Data;
+using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -27,6 +28,18 @@ builder.Services.AddDbContext<AdminDbContext>(options =>
 // Services
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddHttpClient();
+
+builder.Services.AddHttpClient<IDatahubUpdateService, DatahubUpdateService>((sp, client) =>
+{
+    var configuration = sp.GetRequiredService<IConfiguration>();
+    var baseUrlRaw = configuration["DataHub:BaseUrl"]
+                     ?? Environment.GetEnvironmentVariable("DATAHUB_URL")
+                     ?? "http://datahub:8080";
+
+    var sanitized = SanitizeBaseUrl(baseUrlRaw);
+    client.BaseAddress = new Uri(sanitized);
+    client.Timeout = TimeSpan.FromSeconds(120);
+});
 
 // Controllers with JSON options (camelCase)
 builder.Services.AddControllers()
@@ -229,16 +242,54 @@ using (var scope = app.Services.CreateScope())
                         id uuid PRIMARY KEY,
                         car_uuid varchar(64) NOT NULL,
                         client_telegram_id varchar(100),
-                        tg_id_id uuid NULL,
+                        client_chat_id bigint,
+                        tg_id varchar(50),
                         created_at timestamp without time zone NOT NULL,
                         updated_at timestamp without time zone NOT NULL,
                         created_by varchar(255),
-                        updated_by varchar(255),
-                        CONSTRAINT fk_orders_tg_ids FOREIGN KEY (tg_id_id) REFERENCES tg_ids(id) ON DELETE SET NULL
+                        updated_by varchar(255)
                     );
                     """;
                 createOrders.ExecuteNonQuery();
             }
+            else
+            {
+                using var dropConstraints = connection.CreateCommand();
+                dropConstraints.CommandText = """
+                    DO $$
+                    DECLARE constraint_rec RECORD;
+                    BEGIN
+                        FOR constraint_rec IN (
+                            SELECT constraint_name
+                            FROM information_schema.constraint_column_usage
+                            WHERE table_schema = 'public'
+                              AND table_name = 'orders'
+                              AND column_name = 'tg_id_id'
+                        )
+                        LOOP
+                            EXECUTE format('ALTER TABLE orders DROP CONSTRAINT IF EXISTS %I;', constraint_rec.constraint_name);
+                        END LOOP;
+                    END $$;
+                    """;
+                dropConstraints.ExecuteNonQuery();
+
+                using var dropIndex = connection.CreateCommand();
+                dropIndex.CommandText = "DROP INDEX IF EXISTS ix_orders_tg_id_id;";
+                dropIndex.ExecuteNonQuery();
+
+                using var dropColumn = connection.CreateCommand();
+                dropColumn.CommandText = "ALTER TABLE orders DROP COLUMN IF EXISTS tg_id_id;";
+                dropColumn.ExecuteNonQuery();
+            }
+
+            using var ensureChatIdColumn = connection.CreateCommand();
+            ensureChatIdColumn.CommandText = "ALTER TABLE orders ADD COLUMN IF NOT EXISTS client_chat_id BIGINT;";
+            ensureChatIdColumn.ExecuteNonQuery();
+
+            using var ensureTgIdColumn = connection.CreateCommand();
+            ensureTgIdColumn.CommandText = "ALTER TABLE orders ADD COLUMN IF NOT EXISTS tg_id VARCHAR(50);";
+            ensureTgIdColumn.ExecuteNonQuery();
+
         }
 
         using (var indexCommand = connection.CreateCommand())
@@ -285,6 +336,38 @@ app.MapControllers();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
 
 app.Run();
+
+static string SanitizeBaseUrl(string input)
+{
+    if (string.IsNullOrWhiteSpace(input))
+    {
+        return "http://datahub:8080";
+    }
+
+    var value = input.Trim().Trim('"', '\'')
+        .Replace("\\", string.Empty)
+        .Replace(Environment.NewLine, string.Empty)
+        .Replace("\r", string.Empty)
+        .Replace("\n", string.Empty);
+
+    while (value.StartsWith("//", StringComparison.Ordinal))
+    {
+        value = value[1..];
+    }
+
+    if (!value.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+        !value.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+    {
+        value = $"http://{value.TrimStart('/')}";
+    }
+
+    if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
+    {
+        return "http://datahub:8080";
+    }
+
+    return uri.ToString().TrimEnd('/');
+}
 
 
 

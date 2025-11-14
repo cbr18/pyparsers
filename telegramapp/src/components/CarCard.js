@@ -88,6 +88,7 @@ const handleLeadRequest = (e) => {
     carUuid: car?.uuid || car?.id,
     clientTelegramId: username,
     clientChatId: chatId,
+    tgId: username,
     car
   })
     .then((response) => {

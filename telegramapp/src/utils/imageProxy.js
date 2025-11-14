@@ -10,7 +10,6 @@ const PROBLEMATIC_DOMAINS = [
   'img.autoimg.cn',
   'pic.autoimg.cn',
   '2sc2.autoimg.cn',  // Добавлен поддомен из лога
-  'autohomecar',      // Добавлен домен autohomecar
   // Add other problematic domains here
 ];
 
@@ -77,8 +76,9 @@ export const getProxiedImageUrl = (originalUrl) => {
     return originalUrl;
   }
   
-  // Use query param form WITHOUT encoding (nginx expects a full URL)
-  return `/proxy-image?url=${originalUrl}`;
+  // Encode original URL so query params (e.g. x-signature) are preserved
+  const encodedUrl = encodeURIComponent(originalUrl);
+  return `/proxy-image?url=${encodedUrl}`;
 };
 
 /**

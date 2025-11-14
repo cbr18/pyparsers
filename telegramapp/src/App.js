@@ -5,6 +5,7 @@ import CarCard from './components/CarCard';
 import CarDetails from './components/CarDetails';
 import Filters from './components/Filters';
 import Pagination from './components/Pagination';
+import Footer from './components/Footer';
 import { fetchCars, fetchBrands } from './services/api';
 
 function App() {
@@ -108,85 +109,93 @@ function App() {
   }, []);
 
   return (
-    <Routes>
-      <Route path="/car/:uuid" element={<CarDetails />} />
-      <Route path="/" element={
-        <div className="app-container">
-          <header className="app-header">
-            <h1>Автомобили</h1>
-            <div className="header-actions">
-              <button
-                className="filter-button"
-                onClick={() => {
-                  setTempFilters({...filters});
-                  setShowFilters(!showFilters);
-                }}
-              >
-                {showFilters ? 'Скрыть фильтры' : 'Показать фильтры'}
-              </button>
-              <select
-                className="limit-select"
-                value={limit}
-                onChange={(e) => {
-                  setLimit(Number(e.target.value));
-                  setPage(1);
-                }}
-              >
-                <option value={5}>5 на странице</option>
-                <option value={10}>10 на странице</option>
-                <option value={20}>20 на странице</option>
-                <option value={50}>50 на странице</option>
-              </select>
-            </div>
-          </header>
+    <div className="app-root">
+      <main className="app-main">
+        <Routes>
+          <Route path="/car/:uuid" element={<CarDetails />} />
+          <Route
+            path="/"
+            element={
+              <div className="app-container">
+                <header className="app-header">
+                  <h1>Автомобили</h1>
+                  <div className="header-actions">
+                    <button
+                      className="filter-button"
+                      onClick={() => {
+                        setTempFilters({ ...filters });
+                        setShowFilters(!showFilters);
+                      }}
+                    >
+                      {showFilters ? 'Скрыть фильтры' : 'Показать фильтры'}
+                    </button>
+                    <select
+                      className="limit-select"
+                      value={limit}
+                      onChange={(e) => {
+                        setLimit(Number(e.target.value));
+                        setPage(1);
+                      }}
+                    >
+                      <option value={5}>5 на странице</option>
+                      <option value={10}>10 на странице</option>
+                      <option value={20}>20 на странице</option>
+                      <option value={50}>50 на странице</option>
+                    </select>
+                  </div>
+                </header>
 
-          {/* Filters panel */}
-          {showFilters && (
-            <Filters
-              tempFilters={tempFilters}
-              setTempFilters={setTempFilters}
-              applyFilters={applyFilters}
-              resetFilters={resetFilters}
-              sources={sources}
-              brands={brands}
-            />
-          )}
+                {/* Filters panel */}
+                {showFilters && (
+                  <Filters
+                    tempFilters={tempFilters}
+                    setTempFilters={setTempFilters}
+                    applyFilters={applyFilters}
+                    resetFilters={resetFilters}
+                    sources={sources}
+                    brands={brands}
+                  />
+                )}
 
-          {/* Error message */}
-          {error && <div className="error-message">{error}</div>}
+                {/* Error message */}
+                {error && <div className="error-message">{error}</div>}
 
-          {/* Loading indicator */}
-          {loading ? (
-            <div className="loader-container">
-              <div className="loader">Загрузка автомобилей...</div>
-            </div>
-          ) : (
-            <>
-              {/* Car list */}
-              {cars.length > 0 ? (
-                <div className="car-list">
-                  {cars.map((car) => (
-                    <CarCard key={car.uuid || car.id} car={car} />
-                  ))}
-                </div>
-              ) : (
-                <div className="no-results">Нет доступных автомобилей</div>
-              )}
+                {/* Loading indicator */}
+                {loading ? (
+                  <div className="loader-container">
+                    <div className="loader">Загрузка автомобилей...</div>
+                  </div>
+                ) : (
+                  <>
+                    {/* Car list */}
+                    {cars.length > 0 ? (
+                      <div className="car-list">
+                        {cars.map((car) => (
+                          <CarCard key={car.uuid || car.id} car={car} />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="no-results">Нет доступных автомобилей</div>
+                    )}
 
-              {/* Pagination */}
-              {total > 0 && (
-                <Pagination
-                  page={page}
-                  limit={limit}
-                  total={total}
-                  handlePageChange={handlePageChange}
-                />
-              )}
-            </>
-          )}
-        </div>
-      } />
-    </Routes>
+                    {/* Pagination */}
+                    {total > 0 && (
+                      <Pagination
+                        page={page}
+                        limit={limit}
+                        total={total}
+                        handlePageChange={handlePageChange}
+                      />
+                    )}
+                  </>
+                )}
+              </div>
+            }
+          />
+        </Routes>
+      </main>
+      <Footer />
+    </div>
   );
 }
 

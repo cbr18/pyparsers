@@ -17,38 +17,70 @@ function UsersTab() {
   const [editingUser, setEditingUser] = useState(null)
   const [formData, setFormData] = useState(initialFormState)
   const [submitting, setSubmitting] = useState(false)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
+  const [totalPages, setTotalPages] = useState(0)
+  const [totalCount, setTotalCount] = useState(0)
+  const [refreshKey, setRefreshKey] = useState(0)
 
   useEffect(() => {
-    const init = async () => {
+    let cancelled = false
+
+    const fetchUsers = async () => {
       setLoading(true)
       try {
-        await Promise.all([loadUsers(), loadTgIds()])
+        const response = await api.get('/users', {
+          params: { page, pageSize }
+        })
+
+        if (cancelled) {
+          return
+        }
+
+        const data = response.data || {}
+        setUsers(data.items || [])
+        setTotalCount(data.totalCount ?? 0)
+        setTotalPages(data.totalPages ?? 0)
+
+        if (typeof data.page === 'number' && data.page !== page) {
+          setPage(data.page || 1)
+        }
+
+        if (typeof data.pageSize === 'number' && data.pageSize !== pageSize) {
+          setPageSize(data.pageSize)
+        }
+
+        setError('')
+      } catch (err) {
+        if (!cancelled) {
+          setError('Не удалось загрузить пользователей: ' + (err.response?.data?.message || err.message))
+        }
       } finally {
-        setLoading(false)
+        if (!cancelled) {
+          setLoading(false)
+        }
       }
     }
 
-    init()
+    fetchUsers()
+
+    return () => {
+      cancelled = true
+    }
+  }, [page, pageSize, refreshKey])
+
+  useEffect(() => {
+    const loadTgIds = async () => {
+      try {
+        const response = await api.get('/tgid')
+        setTgIds(response.data)
+      } catch (err) {
+        setError('Не удалось загрузить Telegram ID: ' + (err.response?.data?.message || err.message))
+      }
+    }
+
+    loadTgIds()
   }, [])
-
-  const loadUsers = async () => {
-    try {
-      const response = await api.get('/users')
-      setUsers(response.data)
-      setError('')
-    } catch (err) {
-      setError('Не удалось загрузить пользователей: ' + (err.response?.data?.message || err.message))
-    }
-  }
-
-  const loadTgIds = async () => {
-    try {
-      const response = await api.get('/tgid')
-      setTgIds(response.data)
-    } catch (err) {
-      setError('Не удалось загрузить Telegram ID: ' + (err.response?.data?.message || err.message))
-    }
-  }
 
   const tgIdMap = useMemo(() => {
     const map = {}
@@ -77,13 +109,17 @@ function UsersTab() {
   }
 
   const handleDelete = async (user) => {
-    if (!window.confirm(`Удалить пользователя \"${user.login}\"?`)) {
+    if (!window.confirm(`Удалить пользователя "${user.login}"?`)) {
       return
     }
 
     try {
       await api.delete(`/users/${user.id}`)
-      await loadUsers()
+      if (users.length === 1 && page > 1) {
+        setPage((prev) => Math.max(1, prev - 1))
+      } else {
+        setRefreshKey((prev) => prev + 1)
+      }
     } catch (err) {
       setError('Не удалось удалить пользователя: ' + (err.response?.data?.message || err.message))
     }
@@ -160,7 +196,13 @@ function UsersTab() {
         await api.post('/users', payload)
       }
 
-      await loadUsers()
+      if (editingUser) {
+        setRefreshKey((prev) => prev + 1)
+      } else if (page !== 1) {
+        setPage(1)
+      } else {
+        setRefreshKey((prev) => prev + 1)
+      }
       setShowForm(false)
       setEditingUser(null)
       setFormData(initialFormState)
@@ -171,6 +213,29 @@ function UsersTab() {
     }
   }
 
+  const handlePageSizeChange = (event) => {
+    const newSize = Number(event.target.value)
+    setPageSize(newSize)
+    setPage(1)
+  }
+
+  const goToPreviousPage = () => {
+    setPage((prev) => Math.max(1, prev - 1))
+  }
+
+  const goToNextPage = () => {
+    if (totalPages > 0) {
+      setPage((prev) => Math.min(totalPages, prev + 1))
+    } else if (users.length === pageSize) {
+      setPage((prev) => prev + 1)
+    }
+  }
+
+  const displayTotalPages = totalPages > 0 ? totalPages : 1
+  const isPrevDisabled = loading || page <= 1
+  const isNextDisabled =
+    loading || (totalPages > 0 ? page >= totalPages : users.length < pageSize)
+
   if (loading) {
     return <div className="loading">Загрузка пользователей...</div>
   }
@@ -179,13 +244,16 @@ function UsersTab() {
     <div className="table-container">
       <div className="table-header">
         <h2>Пользователи</h2>
-        <button
-          className="btn-primary"
-          onClick={handleOpenCreate}
-          disabled={showForm}
-        >
-          Добавить пользователя
-        </button>
+        <div className="header-actions">
+          <span className="table-meta">Всего: {totalCount}</span>
+          <button
+            className="btn-primary"
+            onClick={handleOpenCreate}
+            disabled={showForm}
+          >
+            Добавить пользователя
+          </button>
+        </div>
       </div>
 
       {error && <div className="error-message">{error}</div>}
@@ -343,6 +411,43 @@ function UsersTab() {
             </div>
           ))
         )}
+      </div>
+
+      <div className="table-footer">
+        <div className="pagination">
+          <button
+            className="btn-outline"
+            onClick={goToPreviousPage}
+            disabled={isPrevDisabled}
+          >
+            Предыдущая
+          </button>
+          <span className="pagination-info">
+            Страница {Math.min(page, displayTotalPages)} из {displayTotalPages}
+          </span>
+          <button
+            className="btn-outline"
+            onClick={goToNextPage}
+            disabled={isNextDisabled}
+          >
+            Следующая
+          </button>
+        </div>
+        <div className="page-size">
+          <label htmlFor="users-page-size">На странице</label>
+          <select
+            id="users-page-size"
+            value={pageSize}
+            onChange={handlePageSizeChange}
+            disabled={loading}
+          >
+            {[10, 20, 50].map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
     </div>
   )

@@ -4,6 +4,7 @@
 
 import os
 import asyncio
+import functools
 import logging
 import time
 import json
@@ -54,6 +55,19 @@ class ApiResponse(BaseModel):
 
 # Load environment variables
 load_dotenv()
+
+def _get_int_env(name: str, default: int, minimum: int = 1) -> int:
+    raw = os.getenv(name)
+    if not raw:
+        return max(default, minimum)
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Некорректное значение %s=%s. Используется значение по умолчанию %s.", name, raw, default)
+        return max(default, minimum)
+    return max(value, minimum)
+
+DONGCHEDI_ENHANCE_MAX_CONCURRENT = _get_int_env("DONGCHEDI_ENHANCE_MAX_CONCURRENT", 5)
 
 def _get_next_sort_number(existing_cars: List[Dict], source: str) -> int:
     """
@@ -191,6 +205,9 @@ class AsyncDongchediWrapper:
     async def async_fetch_multiple_car_details(self, car_ids):
         return await asyncio.get_event_loop().run_in_executor(None, self.parser.fetch_multiple_car_details, car_ids)
 
+async def run_blocking(func, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
 class AsyncChe168Wrapper:
     def __init__(self, parser):
         self.parser = parser
@@ -1052,8 +1069,11 @@ async def enhance_dongchedi_car(sku_id: str, car_id: str = None):
         car_obj = DongchediCar(sku_id=sku_id, source='dongchedi')
         
         # Улучшаем машину детальной информацией
-        enhanced_car = dongchedi_parser_instance.enhance_car_with_details(
-            car_obj, sku_id, car_id
+        enhanced_car = await run_blocking(
+            dongchedi_parser_instance.enhance_car_with_details,
+            car_obj,
+            sku_id,
+            car_id,
         )
         
         if enhanced_car is None:
@@ -1086,7 +1106,10 @@ async def get_dongchedi_car_specs(car_id: str):
         car_id: Car ID для страницы характеристик
     """
     try:
-        specs, meta = dongchedi_parser_instance.fetch_car_specifications(car_id)
+        specs, meta = await run_blocking(
+            dongchedi_parser_instance.fetch_car_specifications,
+            car_id,
+        )
         
         return {
             "data": specs,
@@ -1111,52 +1134,71 @@ async def batch_enhance_dongchedi_cars(request: dict):
         Пример: {"car_123": "sku_456", "car_789": "sku_012"}
     """
     try:
-        results = []
-        
-        for car_id, sku_id in request.items():
-            try:
-                # Получаем базовую информацию
-                car_obj, meta = await dongchedi_parser.async_fetch_car_detail(sku_id)
-                
-                if car_obj is None:
-                    results.append({
+        semaphore = asyncio.Semaphore(DONGCHEDI_ENHANCE_MAX_CONCURRENT)
+
+        async def process_item(car_id: str, sku_id: str):
+            async with semaphore:
+                try:
+                    car_obj, meta = await dongchedi_parser.async_fetch_car_detail(sku_id)
+                    if car_obj is None:
+                        return {
+                            "car_id": car_id,
+                            "sku_id": sku_id,
+                            "status": "error",
+                            "message": "Car not found",
+                        }
+
+                    enhanced_car = await run_blocking(
+                        dongchedi_parser_instance.enhance_car_with_details,
+                        car_obj,
+                        sku_id,
+                        car_id,
+                    )
+
+                    return {
+                        "car_id": car_id,
+                        "sku_id": sku_id,
+                        "status": "success",
+                        "data": enhanced_car.dict(),
+                    }
+                except Exception as exc:
+                    return {
                         "car_id": car_id,
                         "sku_id": sku_id,
                         "status": "error",
-                        "message": "Car not found"
-                    })
-                    continue
-                
-                # Улучшаем машину
-                enhanced_car = dongchedi_parser_instance.enhance_car_with_details(
-                    car_obj, sku_id, car_id
-                )
-                
-                results.append({
-                    "car_id": car_id,
-                    "sku_id": sku_id,
-                    "status": "success",
-                    "data": enhanced_car.dict()
-                })
-                
-            except Exception as e:
-                results.append({
+                        "message": str(exc),
+                    }
+
+        items = list(request.items())
+        tasks = [
+            asyncio.create_task(process_item(car_id, sku_id))
+            for car_id, sku_id in items
+        ]
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        normalized_results = []
+        for task_result, (car_id, sku_id) in zip(raw_results, items):
+            if isinstance(task_result, Exception):
+                logger.error("Error in batch enhance for car %s/%s: %s", car_id, sku_id, task_result)
+                normalized_results.append({
                     "car_id": car_id,
                     "sku_id": sku_id,
                     "status": "error",
-                    "message": str(e)
+                    "message": str(task_result)
                 })
-        
-        successful = sum(1 for r in results if r["status"] == "success")
+            else:
+                normalized_results.append(task_result)
+
+        successful = sum(1 for r in normalized_results if r.get("status") == "success")
         
         return {
             "data": {
-                "results": results,
-                "total": len(results),
+                "results": normalized_results,
+                "total": len(normalized_results),
                 "successful": successful,
-                "failed": len(results) - successful
+                "failed": len(normalized_results) - successful
             },
-            "message": f"Обработано {len(results)} машин, успешно: {successful}",
+            "message": f"Обработано {len(normalized_results)} машин, успешно: {successful}",
             "status": 200
         }
     except Exception as e:

@@ -15,10 +15,12 @@ public class Order : BaseRecord
     [MaxLength(100)]
     public string? ClientTelegramId { get; set; }
 
-    [Column("tg_id_id")]
-    public Guid? TgIdId { get; set; }
+    [Column("client_chat_id")]
+    public long? ClientChatId { get; set; }
 
-    public virtual TgId? TgId { get; set; }
+    [Column("tg_id")]
+    [MaxLength(50)]
+    public string? TgId { get; set; }
 }
 
 

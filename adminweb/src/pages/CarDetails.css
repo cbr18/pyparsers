@@ -1,0 +1,176 @@
+.car-details-page {
+  padding: 2rem;
+  min-height: 100vh;
+  background: linear-gradient(160deg, rgba(20, 14, 12, 0.95), rgba(35, 26, 21, 0.92));
+  color: var(--color-text, #f4e7d8);
+}
+
+.car-details-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.car-details-header h1 {
+  font-size: 2rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.uuid-form {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.uuid-form input {
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  border: 1px solid rgba(90, 64, 52, 0.6);
+  background: rgba(37, 27, 22, 0.9);
+  color: inherit;
+  min-width: 260px;
+}
+
+.uuid-form input:focus {
+  outline: none;
+  border-color: var(--color-primary, #d4a373);
+  box-shadow: 0 0 0 3px rgba(212, 163, 115, 0.2);
+}
+
+.car-details-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.car-images,
+.car-link,
+.car-fields {
+  background: rgba(33, 24, 19, 0.92);
+  border-radius: 18px;
+  border: 1px solid rgba(58, 41, 33, 0.6);
+  padding: 1.6rem;
+  box-shadow: 0 18px 42px rgba(6, 4, 3, 0.45);
+}
+
+.car-images h2,
+.car-link h2,
+.car-fields h2 {
+  margin-top: 0;
+  margin-bottom: 1.2rem;
+  font-size: 1.35rem;
+}
+
+.carousel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  position: relative;
+}
+
+.carousel.placeholder {
+  justify-content: center;
+  font-size: 1rem;
+  color: var(--color-text-muted, rgba(244, 231, 216, 0.55));
+}
+
+.carousel-image-wrapper {
+  width: min(640px, 100%);
+  aspect-ratio: 16 / 9;
+  background: rgba(20, 14, 12, 0.9);
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(74, 52, 40, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.carousel-image-wrapper img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.carousel-control {
+  background: rgba(37, 27, 22, 0.85);
+  border: 1px solid rgba(212, 163, 115, 0.35);
+  color: var(--color-text, #f4e7d8);
+  border-radius: 50%;
+  width: 44px;
+  height: 44px;
+  font-size: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.carousel-control:hover {
+  background: rgba(212, 163, 115, 0.25);
+}
+
+.carousel-indicator {
+  margin-top: 0.5rem;
+  text-align: center;
+  color: var(--color-text-muted, rgba(244, 231, 216, 0.55));
+}
+
+.car-link a {
+  color: var(--color-primary, #d4a373);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.car-link a:hover {
+  text-decoration: underline;
+}
+
+.fields-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1.1rem;
+}
+
+.field-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.9rem;
+  background: rgba(23, 17, 14, 0.8);
+  border-radius: 12px;
+  border: 1px solid rgba(58, 41, 33, 0.6);
+}
+
+.field-label {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted, rgba(244, 231, 216, 0.55));
+}
+
+.field-value {
+  font-size: 1rem;
+  word-break: break-word;
+}
+
+@media (max-width: 768px) {
+  .car-details-page {
+    padding: 1.25rem;
+  }
+
+  .uuid-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .uuid-form input {
+    min-width: unset;
+    width: 100%;
+  }
+}

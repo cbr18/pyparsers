@@ -1,6 +1,7 @@
 import os
 import time
 import random
+import re
 import logging
 from typing import Optional, Tuple
 from .models.car import Che168Car
@@ -360,8 +361,27 @@ class Che168Parser(BaseCarParser):
         # Извлекаем основную информацию
         a = li.select_one('a.carinfo')
         link = a['href'] if a and a.has_attr('href') else None
-        if link and link.startswith('/'):
-            link = 'https://www.che168.com' + link
+        
+        # Получаем car_id из атрибутов
+        car_id = attrs.get('infoid')
+        
+        # Нормализуем ссылку: всегда используем формат как в details
+        # https://m.che168.com/cardetail/index?infoid={car_id}
+        if car_id and car_id.isdigit():
+            link = f'https://m.che168.com/cardetail/index?infoid={car_id}'
+        elif link:
+            # Если есть ссылка, но нет car_id, пытаемся извлечь car_id из ссылки
+            # Пытаемся извлечь car_id из ссылок вида /dealer/{dealer_id}/{car_id}.html
+            match = re.search(r'/(\d+)\.html', link)
+            if match:
+                car_id_from_link = match.group(1)
+                link = f'https://m.che168.com/cardetail/index?infoid={car_id_from_link}'
+            elif link.startswith('/'):
+                # Относительная ссылка - дополняем до полной, но всё равно нормализуем
+                if car_id and car_id.isdigit():
+                    link = f'https://m.che168.com/cardetail/index?infoid={car_id}'
+                else:
+                    link = 'https://www.che168.com' + link
 
         # Извлекаем изображение
         img = li.select_one('img')

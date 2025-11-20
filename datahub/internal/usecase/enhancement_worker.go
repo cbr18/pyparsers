@@ -18,6 +18,7 @@ type EnhancementWorker struct {
 	dongchediClient    *external.DongchediClient
 	che168Client       *external.Che168Client
 	translationService *TranslationService
+	priceCalculator    *PriceCalculator
 	
 	isRunning          bool
 	stopChan           chan struct{}
@@ -29,12 +30,13 @@ type EnhancementWorker struct {
 	maxConcurrent      int
 }
 
-func NewEnhancementWorker(repo repository.CarRepository, dongchediClient *external.DongchediClient, che168Client *external.Che168Client, translationService *TranslationService) *EnhancementWorker {
+func NewEnhancementWorker(repo repository.CarRepository, dongchediClient *external.DongchediClient, che168Client *external.Che168Client, translationService *TranslationService, priceCalculator *PriceCalculator) *EnhancementWorker {
 	return &EnhancementWorker{
 		repo:               repo,
 		dongchediClient:    dongchediClient,
 		che168Client:       che168Client,
 		translationService: translationService,
+		priceCalculator:    priceCalculator,
 		stopChan:           make(chan struct{}),
 		batchSize:           10,               // Обрабатываем по 10 машин за раз
 		delayBetweenBatches: 5 * time.Minute,  // Пауза между батчами
@@ -220,17 +222,92 @@ func (w *EnhancementWorker) enhanceSingleCar(ctx context.Context, car domain.Car
 	// Сохраняем mybrand_id из оригинальной машины, чтобы не потерять связь с брендом
 	enhancedCar.MybrandID = car.MybrandID
 	
-	// Проверяем, что power был успешно распарсен перед установкой has_details
-	// Это дополнительная проверка на случай, если парсер вернул данные без power
+	// Сохраняем оригинальную цену, если enhancedCar не имеет цены
+	if enhancedCar.Price == "" && car.Price != "" {
+		enhancedCar.Price = car.Price
+		log.Printf("Car %s: восстановлена оригинальная цена '%s'", car.UUID, car.Price)
+	}
+	
+	// Сохраняем оригинальный год, если enhancedCar не имеет года или год = 0
+	if enhancedCar.Year == 0 && car.Year > 0 {
+		enhancedCar.Year = car.Year
+		log.Printf("Car %s: восстановлен оригинальный год %d", car.UUID, car.Year)
+	}
+	
+	// Восстанавливаем оригинальные названия, если они были потеряны
+	if enhancedCar.Title == "" && car.Title != "" {
+		enhancedCar.Title = car.Title
+		log.Printf("Car %s: восстановлен оригинальный title", car.UUID)
+	}
+	
+	// Если title все еще пустой, формируем из brand_name + series_name
+	if enhancedCar.Title == "" && enhancedCar.BrandName != "" && enhancedCar.SeriesName != "" {
+		enhancedCar.Title = enhancedCar.BrandName + " " + enhancedCar.SeriesName
+		log.Printf("Car %s: сформирован title из brand + series: '%s'", car.UUID, enhancedCar.Title)
+	}
+	
+	if enhancedCar.CarName == "" && car.CarName != "" {
+		enhancedCar.CarName = car.CarName
+		log.Printf("Car %s: восстановлен оригинальный car_name", car.UUID)
+	}
+	
+	// Если car_name пустой, используем series_name
+	if enhancedCar.CarName == "" && enhancedCar.SeriesName != "" {
+		enhancedCar.CarName = enhancedCar.SeriesName
+		log.Printf("Car %s: car_name установлен из series_name: '%s'", car.UUID, enhancedCar.CarName)
+	}
+	
+	if enhancedCar.BrandName == "" && car.BrandName != "" {
+		enhancedCar.BrandName = car.BrandName
+		log.Printf("Car %s: восстановлен оригинальный brand_name", car.UUID)
+	}
+	
+	if enhancedCar.SeriesName == "" && car.SeriesName != "" {
+		enhancedCar.SeriesName = car.SeriesName
+		log.Printf("Car %s: восстановлен оригинальный series_name", car.UUID)
+	}
+	
+	if enhancedCar.Image == "" && car.Image != "" {
+		enhancedCar.Image = car.Image
+	}
+	
+	if enhancedCar.Link == "" && car.Link != "" {
+		enhancedCar.Link = car.Link
+	}
+	
+	if enhancedCar.City == "" && car.City != "" {
+		enhancedCar.City = car.City
+	}
+	
+	if enhancedCar.Mileage == 0 && car.Mileage > 0 {
+		enhancedCar.Mileage = car.Mileage
+	}
+	
+	// Проверяем, что были успешно распарсены детальные данные
+	// КРИТИЧНО: Power должен быть обязательно спарсен для has_details=true
 	hasPower := enhancedCar.Power != "" && strings.TrimSpace(enhancedCar.Power) != ""
-	if hasPower {
-		enhancedCar.HasDetails = true
-		enhancedCar.LastDetailUpdate = time.Now()
-	} else {
-		// Если power не был распарсен, не устанавливаем has_details
+	
+	if !hasPower {
+		// Если Power не спарсился - has_details=false, даже если есть другие поля
 		enhancedCar.HasDetails = false
-		// Не обновляем last_detail_update, если парсинг не удался
-		log.Printf("Car %s: power not parsed, keeping has_details=false", car.UUID)
+		log.Printf("Car %s: Power не найден, has_details=false (другие поля игнорируются)", car.UUID)
+	} else {
+		// Power есть, проверяем что есть хотя бы еще одно значимое поле
+		hasOtherDetails := (enhancedCar.EngineVolume != "" && strings.TrimSpace(enhancedCar.EngineVolume) != "") ||
+		                   (enhancedCar.Transmission != "" && strings.TrimSpace(enhancedCar.Transmission) != "") ||
+		                   (enhancedCar.FuelType != "" && strings.TrimSpace(enhancedCar.FuelType) != "") ||
+		                   (enhancedCar.EngineType != "" && strings.TrimSpace(enhancedCar.EngineType) != "") ||
+		                   (enhancedCar.DriveType != "" && strings.TrimSpace(enhancedCar.DriveType) != "") ||
+		                   (enhancedCar.EmissionStandard != "" && strings.TrimSpace(enhancedCar.EmissionStandard) != "")
+		
+		if hasOtherDetails {
+			enhancedCar.HasDetails = true
+			enhancedCar.LastDetailUpdate = time.Now()
+			log.Printf("Car %s: Power найден + другие детали, has_details=true", car.UUID)
+		} else {
+			enhancedCar.HasDetails = false
+			log.Printf("Car %s: только Power, но нет других деталей, has_details=false", car.UUID)
+		}
 	}
 
 	// Переводим данные если сервис перевода доступен
@@ -240,6 +317,58 @@ func (w *EnhancementWorker) enhanceSingleCar(ctx context.Context, car domain.Car
 			log.Printf("Translation failed for car %s, using original data: %v", car.UUID, translateErr)
 		} else if len(translatedCars) > 0 {
 			enhancedCar = &translatedCars[0]
+			// Восстанавливаем цену после перевода, если она была потеряна
+			if enhancedCar.Price == "" && car.Price != "" {
+				enhancedCar.Price = car.Price
+				log.Printf("Car %s: восстановлена цена после перевода '%s'", car.UUID, car.Price)
+			}
+		}
+	}
+
+	// Рассчитываем цену в рублях, если есть цена
+	// Используем цену из enhancedCar, если она есть, иначе из оригинальной машины
+	priceToUse := enhancedCar.Price
+	if priceToUse == "" {
+		priceToUse = car.Price
+		// Если использовали оригинальную цену, сохраняем её в enhancedCar
+		if priceToUse != "" {
+			enhancedCar.Price = priceToUse
+			log.Printf("Car %s: использована оригинальная цена '%s'", car.UUID, priceToUse)
+		}
+	}
+	
+	if w.priceCalculator != nil && priceToUse != "" {
+		log.Printf("Car %s: расчет цены в рублях, исходная цена='%s'", car.UUID, priceToUse)
+		rubPrice, err := w.priceCalculator.CalculateRubPrice(ctx, priceToUse)
+		if err != nil {
+			log.Printf("Ошибка расчета цены в рублях для машины %s: %v", car.UUID, err)
+		} else {
+			log.Printf("Car %s: рассчитана цена в рублях=%.2f", car.UUID, rubPrice)
+			enhancedCar.RubPrice = rubPrice
+			
+			// Добавляем утильсбор к цене, если есть мощность и объем двигателя
+			if enhancedCar.Power != "" && enhancedCar.EngineVolume != "" && enhancedCar.Year > 0 {
+				totalPrice, err := w.priceCalculator.CalculateUtilizationFeeAndAddToPrice(
+					ctx,
+					rubPrice,
+					enhancedCar.Power,
+					enhancedCar.EngineVolume,
+					enhancedCar.Year,
+				)
+				if err != nil {
+					log.Printf("Ошибка расчета утильсбора для машины %s: %v", car.UUID, err)
+				} else {
+					log.Printf("Car %s: итоговая цена с утильсбором=%.2f", car.UUID, totalPrice)
+					enhancedCar.RubPrice = totalPrice
+				}
+			}
+		}
+	} else {
+		if w.priceCalculator == nil {
+			log.Printf("Car %s: пропуск расчета цены - priceCalculator не инициализирован", car.UUID)
+		} else if priceToUse == "" {
+			log.Printf("Car %s: пропуск расчета цены - цена пустая (enhancedCar.Price='%s', car.Price='%s')", 
+				car.UUID, enhancedCar.Price, car.Price)
 		}
 	}
 

@@ -138,14 +138,24 @@ const handleLeadRequest = (e) => {
         }}
       />
       <div className="car-info">
-        <h2>{car.title || 'Без названия'}</h2>
-        <p><b>Цена:</b> <span>{car.price || '—'}</span></p>
+        <h2>{car.title || car.car_name || 'Без названия'}</h2>
+        {car.rub_price && car.rub_price > 0 && (
+          <p className="price-highlight"><b>Цена:</b> <span>{new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(car.rub_price)}</span></p>
+        )}
         <p><b>Год:</b> <span>{car.year || '—'}</span></p>
-        <p><b>Пробег:</b> <span>{car.mileage ? `${car.mileage} км` : '—'}</span></p>
-        <p><b>Город:</b> <span>{car.city || '—'}</span></p>
+        {car.mileage > 0 && (
+          <p><b>Пробег:</b> <span>{car.mileage.toLocaleString('ru-RU')} км</span></p>
+        )}
+        {car.city && (
+          <p><b>Город:</b> <span>{car.city}</span></p>
+        )}
         <p><b>Бренд:</b> <span>{car.brand_name || '—'}</span></p>
-        <p><b>Серия:</b> <span>{car.series_name || '—'}</span></p>
-        <p><b>Модель:</b> <span>{car.car_name || '—'}</span></p>
+        {car.series_name && (
+          <p><b>Серия:</b> <span>{car.series_name}</span></p>
+        )}
+        {car.car_name && car.title !== car.car_name && (
+          <p><b>Модель:</b> <span>{car.car_name}</span></p>
+        )}
         <div className="car-buttons">
           <button className="lead-btn" onClick={handleLeadRequest}>
             <span>Оставить заявку</span>

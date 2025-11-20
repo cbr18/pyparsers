@@ -16,6 +16,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"strings"
@@ -91,13 +92,21 @@ func main() {
 		log.Printf("Translation service disabled")
 	}
 
+	// Инициализация сервиса калькуляции цен
+	cbrClient := external.NewCBRClient("")
+	priceCalculator := usecase.NewPriceCalculator(cbrClient)
+	
+	// Запускаем фоновое обновление курса валют
+	ctx := context.Background()
+	priceCalculator.Start(ctx)
+
 	updateService := map[string]*usecase.UpdateService{
-		"dongchedi": usecase.NewUpdateServiceWithTranslation(repo, dongchediClient, "dongchedi", translationService),
-		"che168":    usecase.NewUpdateServiceWithTranslation(repo, che168Client, "che168", translationService),
+		"dongchedi": usecase.NewUpdateServiceWithPriceCalculator(repo, dongchediClient, "dongchedi", translationService, priceCalculator),
+		"che168":    usecase.NewUpdateServiceWithPriceCalculator(repo, che168Client, "che168", translationService, priceCalculator),
 	}
 
 	// Инициализация воркера для улучшения машин
-	enhancementWorker := usecase.NewEnhancementWorker(repo, dongchediClient, che168Client, translationService)
+	enhancementWorker := usecase.NewEnhancementWorker(repo, dongchediClient, che168Client, translationService, priceCalculator)
 
 	autoStartWorker := true
 	if raw := strings.TrimSpace(os.Getenv("ENHANCEMENT_WORKER_AUTO_START")); raw != "" {
@@ -120,7 +129,7 @@ func main() {
 		log.Println("Enhancement worker auto-start disabled; use /enhancement/start to run manually")
 	}
 
-	handler := httpdelivery.NewHandler(carService, updateService, brandService, taskService, pyparsersClient, enhancementWorker)
+	handler := httpdelivery.NewHandler(carService, updateService, brandService, taskService, pyparsersClient, enhancementWorker, priceCalculator)
 	router := httpdelivery.NewRouter(handler)
 
 	if err := router.Setup().Run(":8080"); err != nil {

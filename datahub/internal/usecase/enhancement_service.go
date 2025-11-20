@@ -17,14 +17,16 @@ type EnhancementService struct {
 	dongchediClient   *external.DongchediClient
 	che168Client      *external.Che168Client
 	translationService *TranslationService
+	priceCalculator   *PriceCalculator
 }
 
-func NewEnhancementService(repo repository.CarRepository, dongchediClient *external.DongchediClient, che168Client *external.Che168Client, translationService *TranslationService) *EnhancementService {
+func NewEnhancementService(repo repository.CarRepository, dongchediClient *external.DongchediClient, che168Client *external.Che168Client, translationService *TranslationService, priceCalculator *PriceCalculator) *EnhancementService {
 	return &EnhancementService{
 		repo:              repo,
 		dongchediClient:   dongchediClient,
 		che168Client:      che168Client,
 		translationService: translationService,
+		priceCalculator:   priceCalculator,
 	}
 }
 
@@ -65,6 +67,58 @@ func (s *EnhancementService) EnhanceCarsWithoutDetails(ctx context.Context, sour
 				log.Printf("Ошибка перевода машины %s: %v", car.UUID, translateErr)
 			} else if len(translatedCars) > 0 {
 				enhancedCar = &translatedCars[0]
+				// Восстанавливаем цену после перевода, если она была потеряна
+				if enhancedCar.Price == "" && car.Price != "" {
+					enhancedCar.Price = car.Price
+					log.Printf("Car %s: восстановлена цена после перевода '%s'", car.UUID, car.Price)
+				}
+			}
+		}
+
+		// Рассчитываем цену в рублях, если есть цена
+		// Используем цену из enhancedCar, если она есть, иначе из оригинальной машины
+		priceToUse := enhancedCar.Price
+		if priceToUse == "" {
+			priceToUse = car.Price
+			// Если использовали оригинальную цену, сохраняем её в enhancedCar
+			if priceToUse != "" {
+				enhancedCar.Price = priceToUse
+				log.Printf("Car %s: использована оригинальная цена '%s'", car.UUID, priceToUse)
+			}
+		}
+		
+		if s.priceCalculator != nil && priceToUse != "" {
+			log.Printf("Car %s: расчет цены в рублях, исходная цена='%s'", car.UUID, priceToUse)
+			rubPrice, err := s.priceCalculator.CalculateRubPrice(ctx, priceToUse)
+			if err != nil {
+				log.Printf("Ошибка расчета цены в рублях для машины %s: %v", car.UUID, err)
+			} else {
+				log.Printf("Car %s: рассчитана цена в рублях=%.2f", car.UUID, rubPrice)
+				enhancedCar.RubPrice = rubPrice
+				
+				// Добавляем утильсбор к цене, если есть мощность и объем двигателя
+				if enhancedCar.Power != "" && enhancedCar.EngineVolume != "" && enhancedCar.Year > 0 {
+					totalPrice, err := s.priceCalculator.CalculateUtilizationFeeAndAddToPrice(
+						ctx,
+						rubPrice,
+						enhancedCar.Power,
+						enhancedCar.EngineVolume,
+						enhancedCar.Year,
+					)
+					if err != nil {
+						log.Printf("Ошибка расчета утильсбора для машины %s: %v", car.UUID, err)
+					} else {
+						log.Printf("Car %s: итоговая цена с утильсбором=%.2f", car.UUID, totalPrice)
+						enhancedCar.RubPrice = totalPrice
+					}
+				}
+			}
+		} else {
+			if s.priceCalculator == nil {
+				log.Printf("Car %s: пропуск расчета цены - priceCalculator не инициализирован", car.UUID)
+			} else if priceToUse == "" {
+				log.Printf("Car %s: пропуск расчета цены - цена пустая (enhancedCar.Price='%s', car.Price='%s')", 
+					car.UUID, enhancedCar.Price, car.Price)
 			}
 		}
 
@@ -123,6 +177,40 @@ func (s *EnhancementService) enhanceSingleCar(ctx context.Context, car domain.Ca
 	enhancedCar.UpdatedAt = time.Now()
 	// Сохраняем mybrand_id из оригинальной машины, чтобы не потерять связь с брендом
 	enhancedCar.MybrandID = car.MybrandID
+	// Сохраняем оригинальную цену, если enhancedCar не имеет цены
+	if enhancedCar.Price == "" && car.Price != "" {
+		enhancedCar.Price = car.Price
+		log.Printf("Car %s: восстановлена оригинальная цена '%s'", car.UUID, car.Price)
+	}
+	
+	// Восстанавливаем остальные важные поля
+	if enhancedCar.Year == 0 && car.Year > 0 {
+		enhancedCar.Year = car.Year
+	}
+	
+	if enhancedCar.Title == "" && car.Title != "" {
+		enhancedCar.Title = car.Title
+	}
+	
+	if enhancedCar.CarName == "" && car.CarName != "" {
+		enhancedCar.CarName = car.CarName
+	}
+	
+	if enhancedCar.BrandName == "" && car.BrandName != "" {
+		enhancedCar.BrandName = car.BrandName
+	}
+	
+	if enhancedCar.SeriesName == "" && car.SeriesName != "" {
+		enhancedCar.SeriesName = car.SeriesName
+	}
+	
+	if enhancedCar.Image == "" && car.Image != "" {
+		enhancedCar.Image = car.Image
+	}
+	
+	if enhancedCar.Link == "" && car.Link != "" {
+		enhancedCar.Link = car.Link
+	}
 
 	return enhancedCar, nil
 }
@@ -159,6 +247,36 @@ func (s *EnhancementService) BatchEnhanceCars(ctx context.Context, source string
 			log.Printf("Ошибка перевода при массовом улучшении: %v", translateErr)
 		} else {
 			enhancedCars = translatedCars
+		}
+	}
+
+	// Рассчитываем цены в рублях для всех машин
+	if s.priceCalculator != nil {
+		for i := range enhancedCars {
+			if enhancedCars[i].Price != "" {
+				rubPrice, err := s.priceCalculator.CalculateRubPrice(ctx, enhancedCars[i].Price)
+				if err != nil {
+					log.Printf("Ошибка расчета цены в рублях для машины %s: %v", enhancedCars[i].UUID, err)
+				} else {
+					enhancedCars[i].RubPrice = rubPrice
+					
+					// Добавляем утильсбор к цене, если есть мощность и объем двигателя
+					if enhancedCars[i].Power != "" && enhancedCars[i].EngineVolume != "" && enhancedCars[i].Year > 0 {
+						totalPrice, err := s.priceCalculator.CalculateUtilizationFeeAndAddToPrice(
+							ctx,
+							rubPrice,
+							enhancedCars[i].Power,
+							enhancedCars[i].EngineVolume,
+							enhancedCars[i].Year,
+						)
+						if err != nil {
+							log.Printf("Ошибка расчета утильсбора для машины %s: %v", enhancedCars[i].UUID, err)
+						} else {
+							enhancedCars[i].RubPrice = totalPrice
+						}
+					}
+				}
+			}
 		}
 	}
 

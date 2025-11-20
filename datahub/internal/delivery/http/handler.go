@@ -20,10 +20,11 @@ type Handler struct {
 	taskService       *usecase.TaskService
 	pyparsersClient   *external.PyparsersClient
 	enhancementWorker *usecase.EnhancementWorker
+	priceCalculator   *usecase.PriceCalculator
 }
 
-func NewHandler(carService *usecase.CarService, updateService map[string]*usecase.UpdateService, brandService *usecase.BrandService, taskService *usecase.TaskService, pyparsersClient *external.PyparsersClient, enhancementWorker *usecase.EnhancementWorker) *Handler {
-	return &Handler{carService: carService, updateService: updateService, brandService: brandService, taskService: taskService, pyparsersClient: pyparsersClient, enhancementWorker: enhancementWorker}
+func NewHandler(carService *usecase.CarService, updateService map[string]*usecase.UpdateService, brandService *usecase.BrandService, taskService *usecase.TaskService, pyparsersClient *external.PyparsersClient, enhancementWorker *usecase.EnhancementWorker, priceCalculator *usecase.PriceCalculator) *Handler {
+	return &Handler{carService: carService, updateService: updateService, brandService: brandService, taskService: taskService, pyparsersClient: pyparsersClient, enhancementWorker: enhancementWorker, priceCalculator: priceCalculator}
 }
 
 // GetCars godoc
@@ -57,10 +58,65 @@ func (h *Handler) GetCars(c *gin.Context) {
 	if year := c.Query("year"); year != "" {
 		filter.Year = &year
 	}
+	// Диапазон года
+	if yearFromStr := c.Query("year_from"); yearFromStr != "" {
+		if yearFrom, err := strconv.Atoi(yearFromStr); err == nil {
+			filter.YearFrom = &yearFrom
+		}
+	}
+	if yearToStr := c.Query("year_to"); yearToStr != "" {
+		if yearTo, err := strconv.Atoi(yearToStr); err == nil {
+			filter.YearTo = &yearTo
+		}
+	}
+	// Диапазон цены
+	if priceFromStr := c.Query("price_from"); priceFromStr != "" {
+		if priceFrom, err := strconv.ParseFloat(priceFromStr, 64); err == nil {
+			filter.PriceFrom = &priceFrom
+		}
+	}
+	if priceToStr := c.Query("price_to"); priceToStr != "" {
+		if priceTo, err := strconv.ParseFloat(priceToStr, 64); err == nil {
+			filter.PriceTo = &priceTo
+		}
+	}
 	if search := c.Query("search"); search != "" {
 		filter.Search = &search
 	}
-	cars, total, err := h.carService.ListCars(c.Request.Context(), filter, page, limit, "sort_number DESC")
+	// Фильтр по has_details
+	if hasDetails := c.Query("has_details"); hasDetails != "" {
+		if hasDetails == "true" {
+			trueVal := true
+			filter.HasDetails = &trueVal
+		} else if hasDetails == "false" {
+			falseVal := false
+			filter.HasDetails = &falseVal
+		}
+	}
+	// Сортировка
+	// Репозиторий всегда добавляет has_details DESC NULLS LAST в начало автоматически
+	sortBy := c.Query("sort_by")
+	sortOrder := c.Query("sort_order")
+	sortClause := ""
+	if sortBy != "" {
+		if sortBy == "price" {
+			if sortOrder == "asc" {
+				sortClause = "rub_price ASC"
+			} else {
+				sortClause = "rub_price DESC"
+			}
+		} else if sortBy == "year" {
+			if sortOrder == "asc" {
+				sortClause = "year ASC"
+			} else {
+				sortClause = "year DESC"
+			}
+		}
+		// Добавляем updated_at в конец для стабильности сортировки
+		sortClause = sortClause + ", updated_at DESC"
+	}
+	// Если sortClause пустой, репозиторий использует дефолтную сортировку
+	cars, total, err := h.carService.ListCars(c.Request.Context(), filter, page, limit, sortClause)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -419,4 +475,53 @@ func (h *Handler) ConfigureEnhancement(c *gin.Context) {
 	)
 
 	c.JSON(http.StatusOK, gin.H{"status": "configured"})
+}
+
+// DebugPrice godoc
+// @Summary      Проверка расчета цен
+// @Description  Диагностический endpoint для проверки курса CNY и расчета цен
+// @Tags         debug
+// @Accept       json
+// @Produce      json
+// @Param        request body object{price=string} false "Цена для тестирования"
+// @Success      200  {object}  map[string]interface{}
+// @Router       /debug/price [post]
+func (h *Handler) DebugPrice(c *gin.Context) {
+	var req struct {
+		Price string `json:"price"`
+	}
+	
+	if err := c.ShouldBindJSON(&req); err != nil {
+		// Если не передали цену, используем тестовую
+		req.Price = "12.5"
+	}
+	
+	if h.priceCalculator == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "PriceCalculator не инициализирован",
+		})
+		return
+	}
+	
+	// Получаем текущий курс
+	cnyRate := h.priceCalculator.GetCNYRate()
+	lastUpdate := h.priceCalculator.GetLastUpdateTime()
+	
+	// Рассчитываем цену в рублях
+	rubPrice, err := h.priceCalculator.CalculateRubPrice(c.Request.Context(), req.Price)
+	
+	result := gin.H{
+		"cny_rate":     cnyRate,
+		"last_update":  lastUpdate.Format(time.RFC3339),
+		"test_price":   req.Price,
+	}
+	
+	if err != nil {
+		result["error"] = err.Error()
+		result["rub_price"] = 0
+	} else {
+		result["rub_price"] = rubPrice
+	}
+	
+	c.JSON(http.StatusOK, result)
 }

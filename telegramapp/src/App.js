@@ -18,17 +18,27 @@ function App() {
   const [filters, setFilters] = useState({
     source: '',
     brand: '',
-    city: '',
-    year: '',
-    search: ''
+    // Диапазоны по году и цене и общий поиск
+    yearFrom: '',
+    yearTo: '',
+    priceFrom: '',
+    priceTo: '',
+    search: '',
+    // Сортировка
+    sortBy: '',
+    sortOrder: ''
   });
   const [showFilters, setShowFilters] = useState(false);
   const [tempFilters, setTempFilters] = useState({
     source: '',
     brand: '',
-    city: '',
-    year: '',
-    search: ''
+    yearFrom: '',
+    yearTo: '',
+    priceFrom: '',
+    priceTo: '',
+    search: '',
+    sortBy: '',
+    sortOrder: ''
   });
   const [brands, setBrands] = useState([]);
 
@@ -64,9 +74,13 @@ function App() {
     const emptyFilters = {
       source: '',
       brand: '',
-      city: '',
-      year: '',
-      search: ''
+      yearFrom: '',
+      yearTo: '',
+      priceFrom: '',
+      priceTo: '',
+      search: '',
+      sortBy: '',
+      sortOrder: ''
     };
     setTempFilters(emptyFilters);
     setFilters(emptyFilters);

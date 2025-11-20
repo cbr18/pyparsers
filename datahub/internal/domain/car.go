@@ -14,6 +14,7 @@ type Car struct {
 	Year              int       `json:"year"`
 	Mileage           int32     `json:"mileage"`
 	Price             string    `json:"price"`
+	RubPrice          float64   `json:"rub_price"`              // Цена в рублях (рассчитанная из цены в юанях)
 	Image             string    `json:"image"`
 	Link              string    `json:"link"`
 	BrandName         string    `json:"brand_name"`
@@ -162,6 +163,11 @@ type CarFilter struct {
 	BrandName   *string
 	City        *string
 	Year        *string
+	YearFrom    *int   // Минимальный год (>=)
+	YearTo      *int   // Максимальный год (<=)
+	PriceFrom   *float64 // Минимальная цена в рублях (>=)
+	PriceTo     *float64 // Максимальная цена в рублях (<=)
 	IsAvailable *bool
+	HasDetails  *bool   // Фильтр по наличию детальной информации
 	Search      *string // Поиск по названию/описанию
 }

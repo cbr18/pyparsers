@@ -1,4 +1,4 @@
-FROM golang:1.24.5-alpine AS builder
+FROM golang:1.25.4-alpine AS builder
 WORKDIR /app
 
 # 1) Кэшируем зависимости отдельно, чтобы не перекачивать их при каждом изменении кода
@@ -7,11 +7,15 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go mod download
 
-# 2) Копируем остальной исходный код и собираем бинарник с кэшами сборки
-COPY . .
+# 2) Копируем только нужные директории для лучшего кэширования
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+COPY docs/ ./docs/
+COPY resources/ ./resources/
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /app/datahub ./cmd/main.go
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -a=false -trimpath -ldflags "-s -w" -o /app/datahub ./cmd/main.go
 
 # 3) Устанавливаем migrate (пинованный тег), слой кешируется отдельно
 RUN --mount=type=cache,target=/go/pkg/mod \

@@ -338,7 +338,7 @@ func (c *Che168Client) EnhanceCar(ctx context.Context, carID int64) (*domain.Car
 	var response struct {
 		Success bool        `json:"success"`
 		CarID   int64       `json:"car_id"`
-		Data    *Che168Car  `json:"data"`
+		Data    *domain.Car `json:"data"`
 		Error   string      `json:"error,omitempty"`
 	}
 
@@ -350,12 +350,14 @@ func (c *Che168Client) EnhanceCar(ctx context.Context, carID int64) (*domain.Car
 		return nil, fmt.Errorf("ошибка парсинга: %s", response.Error)
 	}
 
-	// Преобразуем Che168Car в domain.Car
-	car := response.Data.ToCar()
-	car.HasDetails = true
-	car.LastDetailUpdate = time.Now()
+	if response.Data == nil {
+		return nil, fmt.Errorf("данные не получены")
+	}
+
+	// НЕ устанавливаем HasDetails здесь - это делает enhancement_worker.go
+	// на основе проверки значимых полей
 	
-	return &car, nil
+	return response.Data, nil
 }
 
 // BatchEnhanceCars — массовое улучшение машин детальной информацией
@@ -405,10 +407,10 @@ func (c *Che168Client) BatchEnhanceCars(ctx context.Context, carIDs []int64) ([]
 		Successful int                       `json:"successful"`
 		Failed     int                       `json:"failed"`
 		Results    []struct {
-			Success bool       `json:"success"`
-			CarID   int64      `json:"car_id"`
-			Data    *Che168Car `json:"data"`
-			Error   string     `json:"error,omitempty"`
+			Success bool        `json:"success"`
+			CarID   int64       `json:"car_id"`
+			Data    *domain.Car `json:"data"`
+			Error   string      `json:"error,omitempty"`
 		} `json:"results"`
 	}
 
@@ -420,7 +422,7 @@ func (c *Che168Client) BatchEnhanceCars(ctx context.Context, carIDs []int64) ([]
 	var cars []domain.Car
 	for _, result := range response.Results {
 		if result.Success && result.Data != nil {
-			car := result.Data.ToCar()
+			car := *result.Data
 			car.HasDetails = true
 			car.LastDetailUpdate = time.Now()
 			cars = append(cars, car)

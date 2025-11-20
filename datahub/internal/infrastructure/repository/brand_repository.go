@@ -26,8 +26,13 @@ func NewBrandRepository() *BrandRepository {
 // GetByOrigName - получает Brand по оригинальному имени (brand_name из Car)
 func (r *BrandRepository) GetByOrigName(ctx context.Context, origName string) (*domain.Brand, error) {
 	var brand domain.Brand
-	// Ищем по полю name или orig_name
-	err := r.db.WithContext(ctx).Where("name = ? OR orig_name = ?", origName, origName).First(&brand).Error
+	// Ищем по полю name, orig_name или в списке алиасов
+	err := r.db.WithContext(ctx).Where(
+		"name = ? OR orig_name = ? OR aliases ILIKE ?",
+		origName,
+		origName,
+		"%"+origName+"%",
+	).First(&brand).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil // Возвращаем nil, nil если запись не найдена

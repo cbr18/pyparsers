@@ -17,12 +17,22 @@ export const fetchCars = async (page = 1, limit = 10, filters = {}) => {
       limit
     });
 
-    // Add filters if they exist
+    // Add filters if they exist (пустые значения не отправляем)
     if (filters.source) params.append('source', filters.source);
     if (filters.brand) params.append('brand', filters.brand);
-    if (filters.city) params.append('city', filters.city);
-    if (filters.year) params.append('year', filters.year);
     if (filters.search) params.append('search', filters.search);
+
+    // Диапазоны по году
+    if (filters.yearFrom) params.append('year_from', filters.yearFrom);
+    if (filters.yearTo) params.append('year_to', filters.yearTo);
+
+    // Диапазоны по цене (в рублях)
+    if (filters.priceFrom) params.append('price_from', filters.priceFrom);
+    if (filters.priceTo) params.append('price_to', filters.priceTo);
+
+    // Сортировка
+    if (filters.sortBy) params.append('sort_by', filters.sortBy);
+    if (filters.sortOrder) params.append('sort_order', filters.sortOrder);
 
     const response = await fetch(`${API_URL}?${params.toString()}`);
 

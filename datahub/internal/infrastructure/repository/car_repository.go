@@ -58,8 +58,8 @@ func (r *CarRepository) Create(ctx context.Context, car domain.Car) error {
 	if car.BrandName != "" {
 		// Ищем бренд в рамках транзакции
 		var brand domain.Brand
-		// Ищем по полю name или orig_name
-		err := tx.Where("name = ? OR orig_name = ?", car.BrandName, car.BrandName).First(&brand).Error
+		// Ищем по полю name, orig_name или в списке алиасов
+		err := tx.Where("name = ? OR orig_name = ? OR aliases ILIKE ?", car.BrandName, car.BrandName, "%"+car.BrandName+"%").First(&brand).Error
 
 		// Если бренд не найден, создаем его
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -147,16 +147,35 @@ func (r *CarRepository) List(ctx context.Context, filter domain.CarFilter, page,
 		query = query.Where("source = ?", *filter.Source)
 	}
 	if filter.BrandName != nil {
-		query = query.Where("brand_name = ?", *filter.BrandName)
+		// Используем ILIKE для нечувствительности к регистру и частичного совпадения
+		query = query.Where("brand_name ILIKE ?", "%"+*filter.BrandName+"%")
 	}
 	if filter.City != nil {
-		query = query.Where("city = ?", *filter.City)
+		// Используем ILIKE для нечувствительности к регистру и частичного совпадения
+		query = query.Where("city ILIKE ?", "%"+*filter.City+"%")
 	}
 	if filter.Year != nil {
 		query = query.Where("year = ?", *filter.Year)
 	}
+	// Диапазон года
+	if filter.YearFrom != nil {
+		query = query.Where("year >= ?", *filter.YearFrom)
+	}
+	if filter.YearTo != nil {
+		query = query.Where("year <= ?", *filter.YearTo)
+	}
+	// Диапазон цены (по rub_price)
+	if filter.PriceFrom != nil {
+		query = query.Where("rub_price >= ?", *filter.PriceFrom)
+	}
+	if filter.PriceTo != nil {
+		query = query.Where("rub_price <= ?", *filter.PriceTo)
+	}
 	if filter.IsAvailable != nil {
 		query = query.Where("is_available = ?", *filter.IsAvailable)
+	}
+	if filter.HasDetails != nil {
+		query = query.Where("has_details = ?", *filter.HasDetails)
 	}
 	if filter.Search != nil {
 		query = query.Where("title ILIKE ? OR car_name ILIKE ?", "%"+*filter.Search+"%", "%"+*filter.Search+"%")
@@ -168,9 +187,15 @@ func (r *CarRepository) List(ctx context.Context, filter domain.CarFilter, page,
 	}
 
 	// Определяем порядок сортировки
-	orderBy := "sort_number DESC, created_at DESC"
+	// ВСЕГДА сначала показываем машины с детальной информацией (has_details=true)
+	// Это приоритет над любой другой сортировкой
+	var orderBy string
 	if sort != "" {
-		orderBy = sort
+		// Если задана пользовательская сортировка, добавляем has_details в начало
+		orderBy = "has_details DESC NULLS LAST, " + sort
+	} else {
+		// Дефолтная сортировка
+		orderBy = "has_details DESC NULLS LAST, sort_number DESC, updated_at DESC"
 	}
 
 	// Вычисляем смещение
@@ -276,7 +301,7 @@ func (r *CarRepository) CreateMany(ctx context.Context, cars []domain.Car) error
 
 		if filtered[i].BrandName != "" {
 			var brand domain.Brand
-			err := tx.Where("name = ? OR orig_name = ?", filtered[i].BrandName, filtered[i].BrandName).First(&brand).Error
+			err := tx.Where("name = ? OR orig_name = ? OR aliases ILIKE ?", filtered[i].BrandName, filtered[i].BrandName, "%"+filtered[i].BrandName+"%").First(&brand).Error
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				// Создаем бренд с правильной логикой: orig_name - китайское, name - английское
 				newBrand, err := r.CreateBrandWithTranslation(ctx, filtered[i].BrandName, nil)
@@ -380,7 +405,7 @@ func (r *CarRepository) ReplaceBySource(ctx context.Context, source string, cars
         // Привяжем бренд
         if dedup[i].BrandName != "" {
             var brand domain.Brand
-            err := tx.Where("name = ? OR orig_name = ?", dedup[i].BrandName, dedup[i].BrandName).First(&brand).Error
+            err := tx.Where("name = ? OR orig_name = ? OR aliases ILIKE ?", dedup[i].BrandName, dedup[i].BrandName, "%"+dedup[i].BrandName+"%").First(&brand).Error
             if errors.Is(err, gorm.ErrRecordNotFound) {
                 // Создаем бренд с правильной логикой: orig_name - китайское, name - английское
                 b, err := r.CreateBrandWithTranslation(ctx, dedup[i].BrandName, nil)
@@ -488,8 +513,8 @@ func (r *CarRepository) CreateManyWithTranslation(ctx context.Context, cars []do
 		// Обрабатываем бренд если есть
 		if cars[i].BrandName != "" {
 			var brand domain.Brand
-			// Ищем по полю name или orig_name
-			err := tx.Where("name = ? OR orig_name = ?", cars[i].BrandName, cars[i].BrandName).First(&brand).Error
+			// Ищем по полю name, orig_name или в списке алиасов
+			err := tx.Where("name = ? OR orig_name = ? OR aliases ILIKE ?", cars[i].BrandName, cars[i].BrandName, "%"+cars[i].BrandName+"%").First(&brand).Error
 
 			// Если бренд не найден, создаем его с переводом
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -559,8 +584,27 @@ func (r *CarRepository) UpdateCar(ctx context.Context, car domain.Car) error {
 	car.UpdatedAt = time.Now()
 
 	updates := map[string]interface{}{
+		// Базовые поля
+		"title":                  car.Title,
+		"car_name":               car.CarName,
+		"year":                   car.Year,
+		"mileage":                car.Mileage,
+		"price":                  car.Price,
+		"image":                  car.Image,
+		"city":                   car.City,
+		"shop_id":                car.ShopID,
+		"description":            car.Description,
+		"color":                  car.Color,
+		"transmission":           car.Transmission,
+		"fuel_type":              car.FuelType,
+		"engine_volume":          car.EngineVolume,
+		"body_type":              car.BodyType,
+		"drive_type":             car.DriveType,
+		"condition":              car.Condition,
+		// Флаги и метаданные
 		"has_details":            car.HasDetails,
 		"last_detail_update":     car.LastDetailUpdate,
+		// Технические характеристики
 		"power":                  car.Power,
 		"torque":                 car.Torque,
 		"acceleration":           car.Acceleration,
@@ -641,6 +685,7 @@ func (r *CarRepository) UpdateCar(ctx context.Context, car domain.Car) error {
 		"door_count":             car.DoorCount,
 		"trunk_volume":           car.TrunkVolume,
 		"fuel_tank_volume":       car.FuelTankVolume,
+		"rub_price":              car.RubPrice,
 		"updated_at":             car.UpdatedAt,
 	}
 

@@ -30,6 +30,9 @@ func (r *Router) Setup() *gin.Engine {
    e.POST("/enhancement/stop", r.handler.StopEnhancement)
    e.POST("/enhancement/config", r.handler.ConfigureEnhancement)
    
+   // Debug endpoints
+   e.POST("/debug/price", r.handler.DebugPrice)
+   
    // Swagger UI
    e.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
    return e

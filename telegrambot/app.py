@@ -37,7 +37,7 @@ app = FastAPI()
 @dispatcher.message(CommandStart())
 async def handle_start(message: Message):
     await message.answer(
-        "Бот для заявок CarCatch активен!\n\nОткройте мини‑приложение через кнопку в меню (гамбургер).",
+        "Бот для заявок CarCatch активен!\n\nОткройте мини‑приложение через кнопку в меню.",
     )
 
 

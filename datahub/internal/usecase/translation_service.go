@@ -509,20 +509,43 @@ func (s *TranslationService) normalizeBrand(translated string) string {
 		return translated
 	}
 
+	// Сначала проверяем точное совпадение
 	for _, entry := range s.knownBrands {
 		if normalized == entry.lower {
 			return entry.canonical
 		}
+	}
 
+	// Проверяем, начинается ли строка с известного бренда (для случаев типа "audi a4")
+	for _, entry := range s.knownBrands {
 		if strings.HasPrefix(normalized, entry.lower) {
 			remainder := normalized[len(entry.lower):]
 			if remainder == "" {
 				return entry.canonical
 			}
 
+			// Проверяем, что после бренда идет разделитель (пробел, цифра, дефис и т.д.)
 			r, _ := utf8.DecodeRuneInString(remainder)
 			if unicode.IsSpace(r) || unicode.IsDigit(r) || isDelimiterRune(r) {
 				return entry.canonical
+			}
+		}
+	}
+
+	// Если строка содержит несколько слов, проверяем каждое слово на наличие в списке брендов
+	parts := strings.Fields(normalized)
+	if len(parts) > 1 {
+		for _, part := range parts {
+			partLower := strings.ToLower(strings.TrimSpace(part))
+			if partLower == "" {
+				continue
+			}
+			
+			// Проверяем точное совпадение слова с брендом
+			for _, entry := range s.knownBrands {
+				if partLower == entry.lower {
+					return entry.canonical
+				}
 			}
 		}
 	}

@@ -519,6 +519,39 @@ class DongchediParser(BaseCarParser):
                                 car_info['width'] = space.get('width', '')
                                 car_info['wheelbase'] = space.get('wheelbase', '')
                         
+                        # Парсим engine_volume из разных источников
+                        # Примечание: для электромобилей и некоторых страниц объявлений объема может не быть
+                        engine_volume = sku_detail.get('car_info', {}).get('engine_volume')
+                        if not engine_volume or (isinstance(engine_volume, str) and not engine_volume.strip()):
+                            # Если не нашли в car_info, ищем в rawData.car_info[0].info
+                            try:
+                                raw_data = json_data.get('props', {}).get('pageProps', {}).get('rawData', {})
+                                car_info_list = raw_data.get('car_info', [])
+                                if car_info_list and len(car_info_list) > 0:
+                                    info_dict = car_info_list[0].get('info', {})
+                                    if info_dict:
+                                        # Пробуем capacity_l (в литрах, например "2.0")
+                                        capacity_l = info_dict.get('capacity_l', {})
+                                        if isinstance(capacity_l, dict) and capacity_l.get('value'):
+                                            engine_volume = str(capacity_l.get('value')).strip()
+                                        # Если не нашли, пробуем cylinder_volume_ml (в миллилитрах, например "1999")
+                                        if not engine_volume or (isinstance(engine_volume, str) and not engine_volume.strip()):
+                                            cylinder_volume_ml = info_dict.get('cylinder_volume_ml', {})
+                                            if isinstance(cylinder_volume_ml, dict) and cylinder_volume_ml.get('value'):
+                                                # Конвертируем из мл в литры
+                                                try:
+                                                    ml_value = float(cylinder_volume_ml.get('value'))
+                                                    engine_volume = str(ml_value / 1000.0)
+                                                except (ValueError, TypeError):
+                                                    pass
+                            except (KeyError, IndexError, AttributeError):
+                                pass
+                        
+                        # Используем найденное значение или оставляем None
+                        # None - это нормально для электромобилей и некоторых страниц объявлений
+                        if not engine_volume or (isinstance(engine_volume, str) and not engine_volume.strip()):
+                            engine_volume = None
+                        
                         car_info.update({
                             'title': sku_detail.get('title', ''),
                             'sh_price': sku_detail.get('sh_price', ''),
@@ -537,7 +570,7 @@ class DongchediParser(BaseCarParser):
                             'color': sku_detail.get('car_info', {}).get('color', ''),
                             'transmission': sku_detail.get('car_info', {}).get('transmission', ''),
                             'fuel_type': sku_detail.get('car_info', {}).get('fuel_type', '') or car_info.get('fuel_type', ''),
-                            'engine_volume': sku_detail.get('car_info', {}).get('engine_volume', ''),
+                            'engine_volume': engine_volume if engine_volume else (car_info.get('engine_volume') or None),
                             'body_type': sku_detail.get('car_info', {}).get('body_type', ''),
                             'drive_type': sku_detail.get('car_info', {}).get('drive_type', '') or car_info.get('drive_type', ''),
                             'condition': sku_detail.get('car_info', {}).get('condition', ''),
@@ -783,6 +816,7 @@ class DongchediParser(BaseCarParser):
                         '快充时间(小时)': 'fast_charge_time',
                         '发动机': 'engine_type',
                         '排量(mL)': 'engine_volume',
+                        '排量(L)': 'engine_volume',  # Альтернативный формат (в литрах)
                         '变速箱': 'transmission_type',
                         '驱动方式': 'drive_type',
                         '前悬架类型': 'front_suspension',
@@ -865,6 +899,12 @@ class DongchediParser(BaseCarParser):
         
         # Обновляем объект машины
         if detail_car:
+            # Копируем базовые поля
+            for field in ['description', 'color', 'transmission', 'fuel_type', 'body_type', 
+                         'drive_type', 'condition', 'engine_volume']:
+                if hasattr(detail_car, field) and getattr(detail_car, field) is not None:
+                    setattr(car_obj, field, getattr(detail_car, field))
+            
             # Копируем детальную информацию
             for field in ['power', 'torque', 'acceleration', 'max_speed', 'fuel_consumption',
                          'emission_standard', 'length', 'width', 'height', 'wheelbase',

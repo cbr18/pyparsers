@@ -271,7 +271,22 @@ class TaskService:
                 logger.info(f"che168 page {page}: processing {len(cars_list)} cars")
                 
                 for i, car in enumerate(cars_list):
-                    car_dict = car.dict()
+                    car_dict = car.dict(exclude_none=False)
+                    # Нормализуем ссылку: всегда используем формат как в details
+                    # https://m.che168.com/cardetail/index?infoid={car_id}
+                    car_id = car_dict.get('car_id')
+                    existing_link = car_dict.get('link', '')
+                    
+                    if car_id:
+                        # Если есть car_id, всегда используем его для формирования ссылки
+                        car_dict['link'] = f'https://m.che168.com/cardetail/index?infoid={car_id}'
+                    elif existing_link:
+                        # Если нет car_id, но есть ссылка, пытаемся извлечь car_id из ссылки
+                        match = re.search(r'/(\d+)\.html|infoid=(\d+)', existing_link)
+                        if match:
+                            extracted_id = match.group(1) or match.group(2)
+                            car_dict['link'] = f'https://m.che168.com/cardetail/index?infoid={extracted_id}'
+                    # Если нет ни car_id, ни link, оставляем как есть (будет None или пустая строка)
                     car_dict.update({
                         'sort_number': len(cars_list) - i,
                         'source': 'che168'
@@ -360,7 +375,10 @@ class TaskService:
                 logger.info(f"che168 incremental page {page}: processing {len(cars_list)} cars")
                 found_existing = False
                 for i, car in enumerate(cars_list):
-                    car_dict = car.dict()
+                    car_dict = car.dict(exclude_none=False)
+                    # Убеждаемся, что link всегда есть, формируем на основе car_id если нужно
+                    if not car_dict.get('link') and car_dict.get('car_id'):
+                        car_dict['link'] = f'https://m.che168.com/cardetail/index?infoid={car_dict["car_id"]}'
                     # Остановка при первом совпадении по нужному полю
                     stop_id = car_dict.get(id_field)
                     if stop_id is not None:

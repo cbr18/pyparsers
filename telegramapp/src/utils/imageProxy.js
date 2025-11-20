@@ -1,15 +1,23 @@
 /**
  * Utility functions for handling image URLs through proxy
+ * 
+ * ПОЧЕМУ ПРОКСИРУЕМ КАРТИНКИ:
+ * 1. CORS - китайские CDN блокируют прямые запросы с других доменов
+ * 2. Referer - многие CDN проверяют откуда идет запрос (hotlink protection)
+ * 3. IP-блокировки - некоторые CDN блокируют запросы из России
+ * 
+ * ПОЧЕМУ НЕ ВСЕ:
+ * - Подписанные URL (с x-signature) проверяют IP клиента и время
+ * - Прокси меняет IP, подпись становится невалидной → 403 Forbidden
+ * - Такие URL должны загружаться напрямую от клиента
  */
 
 /**
- * List of domains that require proxy due to CORS issues
+ * List of domains that require proxy due to CORS/Referer issues
  */
 const PROBLEMATIC_DOMAINS = [
-  'autoimg.cn',
-  'img.autoimg.cn',
-  'pic.autoimg.cn',
-  '2sc2.autoimg.cn',  // Добавлен поддомен из лога
+  'autoimg.cn',       // che168 images (требуют referer: che168.com)
+  'byteimg.com',      // dongchedi images (требуют referer: dongchedi.com)
   // Add other problematic domains here
 ];
 
@@ -46,6 +54,11 @@ const isExternalUrl = (url) => {
 const isProblematicDomain = (url) => {
   if (!url || typeof url !== 'string') return false;
   
+  // Подписанные URL dongchedi грузятся напрямую (подпись проверяет IP/время)
+  if (url.includes('-sign.byteimg.com') && url.includes('x-signature')) {
+    return false;
+  }
+  
   try {
     const urlObj = new URL(url);
     return PROBLEMATIC_DOMAINS.some(domain => 
@@ -76,9 +89,9 @@ export const getProxiedImageUrl = (originalUrl) => {
     return originalUrl;
   }
   
-  // Encode original URL so query params (e.g. x-signature) are preserved
-  const encodedUrl = encodeURIComponent(originalUrl);
-  return `/proxy-image?url=${encodedUrl}`;
+  // Не кодируем URL вручную - браузер сделает это автоматически
+  // Это предотвращает двойное кодирование (особенно для % в подписях)
+  return `/proxy-image?url=${originalUrl}`;
 };
 
 /**

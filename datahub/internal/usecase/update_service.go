@@ -22,15 +22,21 @@ type UpdateService struct {
 	client            ExternalSourceClient
 	sourceName        string
 	translationService *TranslationService
+	priceCalculator   *PriceCalculator
 }
 
 func NewUpdateService(repo repository.CarRepository, client ExternalSourceClient, sourceName string) *UpdateService {
-	return &UpdateService{repo: repo, client: client, sourceName: sourceName, translationService: nil}
+	return &UpdateService{repo: repo, client: client, sourceName: sourceName, translationService: nil, priceCalculator: nil}
 }
 
 // NewUpdateServiceWithTranslation создает UpdateService с поддержкой перевода
 func NewUpdateServiceWithTranslation(repo repository.CarRepository, client ExternalSourceClient, sourceName string, translationService *TranslationService) *UpdateService {
-	return &UpdateService{repo: repo, client: client, sourceName: sourceName, translationService: translationService}
+	return &UpdateService{repo: repo, client: client, sourceName: sourceName, translationService: translationService, priceCalculator: nil}
+}
+
+// NewUpdateServiceWithPriceCalculator создает UpdateService с поддержкой калькуляции цен
+func NewUpdateServiceWithPriceCalculator(repo repository.CarRepository, client ExternalSourceClient, sourceName string, translationService *TranslationService, priceCalculator *PriceCalculator) *UpdateService {
+	return &UpdateService{repo: repo, client: client, sourceName: sourceName, translationService: translationService, priceCalculator: priceCalculator}
 }
 
 // FullUpdate — полное обновление: очищает старые записи, сохраняет новые
@@ -51,6 +57,9 @@ func (s *UpdateService) FullUpdate(ctx context.Context) (int, error) {
 			cars = translatedCars
 		}
 	}
+	
+	// Рассчитываем цены в рублях
+	s.calculateRubPrices(ctx, cars)
 	
 	if err := s.repo.DeleteBySource(ctx, s.sourceName); err != nil {
 		return 0, err
@@ -87,6 +96,9 @@ func (s *UpdateService) IncrementalUpdate(ctx context.Context, lastN int) error 
 			newCars = translatedCars
 		}
 	}
+	
+	// Рассчитываем цены в рублях
+	s.calculateRubPrices(ctx, newCars)
 	
 	// Используем CreateManyWithTranslation для создания машин и брендов с переводом
 	err = s.repo.CreateManyWithTranslation(ctx, newCars, s.translationService)
@@ -127,6 +139,9 @@ func (s *UpdateService) SaveCars(ctx context.Context, cars []domain.Car) error {
 		cars[i].Source = s.sourceName
 	}
 	
+	// Рассчитываем цены в рублях
+	s.calculateRubPrices(ctx, cars)
+	
 	return s.repo.CreateManyWithTranslation(ctx, cars, s.translationService)
 }
 
@@ -158,6 +173,9 @@ func (s *UpdateService) ReplaceSource(ctx context.Context, cars []domain.Car) er
     for i := range cars {
         cars[i].Source = s.sourceName
     }
+	// Рассчитываем цены в рублях
+	s.calculateRubPrices(ctx, cars)
+	
     return s.repo.ReplaceBySourceWithTranslation(ctx, s.sourceName, cars, s.translationService)
 }
 
@@ -192,5 +210,27 @@ func (s *UpdateService) AppendIncremental(ctx context.Context, cars []domain.Car
         cars[i].Source = s.sourceName
         cars[i].SortNumber = currentMax + i + 1
     }
+	// Рассчитываем цены в рублях
+	s.calculateRubPrices(ctx, cars)
+	
     return s.repo.CreateManyWithTranslation(ctx, cars, s.translationService)
+}
+
+// calculateRubPrices рассчитывает цены в рублях для всех машин
+func (s *UpdateService) calculateRubPrices(ctx context.Context, cars []domain.Car) {
+	if s.priceCalculator == nil {
+		return
+	}
+	
+	for i := range cars {
+		if cars[i].Price != "" {
+			rubPrice, err := s.priceCalculator.CalculateRubPrice(ctx, cars[i].Price)
+			if err != nil {
+				// Логируем ошибку, но продолжаем
+				fmt.Printf("Ошибка расчета цены в рублях для машины %s: %v\n", cars[i].UUID, err)
+			} else {
+				cars[i].RubPrice = rubPrice
+			}
+		}
+	}
 }

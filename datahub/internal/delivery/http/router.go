@@ -29,6 +29,12 @@ func (r *Router) Setup() *gin.Engine {
    e.POST("/enhancement/start", r.handler.StartEnhancement)
    e.POST("/enhancement/stop", r.handler.StopEnhancement)
    e.POST("/enhancement/config", r.handler.ConfigureEnhancement)
+
+   // Validation endpoints
+   e.GET("/validation/status", r.handler.GetValidationStatus)
+   e.POST("/validation/start", r.handler.StartValidation)
+   e.POST("/validation/stop", r.handler.StopValidation)
+   e.POST("/validation/config", r.handler.ConfigureValidation)
    
    // Debug endpoints
    e.POST("/debug/price", r.handler.DebugPrice)

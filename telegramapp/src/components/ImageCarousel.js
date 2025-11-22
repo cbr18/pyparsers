@@ -59,9 +59,13 @@ const ImageCarousel = ({ images, mainImage, alt }) => {
         <img
           src={currentImageUrl || placeholder}
           alt={alt || 'Фото автомобиля'}
-          onError={(e) => { 
-            e.target.onerror = null; 
-            e.target.src = placeholder; 
+          onError={(e) => {
+            e.target.onerror = null;
+            if (currentIndex === 0 && allImages.length > 1) {
+              setCurrentIndex(1);
+              return;
+            }
+            e.target.src = placeholder;
           }}
         />
         

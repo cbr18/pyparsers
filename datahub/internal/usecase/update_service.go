@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"datahub/internal/domain"
+	"datahub/internal/filters"
 	"datahub/internal/repository"
 	"fmt"
 )
@@ -39,7 +40,7 @@ func NewUpdateServiceWithPriceCalculator(repo repository.CarRepository, client E
 	return &UpdateService{repo: repo, client: client, sourceName: sourceName, translationService: translationService, priceCalculator: priceCalculator}
 }
 
-// FullUpdate — полное обновление: очищает старые записи, сохраняет новые
+// FullUpdate — полное обновление: очищает устаревшие записи без деталей/доступности и сохраняет свежие
 // Возвращает количество обновленных машин
 func (s *UpdateService) FullUpdate(ctx context.Context) (int, error) {
 	cars, err := s.client.FetchAll(ctx)
@@ -61,7 +62,7 @@ func (s *UpdateService) FullUpdate(ctx context.Context) (int, error) {
 	// Рассчитываем цены в рублях
 	s.calculateRubPrices(ctx, cars)
 	
-	if err := s.repo.DeleteBySource(ctx, s.sourceName); err != nil {
+	if err := s.repo.DeleteUnavailableCars(ctx, s.sourceName); err != nil {
 		return 0, err
 	}
 	if err := s.repo.CreateManyWithTranslation(ctx, cars, s.translationService); err != nil {
@@ -137,6 +138,8 @@ func (s *UpdateService) SaveCars(ctx context.Context, cars []domain.Car) error {
 	// Устанавливаем source для всех машин
 	for i := range cars {
 		cars[i].Source = s.sourceName
+		// Ставим флаг доступности по фильтру, чтобы пикапы/электрокары отметились как недоступные
+		cars[i].IsAvailable = filters.ShouldKeepCar(cars[i])
 	}
 	
 	// Рассчитываем цены в рублях

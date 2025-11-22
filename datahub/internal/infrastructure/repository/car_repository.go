@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"datahub/internal/domain"
+	"datahub/internal/filters"
 	"datahub/internal/infrastructure/database"
 
 	"gorm.io/gorm"
@@ -58,8 +60,23 @@ func (r *CarRepository) Create(ctx context.Context, car domain.Car) error {
 	if car.BrandName != "" {
 		// Ищем бренд в рамках транзакции
 		var brand domain.Brand
-		// Ищем по полю name, orig_name или в списке алиасов
-		err := tx.Where("name = ? OR orig_name = ? OR aliases ILIKE ?", car.BrandName, car.BrandName, "%"+car.BrandName+"%").First(&brand).Error
+		// Ищем по полю name, orig_name или в списке алиасов (в нижнем регистре)
+		// Также проверяем обратное вхождение: входят ли name или orig_name в искомую строку
+		searchTerm := strings.ToLower(strings.TrimSpace(car.BrandName))
+		err := tx.Where(
+			`LOWER(COALESCE(name, '')) = ? OR 
+			 LOWER(COALESCE(orig_name, '')) = ? OR 
+			 LOWER(COALESCE(aliases, '')) LIKE ? OR
+			 (? LIKE '%' || LOWER(COALESCE(name, '')) || '%' AND LOWER(COALESCE(name, '')) != '') OR
+			 (? LIKE '%' || LOWER(COALESCE(orig_name, '')) || '%' AND LOWER(COALESCE(orig_name, '')) != '') OR
+			 EXISTS (
+			   SELECT 1 FROM unnest(string_to_array(LOWER(COALESCE(aliases, '')), ',')) AS alias_item
+			   WHERE ? LIKE '%' || TRIM(alias_item) || '%' AND TRIM(alias_item) != ''
+			 )`,
+			searchTerm, searchTerm, "%"+searchTerm+"%",
+			searchTerm, searchTerm,
+			searchTerm,
+		).First(&brand).Error
 
 		// Если бренд не найден, создаем его
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -142,6 +159,11 @@ func (r *CarRepository) List(ctx context.Context, filter domain.CarFilter, page,
 
 	query := r.db.WithContext(ctx).Model(&domain.Car{})
 
+	// отдаём только машины с детальной информацией и доступные по флагу
+	query = query.Where("has_details = ? AND is_available = ?", true, true)
+
+	query = filters.ApplyViewerFilters(query)
+
 	// Применяем фильтры
 	if filter.Source != nil {
 		query = query.Where("source = ?", *filter.Source)
@@ -218,6 +240,13 @@ func (r *CarRepository) List(ctx context.Context, filter domain.CarFilter, page,
 // DeleteBySource - удаляет все записи Car по источнику
 func (r *CarRepository) DeleteBySource(ctx context.Context, source string) error {
 	return r.db.WithContext(ctx).Where("source = ?", source).Delete(&domain.Car{}).Error
+}
+
+// DeleteUnavailableCars удаляет только записи без деталей и недоступные, чтобы сохранить подтвержденные машины
+func (r *CarRepository) DeleteUnavailableCars(ctx context.Context, source string) error {
+	return r.db.WithContext(ctx).
+		Where("source = ? AND has_details = ? AND is_available = ?", source, false, false).
+		Delete(&domain.Car{}).Error
 }
 
 // CreateMany - создаёт множество записей Car в базе данных
@@ -301,7 +330,18 @@ func (r *CarRepository) CreateMany(ctx context.Context, cars []domain.Car) error
 
 		if filtered[i].BrandName != "" {
 			var brand domain.Brand
-			err := tx.Where("name = ? OR orig_name = ? OR aliases ILIKE ?", filtered[i].BrandName, filtered[i].BrandName, "%"+filtered[i].BrandName+"%").First(&brand).Error
+			// Ищем по полю name, orig_name или в списке алиасов (в нижнем регистре)
+			// Также проверяем обратное вхождение: входят ли name или orig_name в искомую строку
+			searchTerm := strings.ToLower(strings.TrimSpace(filtered[i].BrandName))
+			err := tx.Where(
+				`LOWER(COALESCE(name, '')) = ? OR 
+				 LOWER(COALESCE(orig_name, '')) = ? OR 
+				 LOWER(COALESCE(aliases, '')) LIKE ? OR
+				 (? LIKE '%' || LOWER(COALESCE(name, '')) || '%' AND LOWER(COALESCE(name, '')) != '') OR
+				 (? LIKE '%' || LOWER(COALESCE(orig_name, '')) || '%' AND LOWER(COALESCE(orig_name, '')) != '')`,
+				searchTerm, searchTerm, "%"+searchTerm+"%",
+				searchTerm, searchTerm,
+			).First(&brand).Error
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				// Создаем бренд с правильной логикой: orig_name - китайское, name - английское
 				newBrand, err := r.CreateBrandWithTranslation(ctx, filtered[i].BrandName, nil)
@@ -357,6 +397,68 @@ func (r *CarRepository) GetBySourceAndSort(ctx context.Context, source string, l
 	return cars, err
 }
 
+// GetCarsForValidation gets cars with is_available=true sorted by updated_at ASC
+func (r *CarRepository) GetCarsForValidation(ctx context.Context, source string, limit int) ([]domain.Car, error) {
+	var cars []domain.Car
+	err := r.db.WithContext(ctx).
+		Where("source = ? AND is_available = ?", source, true).
+		Order("updated_at ASC").
+		Limit(limit).
+		Find(&cars).Error
+	return cars, err
+}
+
+// CountCarsForValidation counts cars with is_available=true for a source
+func (r *CarRepository) CountCarsForValidation(ctx context.Context, source string) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Where("source = ? AND is_available = ?", source, true).
+		Model(&domain.Car{}).
+		Count(&count).Error
+	return count, err
+}
+
+// GetAllIDsBySource returns sku_id or car_id values for the given source
+func (r *CarRepository) GetAllIDsBySource(ctx context.Context, source string) ([]string, error) {
+	var rows []struct {
+		SkuID string
+		CarID int64
+	}
+	if err := r.db.WithContext(ctx).
+		Model(&domain.Car{}).
+		Where("source = ?", source).
+		Select("sku_id, car_id").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	ids := make([]string, 0, len(rows))
+	seen := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		var id string
+		if source == "dongchedi" {
+			if row.SkuID != "" {
+				id = row.SkuID
+			} else if row.CarID != 0 {
+				id = fmt.Sprintf("%d", row.CarID)
+			}
+		} else {
+			if row.CarID != 0 {
+				id = fmt.Sprintf("%d", row.CarID)
+			}
+		}
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
 // ReplaceBySource — атомарно заменяет все записи по источнику в одной транзакции
 func (r *CarRepository) ReplaceBySource(ctx context.Context, source string, cars []domain.Car) error {
     now := time.Now()
@@ -405,7 +507,18 @@ func (r *CarRepository) ReplaceBySource(ctx context.Context, source string, cars
         // Привяжем бренд
         if dedup[i].BrandName != "" {
             var brand domain.Brand
-            err := tx.Where("name = ? OR orig_name = ? OR aliases ILIKE ?", dedup[i].BrandName, dedup[i].BrandName, "%"+dedup[i].BrandName+"%").First(&brand).Error
+            // Ищем по полю name, orig_name или в списке алиасов (в нижнем регистре)
+            // Также проверяем обратное вхождение: входят ли name или orig_name в искомую строку
+            searchTerm := strings.ToLower(strings.TrimSpace(dedup[i].BrandName))
+            err := tx.Where(
+                `LOWER(COALESCE(name, '')) = ? OR 
+                 LOWER(COALESCE(orig_name, '')) = ? OR 
+                 LOWER(COALESCE(aliases, '')) LIKE ? OR
+                 (? LIKE '%' || LOWER(COALESCE(name, '')) || '%' AND LOWER(COALESCE(name, '')) != '') OR
+                 (? LIKE '%' || LOWER(COALESCE(orig_name, '')) || '%' AND LOWER(COALESCE(orig_name, '')) != '')`,
+                searchTerm, searchTerm, "%"+searchTerm+"%",
+                searchTerm, searchTerm,
+            ).First(&brand).Error
             if errors.Is(err, gorm.ErrRecordNotFound) {
                 // Создаем бренд с правильной логикой: orig_name - китайское, name - английское
                 b, err := r.CreateBrandWithTranslation(ctx, dedup[i].BrandName, nil)
@@ -513,8 +626,18 @@ func (r *CarRepository) CreateManyWithTranslation(ctx context.Context, cars []do
 		// Обрабатываем бренд если есть
 		if cars[i].BrandName != "" {
 			var brand domain.Brand
-			// Ищем по полю name, orig_name или в списке алиасов
-			err := tx.Where("name = ? OR orig_name = ? OR aliases ILIKE ?", cars[i].BrandName, cars[i].BrandName, "%"+cars[i].BrandName+"%").First(&brand).Error
+			// Ищем по полю name, orig_name или в списке алиасов (в нижнем регистре)
+			// Также проверяем обратное вхождение: входят ли name или orig_name в искомую строку
+			searchTerm := strings.ToLower(strings.TrimSpace(cars[i].BrandName))
+			err := tx.Where(
+				`LOWER(COALESCE(name, '')) = ? OR 
+				 LOWER(COALESCE(orig_name, '')) = ? OR 
+				 LOWER(COALESCE(aliases, '')) LIKE ? OR
+				 (? LIKE '%' || LOWER(COALESCE(name, '')) || '%' AND LOWER(COALESCE(name, '')) != '') OR
+				 (? LIKE '%' || LOWER(COALESCE(orig_name, '')) || '%' AND LOWER(COALESCE(orig_name, '')) != '')`,
+				searchTerm, searchTerm, "%"+searchTerm+"%",
+				searchTerm, searchTerm,
+			).First(&brand).Error
 
 			// Если бренд не найден, создаем его с переводом
 			if errors.Is(err, gorm.ErrRecordNotFound) {

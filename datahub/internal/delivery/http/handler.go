@@ -20,11 +20,21 @@ type Handler struct {
 	taskService       *usecase.TaskService
 	pyparsersClient   *external.PyparsersClient
 	enhancementWorker *usecase.EnhancementWorker
+	validationWorker  *usecase.ValidationWorker
 	priceCalculator   *usecase.PriceCalculator
 }
 
-func NewHandler(carService *usecase.CarService, updateService map[string]*usecase.UpdateService, brandService *usecase.BrandService, taskService *usecase.TaskService, pyparsersClient *external.PyparsersClient, enhancementWorker *usecase.EnhancementWorker, priceCalculator *usecase.PriceCalculator) *Handler {
-	return &Handler{carService: carService, updateService: updateService, brandService: brandService, taskService: taskService, pyparsersClient: pyparsersClient, enhancementWorker: enhancementWorker, priceCalculator: priceCalculator}
+func NewHandler(carService *usecase.CarService, updateService map[string]*usecase.UpdateService, brandService *usecase.BrandService, taskService *usecase.TaskService, pyparsersClient *external.PyparsersClient, enhancementWorker *usecase.EnhancementWorker, validationWorker *usecase.ValidationWorker, priceCalculator *usecase.PriceCalculator) *Handler {
+	return &Handler{
+		carService:        carService,
+		updateService:     updateService,
+		brandService:      brandService,
+		taskService:       taskService,
+		pyparsersClient:   pyparsersClient,
+		enhancementWorker: enhancementWorker,
+		validationWorker:  validationWorker,
+		priceCalculator:   priceCalculator,
+	}
 }
 
 // GetCars godoc
@@ -473,6 +483,114 @@ func (h *Handler) ConfigureEnhancement(c *gin.Context) {
 		time.Duration(config.DelayBetweenCarsSec)*time.Second,
 		config.MaxConcurrent,
 	)
+
+	c.JSON(http.StatusOK, gin.H{"status": "configured"})
+}
+
+// GetValidationStatus godoc
+// @Summary      Получить статус воркера проверки доступности
+// @Description  Возвращает информацию о работе ValidationWorker (проверка доступности/продан)
+// @Tags         validation
+// @Produce      json
+// @Success      200  {object}  map[string]interface{}
+// @Router       /validation/status [get]
+func (h *Handler) GetValidationStatus(c *gin.Context) {
+	if h.validationWorker == nil {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "validation worker is disabled"})
+		return
+	}
+
+	status, err := h.validationWorker.GetStatus(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, status)
+}
+
+// StartValidation godoc
+// @Summary      Запустить воркер валидации доступности
+// @Description  Запускает ValidationWorker (проверяет, доступны ли машины)
+// @Tags         validation
+// @Produce      json
+// @Success      200  {object}  map[string]string
+// @Router       /validation/start [post]
+func (h *Handler) StartValidation(c *gin.Context) {
+	if h.validationWorker == nil {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "validation worker is disabled"})
+		return
+	}
+	h.validationWorker.Start()
+	c.JSON(http.StatusOK, gin.H{"status": "started"})
+}
+
+// StopValidation godoc
+// @Summary      Остановить воркер валидации доступности
+// @Description  Останавливает ValidationWorker
+// @Tags         validation
+// @Produce      json
+// @Success      200  {object}  map[string]string
+// @Router       /validation/stop [post]
+func (h *Handler) StopValidation(c *gin.Context) {
+	if h.validationWorker == nil {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "validation worker is disabled"})
+		return
+	}
+	h.validationWorker.Stop()
+	c.JSON(http.StatusOK, gin.H{"status": "stopped"})
+}
+
+// ConfigureValidation godoc
+// @Summary      Настроить воркер валидации доступности
+// @Description  Обновляет конфигурацию ValidationWorker
+// @Tags         validation
+// @Accept       json
+// @Produce      json
+// @Param        config  body  object  true  "Конфигурация"
+// @Success      200  {object}  map[string]string
+// @Router       /validation/config [post]
+func (h *Handler) ConfigureValidation(c *gin.Context) {
+	if h.validationWorker == nil {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "validation worker is disabled"})
+		return
+	}
+
+	var config struct {
+		BatchSize              *int `json:"batch_size"`
+		DelayBetweenBatchesSec *int `json:"delay_between_batches_sec"`
+		DelayBetweenCarsSec    *int `json:"delay_between_cars_sec"`
+		MaxConcurrent          *int `json:"max_concurrent"`
+		ValidationIntervalHours *int `json:"validation_interval_hours"`
+	}
+
+	if err := c.ShouldBindJSON(&config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	cfg := usecase.ValidationWorkerConfig{}
+
+	if config.BatchSize != nil {
+		cfg.BatchSize = config.BatchSize
+	}
+	if config.DelayBetweenBatchesSec != nil {
+		dur := time.Duration(*config.DelayBetweenBatchesSec) * time.Second
+		cfg.DelayBetweenBatches = &dur
+	}
+	if config.DelayBetweenCarsSec != nil {
+		dur := time.Duration(*config.DelayBetweenCarsSec) * time.Second
+		cfg.DelayBetweenCars = &dur
+	}
+	if config.MaxConcurrent != nil {
+		cfg.MaxConcurrent = config.MaxConcurrent
+	}
+	if config.ValidationIntervalHours != nil {
+		dur := time.Duration(*config.ValidationIntervalHours) * time.Hour
+		cfg.ValidationInterval = &dur
+	}
+
+	h.validationWorker.SetConfig(cfg)
 
 	c.JSON(http.StatusOK, gin.H{"status": "configured"})
 }

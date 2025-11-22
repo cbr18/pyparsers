@@ -105,8 +105,9 @@ func main() {
 		"che168":    usecase.NewUpdateServiceWithPriceCalculator(repo, che168Client, "che168", translationService, priceCalculator),
 	}
 
-	// Инициализация воркера для улучшения машин
+	// Инициализация воркеров
 	enhancementWorker := usecase.NewEnhancementWorker(repo, dongchediClient, che168Client, translationService, priceCalculator)
+	validationWorker := usecase.NewValidationWorker(repo, dongchediClient, che168Client)
 
 	autoStartWorker := true
 	if raw := strings.TrimSpace(os.Getenv("ENHANCEMENT_WORKER_AUTO_START")); raw != "" {
@@ -129,7 +130,28 @@ func main() {
 		log.Println("Enhancement worker auto-start disabled; use /enhancement/start to run manually")
 	}
 
-	handler := httpdelivery.NewHandler(carService, updateService, brandService, taskService, pyparsersClient, enhancementWorker, priceCalculator)
+	autoStartValidation := true
+	if raw := strings.TrimSpace(os.Getenv("VALIDATION_WORKER_AUTO_START")); raw != "" {
+		autoStartValidation = true
+		switch strings.ToLower(raw) {
+		case "false", "0", "off", "no":
+			autoStartValidation = false
+		}
+	}
+
+	if autoStartValidation {
+		validationWorker.Start()
+		log.Println("Validation worker auto-started")
+		defer func() {
+			if validationWorker.IsRunning() {
+				validationWorker.Stop()
+			}
+		}()
+	} else {
+		log.Println("Validation worker auto-start disabled; use /validation/start to run manually")
+	}
+
+	handler := httpdelivery.NewHandler(carService, updateService, brandService, taskService, pyparsersClient, enhancementWorker, validationWorker, priceCalculator)
 	router := httpdelivery.NewRouter(handler)
 
 	if err := router.Setup().Run(":8080"); err != nil {

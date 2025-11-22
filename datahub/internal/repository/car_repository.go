@@ -17,6 +17,10 @@ type CarRepository interface {
 	CreateMany(ctx context.Context, cars []domain.Car) error
 	CreateManyWithTranslation(ctx context.Context, cars []domain.Car, translationService interface{}) error
 	DeleteBySource(ctx context.Context, source string) error
+	DeleteUnavailableCars(ctx context.Context, source string) error
+	GetCarsForValidation(ctx context.Context, source string, limit int) ([]domain.Car, error)
+	CountCarsForValidation(ctx context.Context, source string) (int64, error)
+	GetAllIDsBySource(ctx context.Context, source string) ([]string, error)
     ReplaceBySource(ctx context.Context, source string, cars []domain.Car) error
     ReplaceBySourceWithTranslation(ctx context.Context, source string, cars []domain.Car, translationService interface{}) error
 	GetCarsWithoutDetails(ctx context.Context, source string, limit int) ([]domain.Car, error)

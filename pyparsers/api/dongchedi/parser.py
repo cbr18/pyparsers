@@ -1,8 +1,68 @@
+import re
 import requests
 from typing import Optional, Tuple
 from .models.response import DongchediApiResponse, DongchediData
 from .models.car import DongchediCar
 from ..base_parser import BaseCarParser
+
+
+_PS_PATTERN = re.compile(r'\(([\d.,]+)\s*[Pp][Ss]?\)')
+_HORSEPOWER_UNIT_PATTERN = re.compile(r'([\d.,]+)\s*(?:[Pp][Ss]?|л\.с\.|HP|hp)')
+_KW_PATTERN = re.compile(r'[\d.,]+\s*[Kk][Ww]')
+_FIRST_NUMBER_PATTERN = re.compile(r'([\d.,]+)')
+_KW_TO_HP = 1.35962
+
+
+def _parse_number(text: str) -> Optional[float]:
+    match = _FIRST_NUMBER_PATTERN.search(text)
+    if not match:
+        return None
+    number_str = match.group(1).replace(',', '.')
+    try:
+        return float(number_str)
+    except ValueError:
+        return None
+
+
+def _format_hp(value: float) -> str:
+    return str(int(round(value)))
+
+
+def normalize_power_value(raw_value, assume_kw: bool = False) -> Optional[str]:
+    if raw_value is None:
+        return None
+    value_str = str(raw_value).strip()
+    if not value_str:
+        return None
+    normalized = value_str.replace('（', '(').replace('）', ')')
+
+    match = _PS_PATTERN.search(normalized)
+    if match:
+        number = _parse_number(match.group(1))
+        if number is not None:
+            return _format_hp(number)
+
+    match = _HORSEPOWER_UNIT_PATTERN.search(normalized)
+    if match:
+        number = _parse_number(match.group(1))
+        if number is not None:
+            return _format_hp(number)
+
+    if _KW_PATTERN.search(normalized):
+        number = _parse_number(normalized)
+        if number is not None:
+            return _format_hp(number * _KW_TO_HP)
+
+    if assume_kw:
+        number = _parse_number(normalized)
+        if number is not None:
+            return _format_hp(number * _KW_TO_HP)
+
+    number = _parse_number(normalized)
+    if number is not None:
+        return _format_hp(number)
+
+    return None
 
 class DongchediParser(BaseCarParser):
     """Парсер для сайта Dongchedi"""
@@ -509,7 +569,10 @@ class DongchediParser(BaseCarParser):
                                 car_info['acceleration'] = new_energy.get('acceleration_time', '')
                                 car_info['fuel_type'] = new_energy.get('fuel_form', '')
                                 car_info['transmission_type'] = new_energy.get('gearbox_description', '')
-                                car_info['power'] = new_energy.get('horsepower', '')
+                                horsepower_value = new_energy.get('horsepower')
+                                if horsepower_value is not None:
+                                    normalized_hp = normalize_power_value(horsepower_value)
+                                    car_info['power'] = normalized_hp if normalized_hp else str(horsepower_value).strip()
                             
                             # Размеры из space
                             space = car_config.get('space', {})
@@ -856,7 +919,12 @@ class DongchediParser(BaseCarParser):
                     
                     if label in field_mapping:
                         field_name = field_mapping[label]
-                        specs[field_name] = value
+                        clean_value = value.strip()
+                        if field_name == 'power':
+                            normalized_hp = normalize_power_value(clean_value, assume_kw=True)
+                            if normalized_hp:
+                                clean_value = normalized_hp
+                        specs[field_name] = clean_value
                         
                         # Обработка специальных случаев
                         if field_name == 'dimensions':
@@ -899,6 +967,8 @@ class DongchediParser(BaseCarParser):
         
         # Обновляем объект машины
         if detail_car:
+            if getattr(detail_car, "link", None):
+                car_obj.link = detail_car.link
             # Копируем базовые поля
             for field in ['description', 'color', 'transmission', 'fuel_type', 'body_type', 
                          'drive_type', 'condition', 'engine_volume']:
@@ -924,8 +994,19 @@ class DongchediParser(BaseCarParser):
                          'view_count', 'favorite_count', 'contact_info', 'dealer_info', 'certification',
                          'image_gallery', 'image_count', 'seat_count', 'door_count', 'trunk_volume',
                          'fuel_tank_volume']:
-                if hasattr(detail_car, field) and getattr(detail_car, field) is not None:
-                    setattr(car_obj, field, getattr(detail_car, field))
+                if not hasattr(detail_car, field):
+                    continue
+                raw_value = getattr(detail_car, field)
+                if raw_value is None:
+                    continue
+                if field == 'power':
+                    normalized_hp = normalize_power_value(raw_value)
+                    if normalized_hp:
+                        setattr(car_obj, field, normalized_hp)
+                    else:
+                        setattr(car_obj, field, str(raw_value).strip())
+                else:
+                    setattr(car_obj, field, raw_value)
         
         # Добавляем технические характеристики
         for field, value in specs.items():

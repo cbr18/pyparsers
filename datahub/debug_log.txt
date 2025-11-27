@@ -1,2 +1,0 @@
-=== CreateMany called with 800 cars ===
-=== CreateMany called with 800 cars ===

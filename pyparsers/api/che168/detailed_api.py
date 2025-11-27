@@ -6,7 +6,8 @@ from typing import Optional, List
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .detailed_parser_playwright import Che168DetailedParserPlaywright as Che168DetailedParser
+# Используем API-based парсер вместо Playwright (быстрее и надёжнее)
+from .detailed_parser_api import Che168DetailedParserAPI as Che168DetailedParser
 from .models.detailed_car import Che168DetailedCar
 from datetime import datetime, timezone
 from car_filter import is_electric_car
@@ -80,7 +81,7 @@ def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict
         "mileage": mileage_km,
         "price": detailed_car.price or "",
         "rub_price": 0.0,
-        "image": "",
+        "image": detailed_car.image or "",
         "link": f"https://m.che168.com/cardetail/index?infoid={car_id}",
         "brand_name": detailed_car.brand_name or "",
         "series_name": detailed_car.series_name or "",
@@ -98,6 +99,7 @@ def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict
         "transmission": detailed_car.transmission or "",
         "fuel_type": detailed_car.fuel_type or "",
         "engine_volume": detailed_car.engine_volume or "",
+        "engine_volume_ml": detailed_car.engine_volume_ml or "",  # Объём двигателя в мл
         "body_type": detailed_car.body_type or "",
         "drive_type": detailed_car.drive_type or "",
         "condition": detailed_car.condition or "",
@@ -234,7 +236,8 @@ async def _parse_car_details_async(car_id: int) -> Optional[Che168DetailedCar]:
     loop = asyncio.get_running_loop()
 
     def _work() -> Optional[Che168DetailedCar]:
-        parser = Che168DetailedParser(headless=True)
+        # API парсер не требует headless параметра
+        parser = Che168DetailedParser()
         return parser.parse_car_details(car_id)
 
     return await loop.run_in_executor(None, _work)

@@ -13,9 +13,11 @@ class Che168DetailedCar(BaseModel):
     city: Optional[str] = None
     brand_name: Optional[str] = None
     series_name: Optional[str] = None
+    image: Optional[str] = None  # Главное изображение
     
     # Технические характеристики
     engine_volume: Optional[str] = None
+    engine_volume_ml: Optional[str] = None  # Объём двигателя в миллилитрах
     fuel_type: Optional[str] = None
     transmission: Optional[str] = None
     drive_type: Optional[str] = None

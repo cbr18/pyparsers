@@ -137,9 +137,9 @@ func (c *DongchediClient) EnhanceCar(ctx context.Context, skuID string, carID st
 		return nil, fmt.Errorf("ошибка создания запроса: %w", err)
 	}
 
-	// Устанавливаем увеличенный таймаут для клиента (парсинг деталей может занять время)
+	// Устанавливаем таймаут для клиента (парсинг деталей может занять время)
 	client := &http.Client{
-		Timeout: 10 * time.Minute, // Увеличенный таймаут для парсинга деталей
+		Timeout: 5 * time.Minute, // Таймаут 5 минут (согласован с pyparsers)
 	}
 
 	// Выполняем запрос

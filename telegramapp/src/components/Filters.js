@@ -8,15 +8,21 @@ const Filters = ({ tempFilters, setTempFilters, applyFilters, resetFilters, sour
       {/* Базовые фильтры */}
       <div className="filter-group">
         <label>Бренд:</label>
-        <select
-          value={tempFilters.brand}
-          onChange={(e) => setTempFilters({...tempFilters, brand: e.target.value})}
-        >
+        <input
+          type="text"
+          list="brand-options"
+          value={tempFilters.brand || ''}
+          onChange={(e) => setTempFilters({ ...tempFilters, brand: e.target.value })}
+          placeholder="Начните вводить бренд"
+        />
+        <datalist id="brand-options">
           <option value="">Все бренды</option>
-          {brands && brands.length > 0 && brands.map(brand => (
-            <option key={brand.id} value={brand.name || brand.orig_name}>{brand.name || brand.orig_name}</option>
-          ))}
-        </select>
+          {brands && brands.length > 0 && brands.map((brand, index) => {
+            const label = brand.name || brand.orig_name || '';
+            const key = brand.id || label || index;
+            return label ? <option key={key} value={label} /> : null;
+          })}
+        </datalist>
       </div>
 
       <div className="filter-group">

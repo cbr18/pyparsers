@@ -6,6 +6,8 @@ import (
 	"datahub/internal/filters"
 	"datahub/internal/repository"
 	"fmt"
+	"math"
+	"strconv"
 )
 
 // ExternalSourceClient — интерфейс для клиента внешнего источника (dongchedi, che168)
@@ -138,8 +140,13 @@ func (s *UpdateService) SaveCars(ctx context.Context, cars []domain.Car) error {
 	// Устанавливаем source для всех машин
 	for i := range cars {
 		cars[i].Source = s.sourceName
-		// Ставим флаг доступности по фильтру, чтобы пикапы/электрокары отметились как недоступные
-		cars[i].IsAvailable = filters.ShouldKeepCar(cars[i])
+		// Применяем фильтр как дополнительную проверку (AND логика):
+		// если парсер установил is_available=false, оставляем false
+		// если парсер установил is_available=true, дополнительно проверяем фильтром
+		// Это позволяет фильтровать пикапы/электрокары, но сохранять информацию от парсера о проданных машинах
+		if cars[i].IsAvailable {
+			cars[i].IsAvailable = filters.ShouldKeepCar(cars[i])
+		}
 	}
 	
 	// Рассчитываем цены в рублях
@@ -233,6 +240,54 @@ func (s *UpdateService) calculateRubPrices(ctx context.Context, cars []domain.Ca
 				fmt.Printf("Ошибка расчета цены в рублях для машины %s: %v\n", cars[i].UUID, err)
 			} else {
 				cars[i].RubPrice = rubPrice
+				cars[i].FinalPrice = rubPrice
+
+				if cars[i].Power != "" && cars[i].EngineVolume != "" && (cars[i].Year > 0 || cars[i].FirstRegistrationTime != "") {
+					totalPriceWithUtil, utilizationFee, utilErr := s.priceCalculator.CalculateUtilizationFeeAndAddToPrice(
+						ctx,
+						rubPrice,
+						cars[i].Power,
+						cars[i].EngineVolume,
+						cars[i].Year,
+						cars[i].FirstRegistrationTime,
+					)
+					if utilErr != nil {
+						fmt.Printf("Ошибка расчета утильсбора для машины %s: %v\n", cars[i].UUID, utilErr)
+					} else if utilizationFee > 0 {
+						cars[i].FinalPrice = totalPriceWithUtil
+						cars[i].RecyclingFee = strconv.FormatFloat(utilizationFee, 'f', 0, 64)
+					}
+				}
+
+				if cars[i].EngineVolume != "" && (cars[i].Year > 0 || cars[i].FirstRegistrationTime != "") {
+					customsDuty, dutyErr := s.priceCalculator.CalculateCustomsDuty(
+						ctx,
+						rubPrice,
+						cars[i].EngineVolume,
+						cars[i].Year,
+						cars[i].FirstRegistrationTime,
+					)
+					if dutyErr != nil {
+						fmt.Printf("Ошибка расчета таможенной пошлины для машины %s: %v\n", cars[i].UUID, dutyErr)
+					} else if customsDuty > 0 {
+						cars[i].FinalPrice = math.Round(cars[i].FinalPrice + customsDuty)
+						cars[i].CustomsDuty = strconv.FormatFloat(customsDuty, 'f', 0, 64)
+					}
+				}
+
+				// Рассчитываем таможенный сбор по rub_price
+				customsFee, feeErr := s.priceCalculator.CalculateCustomsFee(ctx, rubPrice)
+				if feeErr != nil {
+					fmt.Printf("Ошибка расчета таможенного сбора для машины %s: %v\n", cars[i].UUID, feeErr)
+				} else if customsFee > 0 {
+					cars[i].CustomsFee = customsFee
+					cars[i].FinalPrice = math.Round(cars[i].FinalPrice + customsFee)
+					fmt.Printf("Car %s: добавлен таможенный сбор %.0f руб\n", cars[i].UUID, customsFee)
+				}
+
+				// Добавляем фиксированные надбавки: 80000 + 80000 = 160000 руб
+				cars[i].FinalPrice = math.Round(cars[i].FinalPrice + 160000)
+				fmt.Printf("Car %s: добавлены фиксированные надбавки 160000 руб, итоговая цена=%.0f\n", cars[i].UUID, cars[i].FinalPrice)
 			}
 		}
 	}

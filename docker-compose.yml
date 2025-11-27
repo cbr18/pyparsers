@@ -129,6 +129,8 @@ services:
       - no-new-privileges:true
     tmpfs:
       - /tmp
+    mem_limit: 4g
+    init: true  
 
   # Telegram Services
   telegrambot:

@@ -4,6 +4,62 @@ import { fetchCarByUUID, createOrder } from '../services/api';
 import ImageCarousel from './ImageCarousel';
 import './CarDetails.css';
 
+const COMMISSION_FEE = 80000;
+const BROKER_FEE = 80000;
+
+const currencyFormatter = new Intl.NumberFormat('ru-RU', {
+  style: 'currency',
+  currency: 'RUB',
+  maximumFractionDigits: 0
+});
+
+const formatCurrency = (value = 0) => {
+  const numericValue = Number.isFinite(value) ? value : 0;
+  return currencyFormatter.format(numericValue);
+};
+
+const parseCurrencyValue = (value) => {
+  if (value === null || value === undefined) {
+    return 0;
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  const stringValue = String(value).trim();
+  if (!stringValue) {
+    return 0;
+  }
+
+  let normalized = stringValue.replace(/[\s\u00A0\u202F]/g, '');
+  const hasComma = normalized.includes(',');
+  const hasDot = normalized.includes('.');
+
+  if (hasComma && hasDot) {
+    normalized = normalized.replace(/,/g, '');
+  } else if (hasComma) {
+    normalized = normalized.replace(/,/g, '.');
+  }
+
+  normalized = normalized.replace(/[^\d.-]/g, '');
+
+  const parsed = parseFloat(normalized);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const hasRawValue = (value) => {
+  if (value === null || value === undefined) {
+    return false;
+  }
+
+  if (typeof value === 'number') {
+    return true;
+  }
+
+  return String(value).trim() !== '';
+};
+
 const CarDetails = () => {
   const { uuid } = useParams();
   const navigate = useNavigate();
@@ -31,7 +87,7 @@ const CarDetails = () => {
     }
   }, [uuid]);
 
-  const placeholder = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="350" height="220"><defs><linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:%23667eea;stop-opacity:0.1" /><stop offset="100%" style="stop-color:%23764ba2;stop-opacity:0.1" /></linearGradient></defs><rect width="100%" height="100%" fill="url(%23grad)"/><g transform="translate(175,110)"><circle cx="0" cy="0" r="30" fill="none" stroke="%23667eea" stroke-width="2" opacity="0.3"/><path d="M-20,-10 L20,-10 M-20,0 L20,0 M-20,10 L20,10" stroke="%23667eea" stroke-width="2" opacity="0.3"/><text x="0" y="35" text-anchor="middle" fill="%23667eea" font-size="14" font-family="Arial, sans-serif" opacity="0.6">Нет фото</text></g></svg>';
+  const placeholder = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="350" height="220"><defs><linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:%23ff5f6d;stop-opacity:0.1" /><stop offset="100%" style="stop-color:%23ffc371;stop-opacity:0.1" /></linearGradient></defs><rect width="100%" height="100%" fill="url(%23grad)"/><g transform="translate(175,110)"><circle cx="0" cy="0" r="30" fill="none" stroke="%23ff5f6d" stroke-width="2" opacity="0.3"/><path d="M-20,-10 L20,-10 M-20,0 L20,0 M-20,10 L20,10" stroke="%23ff5f6d" stroke-width="2" opacity="0.3"/><text x="0" y="35" text-anchor="middle" fill="%23ff5f6d" font-size="14" font-family="Arial, sans-serif" opacity="0.6">Нет фото</text></g></svg>';
 
   const handleWriteMessage = () => {
     const tg = window.Telegram?.WebApp;
@@ -57,7 +113,19 @@ const CarDetails = () => {
       }
     }
     
-    const message = `Здравствуйте, меня интересует данная машина: ${car?.uuid || 'ID не найден'}\n\nПользователь: ${username}`;
+    // Подготовим сообщение с UUID машины, названием, ссылкой и username
+    const carTitle = car?.title || car?.car_name || 'Без названия';
+    const carUuid = car?.uuid || 'ID не найден';
+    const carLink = car?.link || '';
+    
+    let message = `Здравствуйте, меня интересует данная машина:\n\nНазвание: ${carTitle}\nUUID: ${carUuid}`;
+    
+    if (carLink) {
+      message += `\nСсылка: ${carLink}`;
+    }
+    
+    message += `\n\nПользователь: ${username}`;
+    
     const tgUrl = `https://t.me/cbr_18?text=${encodeURIComponent(message)}`;
     window.open(tgUrl, '_blank');
   };
@@ -130,6 +198,15 @@ const CarDetails = () => {
       });
   };
 
+  const handleBack = () => {
+    const canGoBack = typeof window !== 'undefined' && window.history.state?.idx > 0;
+    if (canGoBack) {
+      navigate(-1);
+    } else {
+      navigate('/', { replace: true });
+    }
+  };
+
   if (loading) {
     return (
       <div className="car-details-container">
@@ -144,7 +221,7 @@ const CarDetails = () => {
     return (
       <div className="car-details-container">
         <div className="error-message">{error}</div>
-        <button className="back-button" onClick={() => navigate('/')}>
+        <button className="back-button" onClick={handleBack}>
           Вернуться назад
         </button>
       </div>
@@ -155,17 +232,80 @@ const CarDetails = () => {
     return (
       <div className="car-details-container">
         <div className="error-message">Машина не найдена</div>
-        <button className="back-button" onClick={() => navigate('/')}>
+        <button className="back-button" onClick={handleBack}>
           Вернуться назад
         </button>
       </div>
     );
   }
 
+  const displayPriceValue = parseCurrencyValue(
+    car.final_price && car.final_price > 0 ? car.final_price : car.rub_price
+  );
+  const rubPriceValue = parseCurrencyValue(car.rub_price);
+  const recyclingFeeRaw = car.recycling_fee;
+  const customsDutyRaw = car.customs_duty;
+  const customsFeeRaw = car.customs_fee;
+  const recyclingFeeValue = parseCurrencyValue(recyclingFeeRaw);
+  const customsDutyValue = parseCurrencyValue(customsDutyRaw);
+  const customsFeeValue = parseCurrencyValue(customsFeeRaw);
+  const hasBasePrice = rubPriceValue > 0;
+
+  const priceBreakdownItems = [
+    {
+      key: 'rub',
+      label: 'Цена в рублях',
+      value: rubPriceValue,
+      hasValue: hasBasePrice
+    },
+    {
+      key: 'recycling',
+      label: 'Утильсбор',
+      value: recyclingFeeValue,
+      hasValue: hasRawValue(recyclingFeeRaw)
+    },
+    {
+      key: 'commission',
+      label: 'Наша комиссия',
+      value: COMMISSION_FEE,
+      hasValue: true,
+      alwaysInclude: true
+    },
+    {
+      key: 'broker',
+      label: 'Таможенный брокер',
+      value: BROKER_FEE,
+      hasValue: true,
+      alwaysInclude: true
+    },
+    {
+      key: 'customs',
+      label: 'Таможенная пошлина',
+      value: customsDutyValue,
+      hasValue: hasRawValue(customsDutyRaw)
+    },
+    {
+      key: 'customs_fee',
+      label: 'Таможенный сбор',
+      value: customsFeeValue,
+      hasValue: customsFeeValue > 0
+    }
+  ];
+
+  // Используем final_price как итоговую цену, если она есть
+  const totalEstimatedCost = displayPriceValue > 0 ? displayPriceValue : priceBreakdownItems.reduce((total, item) => {
+    if (!item.hasValue && !item.alwaysInclude) {
+      return total;
+    }
+    return total + item.value;
+  }, 0);
+
+  const shouldRenderPriceBreakdown = hasBasePrice;
+
   return (
     <div className="car-details-container">
       <div className="car-details-header">
-        <button className="back-button" onClick={() => navigate('/')}>
+        <button className="back-button" onClick={handleBack}>
           ← Назад
         </button>
         <h1>Детали автомобиля</h1>
@@ -185,10 +325,10 @@ const CarDetails = () => {
           <div className="car-details-section">
             <h3>Основная информация</h3>
             <div className="info-grid">
-              {car.rub_price && car.rub_price > 0 && (
+              {displayPriceValue > 0 && (
                 <div className="info-item">
                   <span className="info-label">Цена:</span>
-                  <span className="info-value price">{new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(car.rub_price)}</span>
+                  <span className="info-value price">{formatCurrency(displayPriceValue)}</span>
                 </div>
               )}
               <div className="info-item">
@@ -215,6 +355,26 @@ const CarDetails = () => {
               )}
             </div>
           </div>
+
+        {shouldRenderPriceBreakdown && (
+          <div className="price-breakdown">
+            <h3>Расчет стоимости</h3>
+            <div className="price-breakdown-list">
+              {priceBreakdownItems.map((item) => (
+                <div className="price-breakdown-item" key={item.key}>
+                  <span className="price-breakdown-label">{item.label}</span>
+                  <span className="price-breakdown-value">
+                    {(item.hasValue || item.alwaysInclude) ? formatCurrency(item.value) : '—'}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="price-breakdown-total">
+              <span>Итого ориентировочно</span>
+              <span>{formatCurrency(totalEstimatedCost)}</span>
+            </div>
+          </div>
+        )}
 
           <div className="car-details-section">
             <h3>Марка и модель</h3>

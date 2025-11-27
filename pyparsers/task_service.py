@@ -2,27 +2,54 @@ import asyncio
 import aiohttp
 import logging
 import re
-from datetime import datetime
+import gc
+import os
+import json
+from datetime import datetime, timedelta
 from typing import Dict, Optional, List
+from collections import OrderedDict
+from threading import Lock as ThreadLock
 from models import Task, TaskStatus, TaskCompleteRequest, TaskType
 from api.dongchedi.parser import DongchediParser
 from api.che168.parser import Che168Parser
 from converters import decode_dongchedi_list_sh_price
-from car_filter import filter_cars_by_year
+from car_filter import filter_cars_by_year, is_electric_car
 import uuid
+from api.memory_optimized import MemoryOptimizedList
 
 logger = logging.getLogger(__name__)
+INCREMENTAL_EXISTING_LIMIT = int(os.getenv("INCREMENTAL_EXISTING_LIMIT", "15000"))
+TASK_TTL_HOURS = int(os.getenv("TASK_TTL_HOURS", "24"))  # Задачи старше 24 часов удаляются
+MAX_TASKS = int(os.getenv("MAX_TASKS", "1000"))  # Максимум задач в памяти
 
 class TaskService:
-    def __init__(self, datahub_url: str = "http://datahub:8080"):
-        self.datahub_url = datahub_url
-        self.tasks: Dict[str, Task] = {}
+    def __init__(self, datahub_url: Optional[str] = None, datahub_timeout: Optional[int] = None):
+        env_datahub_url = os.getenv("DATAHUB_URL")
+        env_datahub_timeout = os.getenv("DATAHUB_TIMEOUT")
+
+        self.datahub_url = datahub_url or env_datahub_url or "http://localhost:8080"
+        if datahub_timeout is not None:
+            self.datahub_timeout = datahub_timeout
+        elif env_datahub_timeout:
+            try:
+                self.datahub_timeout = int(env_datahub_timeout)
+            except ValueError:
+                logger.warning("Invalid DATAHUB_TIMEOUT value '%s', fallback to 1800 seconds", env_datahub_timeout)
+                self.datahub_timeout = 1800
+        else:
+            self.datahub_timeout = 1800
+
+        self._session_timeout = aiohttp.ClientTimeout(total=self.datahub_timeout)
+        self.tasks: OrderedDict[str, Task] = OrderedDict()  # Используем OrderedDict для LRU
         self.session: Optional[aiohttp.ClientSession] = None
+        self._source_locks: OrderedDict[str, asyncio.Lock] = OrderedDict()
+        self._source_locks_max_size = 50  # Максимум 50 блокировок
+        self._source_locks_lock = ThreadLock()
     
     async def get_session(self) -> aiohttp.ClientSession:
         """Получить или создать HTTP сессию"""
         if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
+            self.session = aiohttp.ClientSession(timeout=self._session_timeout)
         return self.session
     
     async def close_session(self):
@@ -32,6 +59,17 @@ class TaskService:
     
     def create_task(self, source: str, task_type: TaskType = TaskType.FULL, id_field: Optional[str] = None, existing_ids: Optional[List[str]] = None) -> Task:
         """Создать новую задачу"""
+        # Очищаем старые задачи перед созданием новой
+        self._cleanup_old_tasks()
+        
+        # Если достигли лимита, удаляем самые старые задачи
+        if len(self.tasks) >= MAX_TASKS:
+            # Удаляем 10% самых старых задач
+            to_remove = MAX_TASKS // 10
+            for _ in range(to_remove):
+                if self.tasks:
+                    self.tasks.popitem(last=False)
+        
         task_id = str(uuid.uuid4())
         now = datetime.now()
         
@@ -47,6 +85,8 @@ class TaskService:
         )
         
         self.tasks[task_id] = task
+        # Перемещаем в конец (LRU)
+        self.tasks.move_to_end(task_id)
         logger.info(f"Created task {task_id} for source {source}")
         return task
     
@@ -55,24 +95,69 @@ class TaskService:
         if task_id in self.tasks:
             self.tasks[task_id].status = status
             self.tasks[task_id].updated_at = datetime.now()
+            # Перемещаем в конец (LRU)
+            self.tasks.move_to_end(task_id)
             logger.info(f"Updated task {task_id} status to {status}")
     
-    async def send_to_datahub(self, task_id: str, source: str, task_type: TaskType, data: list) -> bool:
-        """Отправить данные в datahub"""
+    def _cleanup_old_tasks(self):
+        """Удаляет задачи старше TTL"""
+        now = datetime.now()
+        cutoff_time = now - timedelta(hours=TASK_TTL_HOURS)
+        
+        tasks_to_remove = []
+        for task_id, task in self.tasks.items():
+            if task.created_at < cutoff_time:
+                tasks_to_remove.append(task_id)
+        
+        for task_id in tasks_to_remove:
+            del self.tasks[task_id]
+            logger.info(f"Removed old task {task_id} (older than {TASK_TTL_HOURS} hours)")
+    
+    def _get_source_lock(self, key: str) -> asyncio.Lock:
+        with self._source_locks_lock:
+            # Если блокировка уже существует, перемещаем её в конец (LRU)
+            if key in self._source_locks:
+                lock = self._source_locks.pop(key)
+                self._source_locks[key] = lock
+                return lock
+            
+            # Если достигли лимита, удаляем самую старую блокировку
+            if len(self._source_locks) >= self._source_locks_max_size:
+                self._source_locks.popitem(last=False)
+            
+            # Создаём новую блокировку
+            lock = asyncio.Lock()
+            self._source_locks[key] = lock
+            return lock
+
+    def _build_payload_bytes(self, task_id: str, source: str, task_type: TaskType, data: list) -> bytes:
+        """Сериализует полезную нагрузку и освобождает исходные данные из памяти."""
+        payload = {
+            "task_id": task_id,
+            "source": source,
+            "task_type": task_type,
+            "status": "done",
+            "data": data,
+        }
+        payload_bytes = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if hasattr(data, "clear"):
+            data.clear()
+        gc.collect()
+        return payload_bytes
+
+    async def send_to_datahub(self, task_id: str, source: str, task_type: TaskType, payload_bytes: bytes) -> bool:
+        """Отправить сериализованные данные в datahub"""
         try:
             session = await self.get_session()
             url = f"{self.datahub_url}/api/tasks/{task_id}/complete"
-            logger.info(f"POST to datahub: {url} with {len(data)} items")
+            headers = {"Content-Type": "application/json"}
             
-            payload = {
-                "task_id": task_id,
-                "source": source,
-                "task_type": task_type,
-                "status": "done",
-                "data": data
-            }
-            
-            async with session.post(url, json=payload) as response:
+            async with session.post(
+                url,
+                data=payload_bytes,
+                headers=headers,
+                timeout=self._session_timeout,
+            ) as response:
                 if response.status == 200:
                     logger.info(f"Successfully sent data to datahub for task {task_id}")
                     return True
@@ -85,14 +170,17 @@ class TaskService:
             logger.exception(f"Error sending data to datahub for task {task_id}: {e}")
             return False
     
-    async def retry_send_to_datahub(self, task_id: str, source: str, task_type: TaskType, data: list):
+    async def retry_send_to_datahub(self, task_id: str, source: str, task_type: TaskType, payload_bytes: bytes):
         """Повторять отправку в datahub каждые 30 секунд до успеха"""
         while True:
-            success = await self.send_to_datahub(task_id, source, task_type, data)
+            success = await self.send_to_datahub(task_id, source, task_type, payload_bytes)
             if success:
                 # Удаляем данные из памяти после успешной отправки
                 if task_id in self.tasks:
                     del self.tasks[task_id]
+                payload_bytes = b""  # Освобождаем ссылку
+                del payload_bytes  # Явно удаляем
+                gc.collect()
                 break
             
             logger.info(f"Retrying send to datahub for task {task_id} in 30 seconds...")
@@ -134,7 +222,8 @@ class TaskService:
 
             if data:
                 # Запускаем отправку в фоне с повторными попытками
-                asyncio.create_task(self.retry_send_to_datahub(task_id, task.source, task.task_type, data))
+                payload_bytes = self._build_payload_bytes(task_id, task.source, task.task_type, data)
+                asyncio.create_task(self.retry_send_to_datahub(task_id, task.source, task.task_type, payload_bytes))
                 # Пока отправляем, держим задачу IN_PROGRESS; DONE поставит отправка при очистке
                 return
             else:
@@ -146,11 +235,17 @@ class TaskService:
             self.update_task_status(task_id, TaskStatus.FAILED)
     
     async def _parse_dongchedi_full(self) -> list:
-        """Полный парсинг dongchedi (все страницы)"""
+        """Полный парсинг dongchedi (все страницы) с защитой от параллельных запусков"""
+        lock = self._get_source_lock("dongchedi_full")
+        async with lock:
+            return await self._parse_dongchedi_full_unlocked()
+
+    async def _parse_dongchedi_full_unlocked(self) -> list:
+        """Внутренняя реализация полного парсинга dongchedi"""
         try:
             parser = DongchediParser()
             # Собираем все страницы
-            all_data = []
+            all_data = MemoryOptimizedList()
             page = 1
             while True:
                 response = parser.fetch_cars_by_page(page)
@@ -171,43 +266,15 @@ class TaskService:
                             car_dict['car_id'] = int(car_dict['car_id'])
                         except (ValueError, TypeError):
                             car_dict['car_id'] = 0
+                    # Проверяем, не является ли машина электромобилем
+                    if is_electric_car(car_dict):
+                        car_dict['is_available'] = False
+                        logger.debug(f"Skipping electric car in task service: {car_dict.get('car_id')} (fuel_type: {car_dict.get('fuel_type')})")
                     all_data.append(car_dict)
                 if not getattr(response.data, 'has_more', False):
                     break
                 page += 1
             return all_data
-            
-            if not response.data or not response.data.search_sh_sku_info_list:
-                return []
-            
-            cars_list = response.data.search_sh_sku_info_list
-            filtered_cars = filter_cars_by_year(cars_list, min_year=2017)
-            
-            data = []
-            for i, car in enumerate(filtered_cars):
-                car_dict = car.dict()
-                
-                # Добавляем метаданные
-                car_dict.update({
-                    'sort_number': len(filtered_cars) - i,
-                    'source': 'dongchedi'
-                })
-                
-                # Декодируем цену
-                if car_dict.get('sh_price'):
-                    car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
-                
-                # Преобразуем car_id в int64
-                if 'car_id' in car_dict and car_dict['car_id'] is not None:
-                    try:
-                        car_dict['car_id'] = int(car_dict['car_id'])
-                    except (ValueError, TypeError):
-                        car_dict['car_id'] = 0
-                
-                data.append(car_dict)
-            
-            return data
-            
         except Exception as e:
             logger.error(f"Error parsing dongchedi: {e}")
             return []
@@ -216,8 +283,10 @@ class TaskService:
         """Инкрементальный парсинг dongchedi (первые страницы до первого совпадения)"""
         try:
             parser = DongchediParser()
-            data = []
-            existing_set = set(str(x) for x in existing_ids if x)
+            data = MemoryOptimizedList()
+            limited_existing_ids = (str(x) for idx, x in enumerate(existing_ids) if x and idx < INCREMENTAL_EXISTING_LIMIT)
+            existing_set = set(limited_existing_ids)
+            del limited_existing_ids  # Освобождаем генератор
 
             for page in range(1, 101):
                 response = parser.fetch_cars_by_page(page)
@@ -245,21 +314,35 @@ class TaskService:
                             car_dict['car_id'] = int(car_dict['car_id'])
                         except (ValueError, TypeError):
                             car_dict['car_id'] = 0
+                    # Проверяем, не является ли машина электромобилем
+                    if is_electric_car(car_dict):
+                        car_dict['is_available'] = False
+                        logger.debug(f"Skipping electric car in incremental task: {car_dict.get('car_id')} (fuel_type: {car_dict.get('fuel_type')})")
                     data.append(car_dict)
                 if found_existing:
                     break
                 if not getattr(response.data, 'has_more', False):
                     break
+            # Очищаем existing_set для освобождения памяти
+            existing_set.clear()
+            del existing_set
+            gc.collect()
             return data
         except Exception as e:
             logger.error(f"Error parsing dongchedi incremental: {e}")
             return []
 
     async def _parse_che168_full(self) -> list:
-        """Полный парсинг che168 (все страницы до 100)"""
+        """Полный парсинг che168 (все страницы до 100) с защитой от параллельных запусков"""
+        lock = self._get_source_lock("che168_full")
+        async with lock:
+            return await self._parse_che168_full_unlocked()
+
+    async def _parse_che168_full_unlocked(self) -> list:
+        """Внутренняя реализация полного парсинга che168"""
         try:
             parser = Che168Parser()
-            data = []
+            data = MemoryOptimizedList()
             missing_id_count = 0
             filtered_by_year = 0
             # Собираем страницы 1..100 или до конца
@@ -318,6 +401,10 @@ class TaskService:
                     
                     if car_dict.get('car_source_city_name'):
                         car_dict['city'] = car_dict.get('car_source_city_name')
+                    # Проверяем, не является ли машина электромобилем
+                    if is_electric_car(car_dict):
+                        car_dict['is_available'] = False
+                        logger.debug(f"Skipping electric car in che168 task: {car_dict.get('car_id')} (fuel_type: {car_dict.get('fuel_type')})")
                     mileage_raw = car_dict.get('car_mileage')
                     if isinstance(mileage_raw, str) and mileage_raw.strip() != '':
                         text = mileage_raw.strip()
@@ -361,10 +448,12 @@ class TaskService:
         """Инкрементальный парсинг che168 (первые страницы)"""
         try:
             parser = Che168Parser()
-            data = []
+            data = MemoryOptimizedList()
             missing_id_count = 0
             filtered_by_year = 0
-            existing_set = set(str(x) for x in existing_ids if x)
+            limited_existing_ids = (str(x) for idx, x in enumerate(existing_ids) if x and idx < INCREMENTAL_EXISTING_LIMIT)
+            existing_set = set(limited_existing_ids)
+            del limited_existing_ids  # Освобождаем генератор
             logger.info(f"che168 incremental: checking against {len(existing_set)} existing IDs")
 
             for page in range(1, 101):
@@ -454,6 +543,10 @@ class TaskService:
             logger.info(f"che168 incremental: {len(data)} cars collected, {filtered_by_year} filtered by year < 2017, {missing_id_count} had no car_id")
             if missing_id_count:
                 logger.info(f"che168: {missing_id_count} cars had no car_id; generated from link hash")
+            # Очищаем existing_set для освобождения памяти
+            existing_set.clear()
+            del existing_set
+            gc.collect()
             return data
         except Exception as e:
             logger.error(f"Error parsing che168 incremental: {e}")

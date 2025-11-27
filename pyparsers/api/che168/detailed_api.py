@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from .detailed_parser_playwright import Che168DetailedParserPlaywright as Che168DetailedParser
 from .models.detailed_car import Che168DetailedCar
 from datetime import datetime, timezone
+from car_filter import is_electric_car
 
 logger = logging.getLogger(__name__)
 
@@ -102,10 +103,8 @@ def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict
         "condition": detailed_car.condition or "",
         "created_at": current_time,
         "updated_at": current_time,
-        "has_details": True,
-        "last_detail_update": current_time,
         # Технические характеристики
-        "power": detailed_car.power or "",
+        "power": None,
         "torque": detailed_car.torque or "",
         "acceleration": detailed_car.acceleration or "",
         "max_speed": detailed_car.max_speed or "",
@@ -180,6 +179,7 @@ def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict
         "warranty_info": detailed_car.warranty_info or "",
         "inspection_date": detailed_car.inspection_date or "",
         "insurance_info": detailed_car.insurance_info or "",
+        "first_registration_time": detailed_car.first_registration_time if detailed_car.first_registration_time else "",
         # Дополнительные детали
         "interior_color": detailed_car.interior_color or "",
         "exterior_color": detailed_car.exterior_color or "",
@@ -201,6 +201,31 @@ def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict
         "trunk_volume": detailed_car.trunk_volume or "",
         "fuel_tank_volume": detailed_car.fuel_tank_volume or "",
     }
+    
+    # Проверяем валидность power - должны быть цифры
+    power_value = detailed_car.power
+    if power_value:
+        power_str = str(power_value).strip()
+        if power_str and any(c.isdigit() for c in power_str):
+            domain_car["power"] = power_str
+        else:
+            logger.warning(f"Invalid power value '{power_str}' for car_id={car_id}, skipping")
+            domain_car["power"] = None
+    
+    # Проверяем, не является ли машина электромобилем
+    is_electric = is_electric_car(domain_car)
+    
+    # Устанавливаем has_details только если power валиден и это не электромобиль
+    if domain_car["power"] and not is_electric:
+        domain_car["has_details"] = True
+        domain_car["last_detail_update"] = current_time
+    else:
+        domain_car["has_details"] = False
+        domain_car["last_detail_update"] = None
+        # Устанавливаем is_available в False для электромобилей
+        if is_electric:
+            domain_car["is_available"] = False
+            logger.info(f"Skipping electric car: car_id={car_id} (fuel_type: {domain_car.get('fuel_type')})")
     
     return domain_car
 
@@ -253,6 +278,7 @@ async def parse_car_details(request: CarDetailRequest):
         
         if car_data:
             logger.info(f"Успешно получена детальная информация для car_id: {request.car_id}")
+            logger.info(f"DEBUG: car_data.first_registration_time = '{car_data.first_registration_time}'")
             # Преобразуем в формат domain.Car для Go API
             domain_car_dict = _convert_to_domain_car(car_data, request.car_id)
             
@@ -262,6 +288,9 @@ async def parse_car_details(request: CarDetailRequest):
             # Логируем названия заполненных полей (первые 20)
             filled_field_names = [k for k, v in filled_fields.items() if v]
             logger.debug(f"Заполненные поля для car_id {request.car_id}: {filled_field_names[:20]}")
+            # Специально логируем first_registration_time - ВСЕГДА логируем
+            first_reg_value = domain_car_dict.get('first_registration_time')
+            logger.info(f"DEBUG first_registration_time для car_id {request.car_id}: значение='{first_reg_value}', тип={type(first_reg_value)}, в словаре={'first_registration_time' in domain_car_dict}")
             
             # Создаем объект, который Go сможет распарсить как domain.Car
             # Используем dict вместо Che168DetailedCar для совместимости

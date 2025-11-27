@@ -16,4 +16,9 @@ class Che168Car(BaseModel):
     series_id: Optional[int] = None
     shop_id: Optional[str] = None
     car_id: Optional[int] = None
-    tags_v2: Optional[str] = None 
+    tags_v2: Optional[str] = None
+    is_available: Optional[bool] = True
+    recycling_fee: Optional[str] = None  # Утильсбор
+    customs_duty: Optional[str] = None  # Таможенный сбор
+    first_registration_time: Optional[str] = None  # Дата первой регистрации в формате YYYY-MM-DD
+    power: Optional[str] = None  # Мощность в л.с. 

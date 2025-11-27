@@ -108,12 +108,13 @@ func (h *Handler) GetCars(c *gin.Context) {
 	sortBy := c.Query("sort_by")
 	sortOrder := c.Query("sort_order")
 	sortClause := ""
+	priceSortExpr := "COALESCE(NULLIF(final_price, 0), rub_price)"
 	if sortBy != "" {
 		if sortBy == "price" {
 			if sortOrder == "asc" {
-				sortClause = "rub_price ASC"
+				sortClause = priceSortExpr + " ASC"
 			} else {
-				sortClause = "rub_price DESC"
+				sortClause = priceSortExpr + " DESC"
 			}
 		} else if sortBy == "year" {
 			if sortOrder == "asc" {
@@ -621,8 +622,9 @@ func (h *Handler) DebugPrice(c *gin.Context) {
 		return
 	}
 	
-	// Получаем текущий курс
+	// Получаем текущие курсы
 	cnyRate := h.priceCalculator.GetCNYRate()
+	eurRate := h.priceCalculator.GetEURRate()
 	lastUpdate := h.priceCalculator.GetLastUpdateTime()
 	
 	// Рассчитываем цену в рублях
@@ -630,6 +632,7 @@ func (h *Handler) DebugPrice(c *gin.Context) {
 	
 	result := gin.H{
 		"cny_rate":     cnyRate,
+		"eur_rate":     eurRate,
 		"last_update":  lastUpdate.Format(time.RFC3339),
 		"test_price":   req.Price,
 	}

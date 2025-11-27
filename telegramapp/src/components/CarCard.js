@@ -7,7 +7,7 @@ const CarCard = ({ car }) => {
   const navigate = useNavigate();
   
   // Beautiful placeholder for missing images
-  const placeholder = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="350" height="220"><defs><linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:%23667eea;stop-opacity:0.1" /><stop offset="100%" style="stop-color:%23764ba2;stop-opacity:0.1" /></linearGradient></defs><rect width="100%" height="100%" fill="url(%23grad)"/><g transform="translate(175,110)"><circle cx="0" cy="0" r="30" fill="none" stroke="%23667eea" stroke-width="2" opacity="0.3"/><path d="M-20,-10 L20,-10 M-20,0 L20,0 M-20,10 L20,10" stroke="%23667eea" stroke-width="2" opacity="0.3"/><text x="0" y="35" text-anchor="middle" fill="%23667eea" font-size="14" font-family="Arial, sans-serif" opacity="0.6">Нет фото</text></g></svg>';
+  const placeholder = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="350" height="220"><defs><linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:%23ff5f6d;stop-opacity:0.1" /><stop offset="100%" style="stop-color:%23ffc371;stop-opacity:0.1" /></linearGradient></defs><rect width="100%" height="100%" fill="url(%23grad)"/><g transform="translate(175,110)"><circle cx="0" cy="0" r="30" fill="none" stroke="%23ff5f6d" stroke-width="2" opacity="0.3"/><path d="M-20,-10 L20,-10 M-20,0 L20,0 M-20,10 L20,10" stroke="%23ff5f6d" stroke-width="2" opacity="0.3"/><text x="0" y="35" text-anchor="middle" fill="%23ff5f6d" font-size="14" font-family="Arial, sans-serif" opacity="0.6">Нет фото</text></g></svg>';
 
   const handleCardClick = () => {
     navigate(`/car/${car.uuid || car.id}`);
@@ -40,8 +40,18 @@ const CarCard = ({ car }) => {
       }
     }
     
-    // Подготовим сообщение с UUID машины и username
-    const message = `Здравствуйте, меня интересует данная машина: ${car.uuid || car.id || 'ID не найден'}\n\nПользователь: ${username}`;
+    // Подготовим сообщение с UUID машины, названием, ссылкой и username
+    const carTitle = car.title || car.car_name || 'Без названия';
+    const carUuid = car.uuid || car.id || 'ID не найден';
+    const carLink = car.link || '';
+    
+    let message = `Здравствуйте, меня интересует данная машина:\n\nНазвание: ${carTitle}\nUUID: ${carUuid}`;
+    
+    if (carLink) {
+      message += `\nСсылка: ${carLink}`;
+    }
+    
+    message += `\n\nПользователь: ${username}`;
     
     // Простая ссылка на Telegram с предзаполненным текстом
     const tgUrl = `https://t.me/cbr_18?text=${encodeURIComponent(message)}`;
@@ -126,6 +136,8 @@ const handleLeadRequest = (e) => {
   // Get proxied image URL
   const proxiedUrl = getProxiedImageUrl(car.image);
 
+  const displayPrice = car?.final_price && car.final_price > 0 ? car.final_price : car?.rub_price;
+
   return (
     <div className="car-card" onClick={handleCardClick} style={{ cursor: 'pointer' }}>
       <img
@@ -139,8 +151,8 @@ const handleLeadRequest = (e) => {
       />
       <div className="car-info">
         <h2>{car.title || car.car_name || 'Без названия'}</h2>
-        {car.rub_price && car.rub_price > 0 && (
-          <p className="price-highlight"><b>Цена:</b> <span>{new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(car.rub_price)}</span></p>
+        {displayPrice && displayPrice > 0 && (
+          <p className="price-highlight"><b>Цена:</b> <span>{new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(displayPrice)}</span></p>
         )}
         <p><b>Год:</b> <span>{car.year || '—'}</span></p>
         {car.mileage > 0 && (

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import './App.css';
+import brandLogo from './assets/logo192.png';
 import CarCard from './components/CarCard';
 import CarDetails from './components/CarDetails';
 import Filters from './components/Filters';
@@ -132,7 +133,15 @@ function App() {
             element={
               <div className="app-container">
                 <header className="app-header">
-                  <h1>Автомобили</h1>
+                  <div className="header-brand">
+                    <div className="brand-logo-wrap">
+                      <img src={brandLogo} alt="CarCatch" className="brand-logo" />
+                    </div>
+                    <div className="brand-text">
+                      <h1>Автомобили</h1>
+                      <p className="brand-subtitle">подбор от CarCatch</p>
+                    </div>
+                  </div>
                   <div className="header-actions">
                     <button
                       className="filter-button"

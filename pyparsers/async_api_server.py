@@ -3,6 +3,7 @@
 """
 
 import os
+import gc
 import asyncio
 import functools
 import logging
@@ -15,8 +16,9 @@ from api.che168.parser import Che168Parser
 from api.che168.detailed_api import router as che168_detailed_router
 from api.dongchedi.models.response import DongchediApiResponse
 from api.dongchedi.models.car import DongchediCar
+from api.memory_optimized import MemoryOptimizedList
 from converters import decode_dongchedi_list_sh_price, decode_dongchedi_detail
-from car_filter import filter_cars_by_year
+from car_filter import filter_cars_by_year, is_electric_car
 from typing import List, Dict, Optional, Any, Union
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
@@ -68,6 +70,8 @@ def _get_int_env(name: str, default: int, minimum: int = 1) -> int:
     return max(value, minimum)
 
 DONGCHEDI_ENHANCE_MAX_CONCURRENT = _get_int_env("DONGCHEDI_ENHANCE_MAX_CONCURRENT", 5)
+INCREMENTAL_EXISTING_LIMIT = _get_int_env("INCREMENTAL_EXISTING_LIMIT", 15000)
+PERF_ATTACH_BODY = os.getenv("PERF_ATTACH_BODY", "false").lower() == "true"
 
 def _get_next_sort_number(existing_cars: List[Dict], source: str) -> int:
     """
@@ -113,6 +117,33 @@ app.add_middleware(
 # Включаем роутеры для детального парсинга
 app.include_router(che168_detailed_router)
 
+# Локи для тяжёлых операций (полный парсинг), чтобы избежать дублирования нагрузки
+# Используем LRU кэш для ограничения роста памяти
+from collections import OrderedDict
+from threading import Lock as ThreadLock
+
+_full_fetch_locks: OrderedDict[str, asyncio.Lock] = OrderedDict()
+_full_fetch_locks_max_size = 100  # Максимум 100 блокировок
+_full_fetch_locks_lock = ThreadLock()
+
+
+def _get_full_fetch_lock(key: str) -> asyncio.Lock:
+    with _full_fetch_locks_lock:
+        # Если блокировка уже существует, перемещаем её в конец (LRU)
+        if key in _full_fetch_locks:
+            lock = _full_fetch_locks.pop(key)
+            _full_fetch_locks[key] = lock
+            return lock
+        
+        # Если достигли лимита, удаляем самую старую блокировку
+        if len(_full_fetch_locks) >= _full_fetch_locks_max_size:
+            _full_fetch_locks.popitem(last=False)
+        
+        # Создаём новую блокировку
+        lock = asyncio.Lock()
+        _full_fetch_locks[key] = lock
+        return lock
+
 # Middleware для измерения производительности
 @app.middleware("http")
 async def add_performance_info(request, call_next):
@@ -153,26 +184,32 @@ async def add_performance_info(request, call_next):
     response.headers["X-Request-Timestamp"] = request_timestamp
     response.headers["X-Response-Timestamp"] = response_timestamp
 
-    # Если ответ в формате JSON, добавляем информацию о производительности в тело ответа
-    if response.headers.get("content-type") == "application/json":
+    # Если ответ в формате JSON, добавляем информацию о производительности в тело ответа (опционально)
+    if PERF_ATTACH_BODY and response.headers.get("content-type") == "application/json":
         try:
             body = await response.body()
-            json_body = json.loads(body)
+            # Ограничиваем размер body для обработки (максимум 10MB)
+            MAX_BODY_SIZE = 10 * 1024 * 1024
+            if len(body) > MAX_BODY_SIZE:
+                # Пропускаем обработку для слишком больших ответов
+                pass
+            else:
+                json_body = json.loads(body)
 
-            if isinstance(json_body, dict):
-                json_body["performance"] = {
-                    "execution_time_ms": round(execution_time_ms, 2),
-                    "memory_usage_mb": round(memory_used, 2) if memory_used is not None else None,
-                    "request_timestamp": request_timestamp,
-                    "response_timestamp": response_timestamp
-                }
+                if isinstance(json_body, dict):
+                    json_body["performance"] = {
+                        "execution_time_ms": round(execution_time_ms, 2),
+                        "memory_usage_mb": round(memory_used, 2) if memory_used is not None else None,
+                        "request_timestamp": request_timestamp,
+                        "response_timestamp": response_timestamp
+                    }
 
-                return Response(
-                    content=json.dumps(json_body),
-                    status_code=response.status_code,
-                    headers=dict(response.headers),
-                    media_type="application/json"
-                )
+                    return Response(
+                        content=json.dumps(json_body),
+                        status_code=response.status_code,
+                        headers=dict(response.headers),
+                        media_type="application/json"
+                    )
         except:
             pass
 
@@ -207,7 +244,11 @@ class AsyncDongchediWrapper:
 
 async def run_blocking(func, *args, **kwargs):
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
+    # Добавляем таймаут для блокирующих операций (5 минут, согласовано с datahub)
+    return await asyncio.wait_for(
+        loop.run_in_executor(None, functools.partial(func, *args, **kwargs)),
+        timeout=300.0  # 5 минут
+    )
 class AsyncChe168Wrapper:
     def __init__(self, parser):
         self.parser = parser
@@ -304,13 +345,17 @@ async def get_dongchedi_cars():
         if car_dict.get('sh_price'):
             car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
 
-        # Преобразуем car_id в int64 для совместимости с Go
-        if 'car_id' in car_dict and car_dict['car_id'] is not None:
-            try:
-                car_dict['car_id'] = int(car_dict['car_id'])
-            except (ValueError, TypeError):
-                # Если не удалось преобразовать, устанавливаем значение по умолчанию
-                car_dict['car_id'] = 0
+            # Преобразуем car_id в int64 для совместимости с Go
+            if 'car_id' in car_dict and car_dict['car_id'] is not None:
+                try:
+                    car_dict['car_id'] = int(car_dict['car_id'])
+                except (ValueError, TypeError):
+                    # Если не удалось преобразовать, устанавливаем значение по умолчанию
+                    car_dict['car_id'] = 0
+
+            # Проверяем, не является ли машина электромобилем
+            if is_electric_car(car_dict):
+                car_dict['is_available'] = False
 
         filtered_cars.append(car_dict)
 
@@ -356,13 +401,17 @@ async def get_dongchedi_cars_by_page(page: int):
         if car_dict.get('sh_price'):
             car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
 
-        # Преобразуем car_id в int64 для совместимости с Go
-        if 'car_id' in car_dict and car_dict['car_id'] is not None:
-            try:
-                car_dict['car_id'] = int(car_dict['car_id'])
-            except (ValueError, TypeError):
-                # Если не удалось преобразовать, устанавливаем значение по умолчанию
-                car_dict['car_id'] = 0
+            # Преобразуем car_id в int64 для совместимости с Go
+            if 'car_id' in car_dict and car_dict['car_id'] is not None:
+                try:
+                    car_dict['car_id'] = int(car_dict['car_id'])
+                except (ValueError, TypeError):
+                    # Если не удалось преобразовать, устанавливаем значение по умолчанию
+                    car_dict['car_id'] = 0
+
+            # Проверяем, не является ли машина электромобилем
+            if is_electric_car(car_dict):
+                car_dict['is_available'] = False
 
         filtered_cars.append(car_dict)
 
@@ -377,13 +426,9 @@ async def get_dongchedi_cars_by_page(page: int):
         "status": response.status
     }
 
-@app.get("/cars/dongchedi/all")
-async def get_dongchedi_all_cars():
-    """
-    Получает все машины со всех страниц dongchedi, затем повторно проверяет первые страницы и добавляет только новые машины до первого совпадения.
-    Экономит память: хранит только уникальные id машин.
-    """
-    all_cars = []
+async def _collect_dongchedi_all_cars() -> Dict[str, Any]:
+    """Фактический сбор всех машин dongchedi (без конкурентных дублей)."""
+    all_cars = MemoryOptimizedList()
     seen_ids = set()
     page = 1
     # 1. Основной проход по всем страницам
@@ -411,9 +456,12 @@ async def get_dongchedi_all_cars():
                         # Если не удалось преобразовать, устанавливаем значение по умолчанию
                         car_dict['car_id'] = 0
 
+                # Проверяем, не является ли машина электромобилем
+                if is_electric_car(car_dict):
+                    car_dict['is_available'] = False
+
                 all_cars.append(car_dict)
                 seen_ids.add(car_id)
-        print(len(cars_list))
         if not getattr(response.data, 'has_more', False):
             break
         page += 1
@@ -438,6 +486,10 @@ async def get_dongchedi_all_cars():
                         # Если не удалось преобразовать, устанавливаем значение по умолчанию
                         car_dict['car_id'] = 0
 
+                # Проверяем, не является ли машина электромобилем
+                if is_electric_car(car_dict):
+                    car_dict['is_available'] = False
+
                 all_cars.append(car_dict)
                 seen_ids.add(car_id)
             else:
@@ -453,7 +505,7 @@ async def get_dongchedi_all_cars():
         car['sort_number'] = total - i
         car['source'] = 'dongchedi'
 
-    return {
+    response_payload = {
         "data": {
             "search_sh_sku_info_list": all_cars,
             "total": total
@@ -461,6 +513,22 @@ async def get_dongchedi_all_cars():
         "message": f"Загружено {total} машин со всех страниц.",
         "status": 200
     }
+    # Очищаем seen_ids для освобождения памяти
+    seen_ids.clear()
+    del seen_ids
+    gc.collect()
+    return response_payload
+
+
+@app.get("/cars/dongchedi/all")
+async def get_dongchedi_all_cars():
+    """
+    Получает все машины со всех страниц dongchedi, затем повторно проверяет первые страницы и добавляет только новые машины до первого совпадения.
+    Экономит память: хранит только уникальные id машин.
+    """
+    lock = _get_full_fetch_lock("dongchedi_all")
+    async with lock:
+        return await _collect_dongchedi_all_cars()
 
 @app.post("/cars/dongchedi/incremental")
 async def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
@@ -470,19 +538,21 @@ async def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
     Args:
         existing_cars: Список существующих машин с полями car_id/sku_id/link
     """
-    new_cars = []
+    new_cars = MemoryOptimizedList()
     existing_ids = set()
     existing_sku_ids = set()
 
     # Собираем ID существующих машин
     for car in existing_cars:
+        if len(existing_ids) >= INCREMENTAL_EXISTING_LIMIT and len(existing_sku_ids) >= INCREMENTAL_EXISTING_LIMIT:
+            break
+
         car_id = car.get('car_id')
         sku_id = car.get('sku_id')
-        if car_id:
-            existing_ids.add(car_id)
-        if sku_id:
-            existing_sku_ids.add(sku_id)
-    print(existing_ids)
+        if car_id and len(existing_ids) < INCREMENTAL_EXISTING_LIMIT:
+            existing_ids.add(str(car_id))
+        if sku_id and len(existing_sku_ids) < INCREMENTAL_EXISTING_LIMIT:
+            existing_sku_ids.add(str(sku_id))
     
     # Получаем следующий номер для нумерации
     next_sort_number = _get_next_sort_number(existing_cars, 'dongchedi')
@@ -499,14 +569,15 @@ async def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
         for car in cars_list:
             car_dict = car.dict()
             car_id = car_dict.get('car_id')
+            car_id_str = str(car_id) if car_id is not None else None
 
-            if car_id in existing_ids:
+            if car_id_str and car_id_str in existing_ids:
                 found_existing = True
                 break
             
             sku_id = car_dict.get('sku_id')
-            if sku_id in existing_sku_ids:
-                print(car_id)
+            sku_id_str = str(sku_id) if sku_id is not None else None
+            if sku_id_str and sku_id_str in existing_sku_ids:
                 found_existing = True
                 break
 
@@ -545,7 +616,7 @@ async def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
         car['sort_number'] = next_sort_number + total_new_cars - i - 1
         car['source'] = 'dongchedi'
 
-    return {
+    response_payload = {
         "data": {
             "search_sh_sku_info_list": new_cars,
             "total": len(new_cars),
@@ -554,6 +625,13 @@ async def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
         "message": f"Найдено {len(new_cars)} новых машин на {page} страницах.",
         "status": 200
     }
+    # Очищаем existing_ids для освобождения памяти
+    existing_ids.clear()
+    existing_sku_ids.clear()
+    del existing_ids
+    del existing_sku_ids
+    gc.collect()
+    return response_payload
 
 @app.get("/cars/dongchedi/car/{car_id}")
 async def get_dongchedi_car_detail(car_id: str):
@@ -771,7 +849,7 @@ async def get_che168_incremental_cars(existing_cars: List[Dict]):
         car['sort_number'] = next_sort_number + total_new_cars - i - 1
         car['source'] = 'che168'
 
-    return {
+    result = {
         "data": {
             "search_sh_sku_info_list": new_cars,
             "total": len(new_cars),
@@ -780,25 +858,14 @@ async def get_che168_incremental_cars(existing_cars: List[Dict]):
         "message": f"Найдено {len(new_cars)} новых машин на {page} страницах.",
         "status": 200
     }
+    # Очищаем existing_ids для освобождения памяти
+    existing_ids.clear()
+    del existing_ids
+    gc.collect()
+    return result
 
-@app.get("/cars/che168/all")
-async def get_che168_all_cars():
-    """
-    Получает все машины со всех страниц che168.
-    Принудительно проходит по всем страницам от 1 до 100, чтобы гарантировать полный сбор данных.
-    Экономит память: хранит только уникальные id машин.
-    """
-    import logging
-    import time
-    import sys
-
-    # Настройка логирования
-    logger = logging.getLogger(__name__)
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-
+async def _collect_che168_all_cars() -> Dict[str, Any]:
+    """Фактический сбор всех машин che168 (без параллельных дублей)."""
     all_cars = []
     seen_ids = set()
 
@@ -838,6 +905,9 @@ async def get_che168_all_cars():
                 car_id = car_dict.get('car_id') or car_dict.get('sku_id') or car_dict.get('link')
 
                 if car_id and car_id not in seen_ids:
+                    # Проверяем, не является ли машина электромобилем
+                    if is_electric_car(car_dict):
+                        car_dict['is_available'] = False
                     all_cars.append(car_dict)
                     seen_ids.add(car_id)
                     new_cars_count += 1
@@ -894,7 +964,7 @@ async def get_che168_all_cars():
         car['sort_number'] = total - i
         car['source'] = 'che168'
 
-    return {
+    result = {
         "data": {
             "search_sh_sku_info_list": all_cars,
             "total": total
@@ -902,6 +972,23 @@ async def get_che168_all_cars():
         "message": f"Загружено {total} машин со всех страниц.",
         "status": 200
     }
+    # Очищаем seen_ids для освобождения памяти
+    seen_ids.clear()
+    del seen_ids
+    gc.collect()
+    return result
+
+
+@app.get("/cars/che168/all")
+async def get_che168_all_cars():
+    """
+    Получает все машины со всех страниц che168.
+    Принудительно проходит по всем страницам от 1 до 100, чтобы гарантировать полный сбор данных.
+    Экономит память: хранит только уникальные id машин.
+    """
+    lock = _get_full_fetch_lock("che168_all")
+    async with lock:
+        return await _collect_che168_all_cars()
 
 @app.post("/cars/che168/car")
 async def get_che168_car_detail(request: CarUrlRequest):
@@ -1069,12 +1156,20 @@ async def enhance_dongchedi_car(sku_id: str, car_id: str = None):
         car_obj = DongchediCar(sku_id=sku_id, source='dongchedi')
         
         # Улучшаем машину детальной информацией
-        enhanced_car = await run_blocking(
-            dongchedi_parser_instance.enhance_car_with_details,
-            car_obj,
-            sku_id,
-            car_id,
-        )
+        try:
+            enhanced_car = await run_blocking(
+                dongchedi_parser_instance.enhance_car_with_details,
+                car_obj,
+                sku_id,
+                car_id,
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout enhancing car {sku_id} (exceeded 5 minutes)")
+            return {
+                "data": {"error": "Request timeout - exceeded 5 minutes"},
+                "message": "Таймаут при улучшении машины",
+                "status": 504
+            }
         
         if enhanced_car is None:
             return {
@@ -1215,6 +1310,9 @@ async def shutdown_event():
     Закрыть HTTP сессию при завершении работы
     """
     await task_service.close_session()
+    # Закрываем глобальную HTTP сессию
+    from api.http_client import http_client
+    await http_client.close()
 
 if __name__ == "__main__":
     import uvicorn

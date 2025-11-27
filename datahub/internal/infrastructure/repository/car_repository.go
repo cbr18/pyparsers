@@ -158,6 +158,7 @@ func (r *CarRepository) List(ctx context.Context, filter domain.CarFilter, page,
 	var count int64
 
 	query := r.db.WithContext(ctx).Model(&domain.Car{})
+	priceFieldExpr := "(CASE WHEN final_price IS NOT NULL AND final_price > 0 THEN final_price ELSE rub_price END)"
 
 	// отдаём только машины с детальной информацией и доступные по флагу
 	query = query.Where("has_details = ? AND is_available = ?", true, true)
@@ -186,12 +187,12 @@ func (r *CarRepository) List(ctx context.Context, filter domain.CarFilter, page,
 	if filter.YearTo != nil {
 		query = query.Where("year <= ?", *filter.YearTo)
 	}
-	// Диапазон цены (по rub_price)
+	// Диапазон цены (по final_price если есть, иначе rub_price)
 	if filter.PriceFrom != nil {
-		query = query.Where("rub_price >= ?", *filter.PriceFrom)
+		query = query.Where(priceFieldExpr+" >= ?", *filter.PriceFrom)
 	}
 	if filter.PriceTo != nil {
-		query = query.Where("rub_price <= ?", *filter.PriceTo)
+		query = query.Where(priceFieldExpr+" <= ?", *filter.PriceTo)
 	}
 	if filter.IsAvailable != nil {
 		query = query.Where("is_available = ?", *filter.IsAvailable)
@@ -623,6 +624,14 @@ func (r *CarRepository) CreateManyWithTranslation(ctx context.Context, cars []do
 			cars[i].UUID = uuid.NewString()
 		}
 
+		// Нормализуем first_registration_time: пустые строки -> пустая строка (будет NULL через Omit)
+		if normalized, ok := domain.NormalizeFirstRegistrationDate(cars[i].FirstRegistrationTime); ok {
+			cars[i].FirstRegistrationTime = normalized
+		} else {
+			// Для пустых/невалидных строк оставляем пустую строку - будем использовать Omit при вставке
+			cars[i].FirstRegistrationTime = ""
+		}
+
 		// Обрабатываем бренд если есть
 		if cars[i].BrandName != "" {
 			var brand domain.Brand
@@ -662,18 +671,50 @@ func (r *CarRepository) CreateManyWithTranslation(ctx context.Context, cars []do
 		}
 	}
 
-	// Вставляем все машины батчами
-	// С учетом 117+ полей, максимальный батч: 65535 / 117 ≈ 560
-	const batchSize = 500
-	for i := 0; i < len(cars); i += batchSize {
-		end := i + batchSize
-		if end > len(cars) {
-			end = len(cars)
+	// Разделяем машины на две группы: с нормализованной датой и с пустой строкой
+	var carsWithDate []domain.Car
+	var carsWithoutDate []domain.Car
+	
+	for i := range cars {
+		if cars[i].FirstRegistrationTime != "" {
+			carsWithDate = append(carsWithDate, cars[i])
+		} else {
+			carsWithoutDate = append(carsWithoutDate, cars[i])
 		}
-		batch := cars[i:end]
-		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(&batch, batchSize).Error; err != nil {
-			tx.Rollback()
-			return err
+	}
+	
+	// Вставляем машины с датой обычным способом
+	const batchSize = 500
+	if len(carsWithDate) > 0 {
+		for i := 0; i < len(carsWithDate); i += batchSize {
+			end := i + batchSize
+			if end > len(carsWithDate) {
+				end = len(carsWithDate)
+			}
+			batch := carsWithDate[i:end]
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(&batch, batchSize).Error; err != nil {
+				tx.Rollback()
+				return err
+			}
+		}
+	}
+	
+	// Вставляем машины без даты - используем Create с Omit (будет NULL в БД)
+	if len(carsWithoutDate) > 0 {
+		// Создаем батчами, но для каждой записи используем Omit
+		for i := 0; i < len(carsWithoutDate); i += batchSize {
+			end := i + batchSize
+			if end > len(carsWithoutDate) {
+				end = len(carsWithoutDate)
+			}
+			batch := carsWithoutDate[i:end]
+			// Вставляем каждую запись отдельно с Omit
+			for j := range batch {
+				if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Omit("first_registration_time").Create(&batch[j]).Error; err != nil {
+					tx.Rollback()
+					return err
+				}
+			}
 		}
 	}
 
@@ -703,113 +744,351 @@ func (r *CarRepository) GetCarsWithoutDetails(ctx context.Context, source string
 }
 
 // UpdateCar - обновляет машину в БД (только детальные поля, не трогая ключевые поля source и car_id)
+// НЕ обновляет поля, если они пустые (чтобы не перезаписывать существующие значения)
 func (r *CarRepository) UpdateCar(ctx context.Context, car domain.Car) error {
 	car.UpdatedAt = time.Now()
 
 	updates := map[string]interface{}{
-		// Базовые поля
-		"title":                  car.Title,
-		"car_name":               car.CarName,
+		// Всегда обновляем эти поля
 		"year":                   car.Year,
 		"mileage":                car.Mileage,
-		"price":                  car.Price,
-		"image":                  car.Image,
-		"city":                   car.City,
-		"shop_id":                car.ShopID,
-		"description":            car.Description,
-		"color":                  car.Color,
-		"transmission":           car.Transmission,
-		"fuel_type":              car.FuelType,
-		"engine_volume":          car.EngineVolume,
-		"body_type":              car.BodyType,
-		"drive_type":             car.DriveType,
-		"condition":              car.Condition,
-		// Флаги и метаданные
 		"has_details":            car.HasDetails,
 		"last_detail_update":     car.LastDetailUpdate,
-		// Технические характеристики
+		"is_available":           car.IsAvailable,
 		"power":                  car.Power,
-		"torque":                 car.Torque,
-		"acceleration":           car.Acceleration,
-		"max_speed":              car.MaxSpeed,
-		"fuel_consumption":       car.FuelConsumption,
-		"emission_standard":      car.EmissionStandard,
-		"length":                 car.Length,
-		"width":                  car.Width,
-		"height":                 car.Height,
-		"wheelbase":              car.Wheelbase,
-		"curb_weight":            car.CurbWeight,
-		"gross_weight":           car.GrossWeight,
-		"engine_type":            car.EngineType,
-		"engine_code":            car.EngineCode,
-		"cylinder_count":         car.CylinderCount,
-		"valve_count":            car.ValveCount,
-		"compression_ratio":      car.CompressionRatio,
-		"turbo_type":             car.TurboType,
-		"battery_capacity":       car.BatteryCapacity,
-		"electric_range":         car.ElectricRange,
-		"charging_time":          car.ChargingTime,
-		"fast_charge_time":       car.FastChargeTime,
-		"charge_port_type":       car.ChargePortType,
-		"transmission_type":      car.TransmissionType,
-		"gear_count":             car.GearCount,
-		"differential_type":      car.DifferentialType,
-		"front_suspension":       car.FrontSuspension,
-		"rear_suspension":        car.RearSuspension,
-		"front_brakes":           car.FrontBrakes,
-		"rear_brakes":            car.RearBrakes,
-		"brake_system":           car.BrakeSystem,
-		"wheel_size":             car.WheelSize,
-		"tire_size":              car.TireSize,
-		"wheel_type":             car.WheelType,
-		"tire_type":              car.TireType,
-		"airbag_count":           car.AirbagCount,
-		"abs":                    car.ABS,
-		"esp":                    car.ESP,
-		"tcs":                    car.TCS,
-		"hill_assist":            car.HillAssist,
-		"blind_spot_monitor":     car.BlindSpotMonitor,
-		"lane_departure":         car.LaneDeparture,
-		"air_conditioning":       car.AirConditioning,
-		"climate_control":        car.ClimateControl,
-		"seat_heating":           car.SeatHeating,
-		"seat_ventilation":       car.SeatVentilation,
-		"seat_massage":           car.SeatMassage,
-		"steering_wheel_heating": car.SteeringWheelHeating,
-		"navigation":             car.Navigation,
-		"audio_system":           car.AudioSystem,
-		"speakers_count":         car.SpeakersCount,
-		"bluetooth":              car.Bluetooth,
-		"usb":                    car.USB,
-		"aux":                    car.Aux,
-		"headlight_type":         car.HeadlightType,
-		"fog_lights":             car.FogLights,
-		"led_lights":             car.LEDLights,
-		"daytime_running":        car.DaytimeRunning,
-		"owner_count":            car.OwnerCount,
-		"accident_history":       car.AccidentHistory,
-		"service_history":        car.ServiceHistory,
-		"warranty_info":          car.WarrantyInfo,
-		"inspection_date":        car.InspectionDate,
-		"insurance_info":         car.InsuranceInfo,
-		"interior_color":         car.InteriorColor,
-		"exterior_color":         car.ExteriorColor,
-		"upholstery":             car.Upholstery,
-		"sunroof":                car.Sunroof,
-		"panoramic_roof":         car.PanoramicRoof,
-		"view_count":             car.ViewCount,
-		"favorite_count":         car.FavoriteCount,
-		"contact_info":           car.ContactInfo,
-		"dealer_info":            car.DealerInfo,
-		"certification":          car.Certification,
-		"image_gallery":          car.ImageGallery,
-		"image_count":            car.ImageCount,
-		"seat_count":             car.SeatCount,
-		"door_count":             car.DoorCount,
-		"trunk_volume":           car.TrunkVolume,
-		"fuel_tank_volume":       car.FuelTankVolume,
-		"rub_price":              car.RubPrice,
 		"updated_at":             car.UpdatedAt,
+		"failed_enhancement_attempts": car.FailedEnhancementAttempts,
+	}
+
+	// Обновляем строковые поля только если они не пустые
+	if car.Title != "" {
+		updates["title"] = car.Title
+	}
+	if car.CarName != "" {
+		updates["car_name"] = car.CarName
+	}
+	if car.Price != "" {
+		updates["price"] = car.Price
+	}
+	if car.Image != "" {
+		updates["image"] = car.Image
+	}
+	if car.City != "" {
+		updates["city"] = car.City
+	}
+	if car.ShopID != "" {
+		updates["shop_id"] = car.ShopID
+	}
+	if car.Description != "" {
+		updates["description"] = car.Description
+	}
+	if car.Color != "" {
+		updates["color"] = car.Color
+	}
+	if car.Transmission != "" {
+		updates["transmission"] = car.Transmission
+	}
+	if car.FuelType != "" {
+		updates["fuel_type"] = car.FuelType
+	}
+	if car.EngineVolume != "" {
+		updates["engine_volume"] = car.EngineVolume
+	}
+	if car.EngineVolumeML != "" {
+		updates["engine_volume_ml"] = car.EngineVolumeML
+	}
+	if car.BodyType != "" {
+		updates["body_type"] = car.BodyType
+	}
+	if car.DriveType != "" {
+		updates["drive_type"] = car.DriveType
+	}
+	if car.Condition != "" {
+		updates["condition"] = car.Condition
+	}
+	if car.BrandName != "" {
+		updates["brand_name"] = car.BrandName
+	}
+	if car.SeriesName != "" {
+		updates["series_name"] = car.SeriesName
+	}
+	if car.CarSourceCityName != "" {
+		updates["car_source_city_name"] = car.CarSourceCityName
+	}
+	if car.Tags != "" {
+		updates["tags"] = car.Tags
+	}
+	if car.TagsV2 != "" {
+		updates["tags_v2"] = car.TagsV2
+	}
+	if car.Torque != "" {
+		updates["torque"] = car.Torque
+	}
+	if car.Acceleration != "" {
+		updates["acceleration"] = car.Acceleration
+	}
+	if car.MaxSpeed != "" {
+		updates["max_speed"] = car.MaxSpeed
+	}
+	if car.FuelConsumption != "" {
+		updates["fuel_consumption"] = car.FuelConsumption
+	}
+	if car.EmissionStandard != "" {
+		updates["emission_standard"] = car.EmissionStandard
+	}
+	if car.Length != "" {
+		updates["length"] = car.Length
+	}
+	if car.Width != "" {
+		updates["width"] = car.Width
+	}
+	if car.Height != "" {
+		updates["height"] = car.Height
+	}
+	if car.Wheelbase != "" {
+		updates["wheelbase"] = car.Wheelbase
+	}
+	if car.CurbWeight != "" {
+		updates["curb_weight"] = car.CurbWeight
+	}
+	if car.GrossWeight != "" {
+		updates["gross_weight"] = car.GrossWeight
+	}
+	if car.EngineType != "" {
+		updates["engine_type"] = car.EngineType
+	}
+	if car.EngineCode != "" {
+		updates["engine_code"] = car.EngineCode
+	}
+	if car.CylinderCount != "" {
+		updates["cylinder_count"] = car.CylinderCount
+	}
+	if car.ValveCount != "" {
+		updates["valve_count"] = car.ValveCount
+	}
+	if car.CompressionRatio != "" {
+		updates["compression_ratio"] = car.CompressionRatio
+	}
+	if car.TurboType != "" {
+		updates["turbo_type"] = car.TurboType
+	}
+	if car.BatteryCapacity != "" {
+		updates["battery_capacity"] = car.BatteryCapacity
+	}
+	if car.ElectricRange != "" {
+		updates["electric_range"] = car.ElectricRange
+	}
+	if car.ChargingTime != "" {
+		updates["charging_time"] = car.ChargingTime
+	}
+	if car.FastChargeTime != "" {
+		updates["fast_charge_time"] = car.FastChargeTime
+	}
+	if car.ChargePortType != "" {
+		updates["charge_port_type"] = car.ChargePortType
+	}
+	if car.TransmissionType != "" {
+		updates["transmission_type"] = car.TransmissionType
+	}
+	if car.GearCount != "" {
+		updates["gear_count"] = car.GearCount
+	}
+	if car.DifferentialType != "" {
+		updates["differential_type"] = car.DifferentialType
+	}
+	if car.FrontSuspension != "" {
+		updates["front_suspension"] = car.FrontSuspension
+	}
+	if car.RearSuspension != "" {
+		updates["rear_suspension"] = car.RearSuspension
+	}
+	if car.FrontBrakes != "" {
+		updates["front_brakes"] = car.FrontBrakes
+	}
+	if car.RearBrakes != "" {
+		updates["rear_brakes"] = car.RearBrakes
+	}
+	if car.BrakeSystem != "" {
+		updates["brake_system"] = car.BrakeSystem
+	}
+	if car.WheelSize != "" {
+		updates["wheel_size"] = car.WheelSize
+	}
+	if car.TireSize != "" {
+		updates["tire_size"] = car.TireSize
+	}
+	if car.WheelType != "" {
+		updates["wheel_type"] = car.WheelType
+	}
+	if car.TireType != "" {
+		updates["tire_type"] = car.TireType
+	}
+	if car.AirbagCount != "" {
+		updates["airbag_count"] = car.AirbagCount
+	}
+	if car.ABS != "" {
+		updates["abs"] = car.ABS
+	}
+	if car.ESP != "" {
+		updates["esp"] = car.ESP
+	}
+	if car.TCS != "" {
+		updates["tcs"] = car.TCS
+	}
+	if car.HillAssist != "" {
+		updates["hill_assist"] = car.HillAssist
+	}
+	if car.BlindSpotMonitor != "" {
+		updates["blind_spot_monitor"] = car.BlindSpotMonitor
+	}
+	if car.LaneDeparture != "" {
+		updates["lane_departure"] = car.LaneDeparture
+	}
+	if car.AirConditioning != "" {
+		updates["air_conditioning"] = car.AirConditioning
+	}
+	if car.ClimateControl != "" {
+		updates["climate_control"] = car.ClimateControl
+	}
+	if car.SeatHeating != "" {
+		updates["seat_heating"] = car.SeatHeating
+	}
+	if car.SeatVentilation != "" {
+		updates["seat_ventilation"] = car.SeatVentilation
+	}
+	if car.SeatMassage != "" {
+		updates["seat_massage"] = car.SeatMassage
+	}
+	if car.SteeringWheelHeating != "" {
+		updates["steering_wheel_heating"] = car.SteeringWheelHeating
+	}
+	if car.Navigation != "" {
+		updates["navigation"] = car.Navigation
+	}
+	if car.AudioSystem != "" {
+		updates["audio_system"] = car.AudioSystem
+	}
+	if car.SpeakersCount != "" {
+		updates["speakers_count"] = car.SpeakersCount
+	}
+	if car.Bluetooth != "" {
+		updates["bluetooth"] = car.Bluetooth
+	}
+	if car.USB != "" {
+		updates["usb"] = car.USB
+	}
+	if car.Aux != "" {
+		updates["aux"] = car.Aux
+	}
+	if car.HeadlightType != "" {
+		updates["headlight_type"] = car.HeadlightType
+	}
+	if car.FogLights != "" {
+		updates["fog_lights"] = car.FogLights
+	}
+	if car.LEDLights != "" {
+		updates["led_lights"] = car.LEDLights
+	}
+	if car.DaytimeRunning != "" {
+		updates["daytime_running"] = car.DaytimeRunning
+	}
+	if car.OwnerCount > 0 {
+		updates["owner_count"] = car.OwnerCount
+	}
+	if car.AccidentHistory != "" {
+		updates["accident_history"] = car.AccidentHistory
+	}
+	if car.ServiceHistory != "" {
+		updates["service_history"] = car.ServiceHistory
+	}
+	if car.WarrantyInfo != "" {
+		updates["warranty_info"] = car.WarrantyInfo
+	}
+	if car.InspectionDate != "" {
+		updates["inspection_date"] = car.InspectionDate
+	}
+	if car.InsuranceInfo != "" {
+		updates["insurance_info"] = car.InsuranceInfo
+	}
+	if car.InteriorColor != "" {
+		updates["interior_color"] = car.InteriorColor
+	}
+	if car.ExteriorColor != "" {
+		updates["exterior_color"] = car.ExteriorColor
+	}
+	if car.Upholstery != "" {
+		updates["upholstery"] = car.Upholstery
+	}
+	if car.Sunroof != "" {
+		updates["sunroof"] = car.Sunroof
+	}
+	if car.PanoramicRoof != "" {
+		updates["panoramic_roof"] = car.PanoramicRoof
+	}
+	if car.ViewCount > 0 {
+		updates["view_count"] = car.ViewCount
+	}
+	if car.FavoriteCount > 0 {
+		updates["favorite_count"] = car.FavoriteCount
+	}
+	if car.ContactInfo != "" {
+		updates["contact_info"] = car.ContactInfo
+	}
+	if car.DealerInfo != "" {
+		updates["dealer_info"] = car.DealerInfo
+	}
+	if car.Certification != "" {
+		updates["certification"] = car.Certification
+	}
+	if car.ImageGallery != "" {
+		updates["image_gallery"] = car.ImageGallery
+	}
+	if car.ImageCount > 0 {
+		updates["image_count"] = car.ImageCount
+	}
+	if car.SeatCount != "" {
+		updates["seat_count"] = car.SeatCount
+	}
+	if car.DoorCount != "" {
+		updates["door_count"] = car.DoorCount
+	}
+	if car.TrunkVolume != "" {
+		updates["trunk_volume"] = car.TrunkVolume
+	}
+	if car.FuelTankVolume != "" {
+		updates["fuel_tank_volume"] = car.FuelTankVolume
+	}
+	if car.RecyclingFee != "" {
+		updates["recycling_fee"] = car.RecyclingFee
+	}
+	if car.CustomsDuty != "" {
+		updates["customs_duty"] = car.CustomsDuty
+	}
+	if car.CustomsFee > 0 {
+		updates["customs_fee"] = car.CustomsFee
+	}
+	if car.RubPrice > 0 {
+		updates["rub_price"] = car.RubPrice
+	}
+	if car.FinalPrice > 0 {
+		updates["final_price"] = car.FinalPrice
+	}
+
+	// Обновляем first_registration_time - нормализуем и преобразуем в time.Time
+	if car.FirstRegistrationTime != "" {
+		if normalized, ok := domain.NormalizeFirstRegistrationDate(car.FirstRegistrationTime); ok {
+			// Парсим нормализованную дату в time.Time для корректной записи в DATE колонку
+			if parsedDate, err := time.Parse("2006-01-02", normalized); err == nil {
+				updates["first_registration_time"] = parsedDate
+				log.Printf("UpdateCar: first_registration_time нормализовано: '%s' -> '%s' (parsed to time.Time)", car.FirstRegistrationTime, normalized)
+			} else {
+				log.Printf("UpdateCar: first_registration_time не удалось распарсить в time.Time: '%s', error: %v", normalized, err)
+			}
+		} else {
+			log.Printf("UpdateCar: first_registration_time не удалось нормализовать: '%s'", car.FirstRegistrationTime)
+		}
+	} else {
+		log.Printf("UpdateCar: first_registration_time пустое, не обновляем")
 	}
 
 	if car.Link != "" {
@@ -822,10 +1101,31 @@ func (r *CarRepository) UpdateCar(ctx context.Context, car domain.Car) error {
 		updates["mybrand_id"] = car.MybrandID
 	}
 
-	// Используем Updates вместо Save, чтобы обновить только указанные поля
-	// и не трогать индексированные поля source и car_id
-	return r.db.WithContext(ctx).
-		Model(&domain.Car{}).
+	// Логируем first_registration_time ДО Updates
+	if frt, ok := updates["first_registration_time"]; ok {
+		log.Printf("UpdateCar: BEFORE Updates - first_registration_time='%v' (type=%T) для uuid=%s", frt, frt, car.UUID)
+	}
+
+	// Используем Table() вместо Model() чтобы избежать вызова хуков BeforeSave,
+	// которые перезаписывают first_registration_time на nil
+	result := r.db.WithContext(ctx).
+		Table("cars").
 		Where("uuid = ?", car.UUID).
-		Updates(updates).Error
+		Updates(updates)
+	
+	if result.Error != nil {
+		log.Printf("UpdateCar: ошибка при обновлении uuid=%s: %v", car.UUID, result.Error)
+		return result.Error
+	}
+	
+	log.Printf("UpdateCar: uuid=%s, rows_affected=%d, updates_count=%d", car.UUID, result.RowsAffected, len(updates))
+	
+	// Если first_registration_time был в updates, логируем
+	if frt, ok := updates["first_registration_time"]; ok {
+		log.Printf("UpdateCar: first_registration_time='%s' (type=%T) добавлен в updates для uuid=%s", frt, frt, car.UUID)
+	} else {
+		log.Printf("UpdateCar: first_registration_time НЕ в updates для uuid=%s", car.UUID)
+	}
+	
+	return nil
 }

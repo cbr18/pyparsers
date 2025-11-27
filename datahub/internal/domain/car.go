@@ -1,6 +1,12 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+	"unicode"
+
+	"gorm.io/gorm"
+)
 
 // Car — доменная модель автомобиля
 // (можно расширять по мере необходимости)
@@ -14,7 +20,8 @@ type Car struct {
 	Year              int       `json:"year"`
 	Mileage           int32     `json:"mileage"`
 	Price             string    `json:"price"`
-	RubPrice          float64   `json:"rub_price"`              // Цена в рублях (рассчитанная из цены в юанях)
+	RubPrice          float64   `json:"rub_price"`              // Цена в рублях (конвертация из юаней + фикс. логистика)
+	FinalPrice        float64   `json:"final_price"`            // Финальная цена в рублях с учетом сборов
 	Image             string    `json:"image"`
 	Link              string    `json:"link"`
 	BrandName         string    `json:"brand_name"`
@@ -33,6 +40,7 @@ type Car struct {
 	Transmission      string    `json:"transmission"`
 	FuelType          string    `json:"fuel_type"`
 	EngineVolume      string    `json:"engine_volume"`
+	EngineVolumeML    string    `json:"engine_volume_ml"` // Объем двигателя в миллилитрах
 	BodyType          string    `json:"body_type"`
 	DriveType         string    `json:"drive_type"`
 	Condition         string    `json:"condition"`
@@ -125,6 +133,7 @@ type Car struct {
 	DaytimeRunning     string `json:"daytime_running"`          // Дневные ходовые огни
 
 	// История и состояние
+	FirstRegistrationTime string `json:"first_registration_time"` // Дата первой регистрации (как на площадке)
 	OwnerCount         int    `json:"owner_count"`              // Количество владельцев
 	AccidentHistory    string `json:"accident_history"`         // История ДТП
 	ServiceHistory     string `json:"service_history"`         // История обслуживания
@@ -155,6 +164,105 @@ type Car struct {
 	DoorCount          string `json:"door_count"`               // Количество дверей
 	TrunkVolume        string `json:"trunk_volume"`              // Объем багажника
 	FuelTankVolume     string `json:"fuel_tank_volume"`          // Объем топливного бака
+
+	// Таможенные и утилизационные сборы
+	RecyclingFee       string  `json:"recycling_fee"`            // Утильсбор
+	CustomsDuty        string  `json:"customs_duty"`              // Таможенный сбор
+	CustomsFee         float64 `json:"customs_fee"`               // Таможенный сбор (рассчитывается по rub_price)
+
+	// Счетчик неудачных попыток улучшения
+	FailedEnhancementAttempts int `json:"failed_enhancement_attempts" gorm:"default:0"` // Количество неудачных попыток улучшения подряд
+}
+
+// BeforeCreate normalizes fields before creating with GORM.
+func (c *Car) BeforeCreate(tx *gorm.DB) error {
+	if normalized, ok := NormalizeFirstRegistrationDate(c.FirstRegistrationTime); ok {
+		tx.Statement.SetColumn("first_registration_time", normalized)
+	} else {
+		tx.Statement.SetColumn("first_registration_time", nil)
+	}
+
+	if err := tx.Statement.Error; err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// BeforeSave normalizes fields before persisting them with GORM.
+func (c *Car) BeforeSave(tx *gorm.DB) error {
+	if normalized, ok := NormalizeFirstRegistrationDate(c.FirstRegistrationTime); ok {
+		tx.Statement.SetColumn("first_registration_time", normalized)
+	} else {
+		tx.Statement.SetColumn("first_registration_time", nil)
+	}
+
+	if err := tx.Statement.Error; err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// NormalizeFirstRegistrationDate приводит строку с датой к формату YYYY-MM-DD.
+// Поддерживает значения вида YYYY, YYYY-MM, YYYY-MM-DD. В остальных случаях возвращает false.
+func NormalizeFirstRegistrationDate(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", false
+	}
+
+	value = strings.ReplaceAll(value, "/", "-")
+	value = strings.ReplaceAll(value, ".", "-")
+
+	switch len(value) {
+	case 4:
+		if isDigits(value) {
+			return value + "-01-01", true
+		}
+	case 7:
+		if isYearMonth(value) {
+			return value + "-01", true
+		}
+	case 10:
+		if isYearMonthDay(value) {
+			return value, true
+		}
+	default:
+		// Попробуем распарсить RFC3339 формат (2022-05-01T00:00:00Z)
+		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+			return parsed.Format("2006-01-02"), true
+		}
+		// Попробуем распарсить как полную дату; в случае успеха вернем в нужном формате
+		if parsed, err := time.Parse("2006-01-02", value); err == nil {
+			return parsed.Format("2006-01-02"), true
+		}
+	}
+
+	return "", false
+}
+
+func isDigits(value string) bool {
+	for _, r := range value {
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func isYearMonth(value string) bool {
+	if len(value) != 7 || value[4] != '-' {
+		return false
+	}
+	return isDigits(value[:4]) && isDigits(value[5:])
+}
+
+func isYearMonthDay(value string) bool {
+	if len(value) != 10 || value[4] != '-' || value[7] != '-' {
+		return false
+	}
+	return isDigits(value[:4]) && isDigits(value[5:7]) && isDigits(value[8:])
 }
 
 // CarFilter — фильтры для поиска/выбора машин

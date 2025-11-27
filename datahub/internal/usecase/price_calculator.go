@@ -13,10 +13,13 @@ import (
 	"time"
 )
 
+const logisticsFeeRub = 15000.0
+
 // PriceCalculator — сервис для калькуляции цен в рублях
 type PriceCalculator struct {
 	cbrClient      *external.CBRClient
 	cnyRate        float64
+	euroRate       float64
 	lastUpdate     time.Time
 	mu             sync.RWMutex
 	updateInterval time.Duration
@@ -36,6 +39,9 @@ func (pc *PriceCalculator) Start(ctx context.Context) {
 	if err := pc.updateCNYRate(ctx); err != nil {
 		log.Printf("Ошибка первоначальной загрузки курса юаня: %v", err)
 	}
+	if err := pc.updateEURRate(ctx); err != nil {
+		log.Printf("Ошибка первоначальной загрузки курса евро: %v", err)
+	}
 
 	// Запускаем периодическое обновление
 	go pc.run(ctx)
@@ -54,6 +60,9 @@ func (pc *PriceCalculator) run(ctx context.Context) {
 			if err := pc.updateCNYRate(ctx); err != nil {
 				log.Printf("Ошибка обновления курса юаня: %v", err)
 			}
+			if err := pc.updateEURRate(ctx); err != nil {
+				log.Printf("Ошибка обновления курса евро: %v", err)
+			}
 		}
 	}
 }
@@ -71,6 +80,21 @@ func (pc *PriceCalculator) updateCNYRate(ctx context.Context) error {
 	pc.mu.Unlock()
 
 	log.Printf("Курс юаня обновлен: %.4f руб за 1 юань", rate)
+	return nil
+}
+
+func (pc *PriceCalculator) updateEURRate(ctx context.Context) error {
+	rate, err := pc.cbrClient.GetEURRate(ctx)
+	if err != nil {
+		return err
+	}
+
+	pc.mu.Lock()
+	pc.euroRate = rate
+	pc.lastUpdate = time.Now()
+	pc.mu.Unlock()
+
+	log.Printf("Курс евро обновлен: %.4f руб за 1 евро", rate)
 	return nil
 }
 
@@ -121,14 +145,19 @@ func (pc *PriceCalculator) CalculateRubPrice(ctx context.Context, priceStr strin
 	// Вычисляем цену в рублях: курс * цена_в_wan_юаней * 10_000
 	// В Китае цены указываются в 万 (wan) = 10,000 юаней
 	rubPrice := cnyRate * priceInMillionYuan * 10000
-	
-	// Применяем рыночный множитель (покупаем не по курсу ЦБ)
-	rubPrice = rubPrice * 1.117
-	
+
+	if rubPrice == 0 {
+		log.Printf("[CalculateRubPrice] Конвертация дала 0, возвращаем 0")
+		return 0, nil
+	}
+
+	// Добавляем фиксированную надбавку 15 000 руб. для логистики/оформления
+	rubPrice += logisticsFeeRub
+
 	// Округляем до целых
 	rubPrice = math.Round(rubPrice)
 
-	log.Printf("[CalculateRubPrice] Итоговая цена в рублях: %.0f (курс %.4f * цена %.6f wan * 10000 * 1.117)", rubPrice, cnyRate, priceInMillionYuan)
+	log.Printf("[CalculateRubPrice] Итоговая цена в рублях: %.0f (курс %.4f * цена %.6f wan * 10000 + %.0f руб. логистики)", rubPrice, cnyRate, priceInMillionYuan, logisticsFeeRub)
 
 	return rubPrice, nil
 }
@@ -204,11 +233,337 @@ func (pc *PriceCalculator) GetCNYRate() float64 {
 	return pc.cnyRate
 }
 
+// GetEURRate возвращает текущий курс евро
+func (pc *PriceCalculator) GetEURRate() float64 {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+	return pc.euroRate
+}
+
 // GetLastUpdateTime возвращает время последнего обновления курса
 func (pc *PriceCalculator) GetLastUpdateTime() time.Time {
 	pc.mu.RLock()
 	defer pc.mu.RUnlock()
 	return pc.lastUpdate
+}
+
+// CalculateCustomsDuty рассчитывает таможенную пошлину в рублях и возвращает значение
+// firstRegistrationTime - дата первой регистрации в формате "YYYY-MM-DD" (приоритет)
+// carYear - год выпуска (используется если firstRegistrationTime пустой или некорректный)
+func (pc *PriceCalculator) CalculateCustomsDuty(ctx context.Context, rubPrice float64, engineVolumeStr string, carYear int, firstRegistrationTime string) (float64, error) {
+	if rubPrice <= 0 {
+		return 0, nil
+	}
+	engineVolumeStr = strings.TrimSpace(engineVolumeStr)
+	if engineVolumeStr == "" {
+		return 0, fmt.Errorf("объем двигателя отсутствует")
+	}
+	if carYear <= 0 && firstRegistrationTime == "" {
+		return 0, fmt.Errorf("год выпуска авто и дата первой регистрации отсутствуют")
+	}
+
+	engineVolume, err := ParseEngineVolumeFromString(engineVolumeStr)
+	if err != nil {
+		return 0, fmt.Errorf("ошибка парсинга объема двигателя '%s': %w", engineVolumeStr, err)
+	}
+	if engineVolume <= 0 {
+		return 0, fmt.Errorf("объем двигателя <= 0 после парсинга")
+	}
+
+	engineCC := int(math.Round(engineVolume * 1000))
+	if engineCC <= 0 {
+		return 0, fmt.Errorf("не удалось получить объем двигателя в см3")
+	}
+
+	// Рассчитываем возраст машины (приоритет: firstRegistrationTime, иначе carYear)
+	ageYears := calculateCarAge(firstRegistrationTime, carYear)
+	if ageYears < 0 {
+		ageYears = 0
+	}
+
+	pc.mu.RLock()
+	euroRate := pc.euroRate
+	pc.mu.RUnlock()
+
+	if euroRate == 0 {
+		log.Printf("[CalculateCustomsDuty] Курс EUR не загружен, пытаемся обновить...")
+		if err := pc.updateEURRate(ctx); err != nil {
+			return 0, fmt.Errorf("не удалось получить курс евро: %w", err)
+		}
+		pc.mu.RLock()
+		euroRate = pc.euroRate
+		pc.mu.RUnlock()
+	}
+
+	if euroRate == 0 {
+		return 0, fmt.Errorf("курс евро не доступен")
+	}
+
+	priceEUR := rubPrice / euroRate
+	if priceEUR <= 0 {
+		return 0, nil
+	}
+
+	dutyRub := calculateCustomsDuty(ageYears, engineCC, priceEUR, euroRate)
+	if dutyRub <= 0 {
+		return 0, nil
+	}
+
+	return math.Round(dutyRub), nil
+}
+
+// CalculateCustomsFee рассчитывает таможенный сбор по rub_price
+// Сбор фиксированный и зависит от диапазона цены
+func (pc *PriceCalculator) CalculateCustomsFee(ctx context.Context, rubPrice float64) (float64, error) {
+	if rubPrice <= 0 {
+		return 0, nil
+	}
+
+	var fee float64
+	switch {
+	case rubPrice >= 0 && rubPrice <= 200000:
+		fee = 1067
+	case rubPrice > 200000 && rubPrice <= 450000:
+		fee = 2134
+	case rubPrice > 450000 && rubPrice <= 1200000:
+		fee = 4269
+	case rubPrice > 1200000 && rubPrice <= 2700000:
+		fee = 11746
+	case rubPrice > 2700000 && rubPrice <= 4200000:
+		fee = 16524
+	case rubPrice > 4200000 && rubPrice <= 5500000:
+		fee = 21344
+	case rubPrice > 5500000 && rubPrice <= 7000000:
+		fee = 27540
+	case rubPrice > 7000000 && rubPrice <= 8000000:
+		fee = 30000
+	case rubPrice > 8000000 && rubPrice <= 9000000:
+		fee = 30000
+	case rubPrice > 9000000 && rubPrice <= 10000000:
+		fee = 30000
+	default: // > 10000000
+		fee = 30000
+	}
+
+	log.Printf("[CalculateCustomsFee] Цена=%.0f руб, таможенный сбор=%.0f руб", rubPrice, fee)
+	return fee, nil
+}
+
+// calculateCustomsDuty рассчитывает пошлину по возрасту, объему двигателя и цене
+func calculateCustomsDuty(ageYears int, engineCC int, priceEUR float64, euroRate float64) float64 {
+	var dutyEUR float64
+
+	if ageYears <= 3 {
+		switch {
+		case priceEUR <= 8500:
+			dutyEUR = priceEUR * 0.54
+			if dutyEUR < float64(engineCC)*2.5 {
+				dutyEUR = float64(engineCC) * 2.5
+			}
+		case priceEUR <= 16700:
+			dutyEUR = priceEUR * 0.48
+			if dutyEUR < float64(engineCC)*3.5 {
+				dutyEUR = float64(engineCC) * 3.5
+			}
+		case priceEUR <= 42300:
+			dutyEUR = priceEUR * 0.48
+			if dutyEUR < float64(engineCC)*5.5 {
+				dutyEUR = float64(engineCC) * 5.5
+			}
+		case priceEUR <= 84500:
+			dutyEUR = priceEUR * 0.48
+			if dutyEUR < float64(engineCC)*7.5 {
+				dutyEUR = float64(engineCC) * 7.5
+			}
+		case priceEUR <= 169000:
+			dutyEUR = priceEUR * 0.48
+			if dutyEUR < float64(engineCC)*15 {
+				dutyEUR = float64(engineCC) * 15
+			}
+		default:
+			dutyEUR = priceEUR * 0.48
+			if dutyEUR < float64(engineCC)*20 {
+				dutyEUR = float64(engineCC) * 20
+			}
+		}
+	} else if ageYears <= 5 {
+		switch {
+		case engineCC <= 1000:
+			dutyEUR = float64(engineCC) * 1.5
+		case engineCC <= 1500:
+			dutyEUR = float64(engineCC) * 1.7
+		case engineCC <= 1800:
+			dutyEUR = float64(engineCC) * 2.5
+		case engineCC <= 2300:
+			dutyEUR = float64(engineCC) * 2.7
+		case engineCC <= 3000:
+			dutyEUR = float64(engineCC) * 3.0
+		default:
+			dutyEUR = float64(engineCC) * 3.6
+		}
+	} else {
+		switch {
+		case engineCC <= 1000:
+			dutyEUR = float64(engineCC) * 3.0
+		case engineCC <= 1500:
+			dutyEUR = float64(engineCC) * 3.2
+		case engineCC <= 1800:
+			dutyEUR = float64(engineCC) * 3.5
+		case engineCC <= 2300:
+			dutyEUR = float64(engineCC) * 4.8
+		case engineCC <= 3000:
+			dutyEUR = float64(engineCC) * 5.0
+		default:
+			dutyEUR = float64(engineCC) * 5.7
+		}
+	}
+
+	return dutyEUR * euroRate
+}
+
+// calculateUtilFeeNew рассчитывает утильсбор по новым правилам с учетом объема двигателя и мощности
+func calculateUtilFeeNew(ageYears int, engineCC int, powerHP float64) (float64, error) {
+	if ageYears < 0 {
+		ageYears = 0
+	}
+	if engineCC <= 0 {
+		return 0, fmt.Errorf("некорректный объем двигателя: %d см³", engineCC)
+	}
+	if powerHP <= 0 {
+		return 0, fmt.Errorf("некорректная мощность двигателя: %.2f л.с.", powerHP)
+	}
+
+	engineVolumeL := float64(engineCC) / 1000.0
+	isUnder3Years := ageYears <= 3
+
+	// 1. Personal use до 160 л.с. - применяется независимо от объема
+	if powerHP <= 160 {
+		if isUnder3Years {
+			return 3400, nil
+		}
+		return 5200, nil
+	}
+
+	// 2. Двигатели от 1.0 до 2.0 л (1000-2000 см³)
+	// После проверки personal_use мы знаем, что powerHP > 160
+	if engineVolumeL >= 1.0 && engineVolumeL < 2.0 {
+		if powerHP <= 190 {
+			// 160_190: > 160 и <= 190
+			if isUnder3Years {
+				return 750000, nil
+			}
+			return 1244000, nil
+		}
+		if powerHP <= 220 {
+			// up_to_220: > 190 и <= 220
+			if isUnder3Years {
+				return 794000, nil
+			}
+			return 1320000, nil
+		}
+		if powerHP <= 250 {
+			// up_to_250: > 220 и <= 250
+			if isUnder3Years {
+				return 842000, nil
+			}
+			return 1398000, nil
+		}
+		if powerHP <= 280 {
+			// up_to_280: > 250 и <= 280
+			if isUnder3Years {
+				return 952000, nil
+			}
+			return 1532000, nil
+		}
+		if powerHP <= 310 {
+			// up_to_310: > 280 и <= 310
+			if isUnder3Years {
+				return 1076000, nil
+			}
+			return 1676000, nil
+		}
+		if powerHP <= 340 {
+			// up_to_340: > 310 и <= 340
+			if isUnder3Years {
+				return 1216000, nil
+			}
+			return 1836000, nil
+		}
+		// Если больше 340 л.с., возвращаем максимальный тариф для этой категории
+		if isUnder3Years {
+			return 1216000, nil
+		}
+		return 1836000, nil
+	}
+
+	// 3. Двигатели от 2.0 до 3.0 л (2000-3000 см³)
+	// После проверки personal_use мы знаем, что powerHP > 160
+	if engineVolumeL >= 2.0 && engineVolumeL <= 3.0 {
+		if powerHP <= 190 {
+			// 160_190: > 160 и <= 190
+			if isUnder3Years {
+				return 1922200, nil
+			}
+			return 2880000, nil
+		}
+		if powerHP <= 220 {
+			// up_to_220: > 190 и <= 220
+			if isUnder3Years {
+				return 1970000, nil
+			}
+			return 2920000, nil
+		}
+		if powerHP <= 250 {
+			// up_to_250: > 220 и <= 250
+			if isUnder3Years {
+				return 2000000, nil
+			}
+			return 2960000, nil
+		}
+		if powerHP <= 280 {
+			// up_to_280: > 250 и <= 280
+			if isUnder3Years {
+				return 2050000, nil
+			}
+			return 3020000, nil
+		}
+		if powerHP <= 310 {
+			// up_to_310: > 280 и <= 310
+			if isUnder3Years {
+				return 2184000, nil
+			}
+			return 3120000, nil
+		}
+		if powerHP <= 340 {
+			// up_to_340: > 310 и <= 340
+			if isUnder3Years {
+				return 2272000, nil
+			}
+			return 3228000, nil
+		}
+		if powerHP <= 370 {
+			// up_to_370: > 340 и <= 370
+			if isUnder3Years {
+				return 2362000, nil
+			}
+			return 3318000, nil
+		}
+		if powerHP <= 400 {
+			// up_to_400: > 370 и <= 400
+			if isUnder3Years {
+				return 2452000, nil
+			}
+			return 3412000, nil
+		}
+		// Если больше 400 л.с. (в JSON указано "over_500", применяем как "over_400")
+		if isUnder3Years {
+			return 2874000, nil
+		}
+		return 3810000, nil
+	}
+
+	// Если объем двигателя вне диапазонов 1.0-2.0 и 2.0-3.0, возвращаем 0 или ошибку
+	return 0, fmt.Errorf("объем двигателя %.2f л находится вне поддерживаемого диапазона (1.0-3.0 л)", engineVolumeL)
 }
 
 // FeeData — структура для хранения тарифов одной категории
@@ -345,6 +700,36 @@ func ParseHorsePowerFromString(powerStr string) (int, error) {
 	return 0, fmt.Errorf("не удалось извлечь мощность из строки: %s", powerStr)
 }
 
+// calculateCarAge рассчитывает возраст машины
+// Приоритет: firstRegistrationTime (дата первой регистрации), иначе carYear (год выпуска)
+func calculateCarAge(firstRegistrationTime string, carYear int) int {
+	currentYear := time.Now().Year()
+	
+	// Пробуем использовать firstRegistrationTime
+	if firstRegistrationTime != "" {
+		// Пробуем распарсить как YYYY-MM-DD
+		if t, err := time.Parse("2006-01-02", firstRegistrationTime); err == nil {
+			ageYears := currentYear - t.Year()
+			log.Printf("[calculateCarAge] Используем first_registration_time='%s', год=%d, возраст=%d лет", firstRegistrationTime, t.Year(), ageYears)
+			return ageYears
+		}
+		// Пробуем распарсить как YYYY
+		if len(firstRegistrationTime) >= 4 {
+			if year, err := strconv.Atoi(firstRegistrationTime[:4]); err == nil && year > 1900 && year <= currentYear+1 {
+				ageYears := currentYear - year
+				log.Printf("[calculateCarAge] Используем first_registration_time='%s' (только год), возраст=%d лет", firstRegistrationTime, ageYears)
+				return ageYears
+			}
+		}
+		log.Printf("[calculateCarAge] Не удалось распарсить first_registration_time='%s', используем carYear=%d", firstRegistrationTime, carYear)
+	}
+	
+	// Fallback на год выпуска
+	ageYears := currentYear - carYear
+	log.Printf("[calculateCarAge] Используем carYear=%d, возраст=%d лет", carYear, ageYears)
+	return ageYears
+}
+
 // ParseEngineVolumeFromString парсит объем двигателя из строки
 // Поддерживает форматы: "1.8L", "1.8 л", "1800cc", "1.8"
 func ParseEngineVolumeFromString(volumeStr string) (float64, error) {
@@ -375,35 +760,53 @@ func ParseEngineVolumeFromString(volumeStr string) (float64, error) {
 	return volume, nil
 }
 
-// CalculateUtilizationFeeAndAddToPrice рассчитывает утильсбор и добавляет его к цене в рублях
-func (pc *PriceCalculator) CalculateUtilizationFeeAndAddToPrice(ctx context.Context, rubPrice float64, powerStr, engineVolumeStr string, carYear int) (float64, error) {
+// CalculateUtilizationFeeAndAddToPrice рассчитывает утильсбор и возвращает итоговую цену
+// вместе с самим значением утильсбора
+// firstRegistrationTime - дата первой регистрации в формате "YYYY-MM-DD" (приоритет)
+// carYear - год выпуска (используется если firstRegistrationTime пустой или некорректный)
+func (pc *PriceCalculator) CalculateUtilizationFeeAndAddToPrice(ctx context.Context, rubPrice float64, powerStr, engineVolumeStr string, carYear int, firstRegistrationTime string) (float64, float64, error) {
 	if rubPrice <= 0 {
-		return rubPrice, nil
+		return rubPrice, 0, nil
 	}
 
 	// Парсим мощность
 	horsePower, err := ParseHorsePowerFromString(powerStr)
 	if err != nil {
 		log.Printf("Не удалось распарсить мощность '%s': %v", powerStr, err)
-		return rubPrice, nil // Возвращаем цену без утильсбора, если не удалось распарсить
+		return rubPrice, 0, nil // Возвращаем цену без утильсбора, если не удалось распарсить
 	}
 
 	// Парсим объем двигателя
 	engineVolume, err := ParseEngineVolumeFromString(engineVolumeStr)
 	if err != nil {
 		log.Printf("Не удалось распарсить объем двигателя '%s': %v", engineVolumeStr, err)
-		return rubPrice, nil // Возвращаем цену без утильсбора, если не удалось распарсить
+		return rubPrice, 0, nil // Возвращаем цену без утильсбора, если не удалось распарсить
+	}
+
+	engineCC := int(math.Round(engineVolume * 1000))
+	if engineCC <= 0 {
+		return rubPrice, 0, fmt.Errorf("некорректный объем двигателя (см3) после нормализации")
 	}
 
 	// Рассчитываем возраст машины
-	currentYear := time.Now().Year()
-	ageYears := currentYear - carYear
+	// Приоритет: firstRegistrationTime, иначе carYear
+	ageYears := calculateCarAge(firstRegistrationTime, carYear)
 	if ageYears < 0 {
 		ageYears = 0
 	}
 
-	// Рассчитываем утильсбор
-	utilizationFee := GetUtilizationFee(engineVolume, horsePower, ageYears, time.Now())
+	// Рассчитываем утильсбор по новым правилам, при ошибке откатываемся к старой таблице
+	utilizationFee, utilErr := calculateUtilFeeNew(ageYears, engineCC, float64(horsePower))
+	if utilErr != nil {
+		log.Printf("Не удалось рассчитать утильсбор по новым правилам для мощности %d л.с.: %v", horsePower, utilErr)
+		utilizationFee = GetUtilizationFee(engineVolume, horsePower, ageYears, time.Now())
+	} else {
+		log.Printf("Утильсбор (новые правила): возраст=%d, объем=%d см3, мощность=%d л.с., сбор=%.0f руб", ageYears, engineCC, horsePower, utilizationFee)
+	}
+
+	if utilizationFee == 0 {
+		return rubPrice, 0, nil
+	}
 
 	// Добавляем утильсбор к цене и округляем
 	totalPrice := math.Round(rubPrice + utilizationFee)
@@ -411,6 +814,6 @@ func (pc *PriceCalculator) CalculateUtilizationFeeAndAddToPrice(ctx context.Cont
 	log.Printf("Утильсбор: объем=%.2f л, мощность=%d л.с., возраст=%d лет, сбор=%.0f руб, итоговая цена=%.0f руб", 
 		engineVolume, horsePower, ageYears, utilizationFee, totalPrice)
 
-	return totalPrice, nil
+	return totalPrice, utilizationFee, nil
 }
 

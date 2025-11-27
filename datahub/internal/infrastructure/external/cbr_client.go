@@ -17,10 +17,12 @@ import (
 
 // CBRClient — клиент для получения курсов валют от Центрального Банка РФ
 type CBRClient struct {
-	BaseURL    string
-	cnyRate    float64
-	lastUpdate time.Time
-	mu         sync.RWMutex
+	BaseURL        string
+	cnyRate        float64
+	eurRate        float64
+	lastUpdate     time.Time
+	eurLastUpdate  time.Time
+	mu             sync.RWMutex
 	updateInterval time.Duration
 }
 
@@ -91,6 +93,44 @@ func (c *CBRClient) GetCNYRate(ctx context.Context) (float64, error) {
 
 // fetchCNYRate получает курс юаня с сайта ЦБ РФ
 func (c *CBRClient) fetchCNYRate(ctx context.Context) (float64, error) {
+	return c.fetchRate(ctx, "CNY")
+}
+
+// GetEURRate получает курс евро (EUR) к рублю
+func (c *CBRClient) GetEURRate(ctx context.Context) (float64, error) {
+	c.mu.RLock()
+	if c.eurRate > 0 && time.Since(c.eurLastUpdate) < c.updateInterval {
+		rate := c.eurRate
+		c.mu.RUnlock()
+		return rate, nil
+	}
+	c.mu.RUnlock()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.eurRate > 0 && time.Since(c.eurLastUpdate) < c.updateInterval {
+		return c.eurRate, nil
+	}
+
+	rate, err := c.fetchEURRate(ctx)
+	if err != nil {
+		if c.eurRate > 0 {
+			return c.eurRate, nil
+		}
+		return 0, err
+	}
+
+	c.eurRate = rate
+	c.eurLastUpdate = time.Now()
+	return rate, nil
+}
+
+func (c *CBRClient) fetchEURRate(ctx context.Context) (float64, error) {
+	return c.fetchRate(ctx, "EUR")
+}
+
+func (c *CBRClient) fetchRate(ctx context.Context, charCode string) (float64, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.BaseURL, nil)
 	if err != nil {
 		return 0, fmt.Errorf("ошибка создания запроса: %w", err)
@@ -124,20 +164,20 @@ func (c *CBRClient) fetchCNYRate(ctx context.Context) (float64, error) {
 		return 0, fmt.Errorf("ошибка парсинга XML: %w", err)
 	}
 
-	// Ищем юань (CNY) по CharCode
+	// Ищем указанную валюту по CharCode
 	for _, valute := range valCurs.Valutes {
-		if valute.CharCode == "CNY" {
+		if valute.CharCode == charCode {
 			// Заменяем запятую на точку для парсинга
 			valueStr := strings.Replace(valute.Value, ",", ".", 1)
 			rate, err := strconv.ParseFloat(valueStr, 64)
 			if err != nil {
-				return 0, fmt.Errorf("ошибка парсинга курса юаня: %w", err)
+				return 0, fmt.Errorf("ошибка парсинга курса %s: %w", charCode, err)
 			}
 			return rate, nil
 		}
 	}
 
-	return 0, fmt.Errorf("курс юаня (CNY) не найден в ответе ЦБ РФ")
+	return 0, fmt.Errorf("курс %s не найден в ответе ЦБ РФ", charCode)
 }
 
 // ForceUpdate принудительно обновляет курс валют
@@ -145,13 +185,21 @@ func (c *CBRClient) ForceUpdate(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	rate, err := c.fetchCNYRate(ctx)
+	cnyRate, err := c.fetchCNYRate(ctx)
 	if err != nil {
 		return err
 	}
 
-	c.cnyRate = rate
-	c.lastUpdate = time.Now()
+	eurRate, err := c.fetchEURRate(ctx)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	c.cnyRate = cnyRate
+	c.lastUpdate = now
+	c.eurRate = eurRate
+	c.eurLastUpdate = now
 	return nil
 }
 

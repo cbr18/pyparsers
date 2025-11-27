@@ -7,9 +7,17 @@ import (
 	"datahub/internal/repository"
 	"fmt"
 	"log"
+	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	maxConcurrentPerSource = 5              // Максимум 5 машин одновременно для каждого источника
+	delayBetweenSends      = 700 * time.Millisecond // 0.5-1 сек между отправками
+	enhanceTimeout         = 5 * time.Minute        // Таймаут на улучшение одной машины
 )
 
 // EnhancementWorker — фоновый воркер для улучшения машин детальной информацией
@@ -26,8 +34,10 @@ type EnhancementWorker struct {
 	
 	batchSize          int
 	delayBetweenBatches time.Duration
-	delayBetweenCars   time.Duration
-	maxConcurrent      int
+	
+	// Семафоры для ограничения параллельных запросов по источникам
+	dongchediSemaphore chan struct{}
+	che168Semaphore    chan struct{}
 }
 
 func NewEnhancementWorker(repo repository.CarRepository, dongchediClient *external.DongchediClient, che168Client *external.Che168Client, translationService *TranslationService, priceCalculator *PriceCalculator) *EnhancementWorker {
@@ -38,10 +48,10 @@ func NewEnhancementWorker(repo repository.CarRepository, dongchediClient *extern
 		translationService: translationService,
 		priceCalculator:    priceCalculator,
 		stopChan:           make(chan struct{}),
-		batchSize:           10,               // Обрабатываем по 10 машин за раз
-		delayBetweenBatches: 5 * time.Minute,  // Пауза между батчами
-		delayBetweenCars:    2 * time.Second,  // Пауза между машинами
-		maxConcurrent:       7,                // Максимум 7 одновременных запросов
+		batchSize:          10,               // Обрабатываем по 10 машин за раз (5+5)
+		delayBetweenBatches: 1 * time.Minute,  // Пауза между батчами
+		dongchediSemaphore: make(chan struct{}, maxConcurrentPerSource),
+		che168Semaphore:    make(chan struct{}, maxConcurrentPerSource),
 	}
 }
 
@@ -57,7 +67,7 @@ func (w *EnhancementWorker) Start() {
 	w.mu.Unlock()
 
 	go w.run()
-	log.Println("Enhancement worker started")
+	log.Println("Enhancement worker started (parallel mode: 5+5 concurrent)")
 }
 
 // Stop — останавливает фоновый процесс
@@ -125,11 +135,12 @@ func (w *EnhancementWorker) run() {
 // processBatch — обрабатывает один батч машин без деталей
 // Возвращает (количество найденных машин, количество успешно обработанных машин)
 func (w *EnhancementWorker) processBatch(ctx context.Context) (int, int) {
-	log.Println("Starting enhancement batch processing...")
+	log.Println("Starting enhancement batch processing (parallel mode)...")
 
 	// Получаем машины без детальной информации для всех источников
 	sources := []string{"dongchedi", "che168"}
-	var allCars []domain.Car
+	carsBySource := make(map[string][]domain.Car)
+	totalCars := 0
 	
 	for _, source := range sources {
 		cars, err := w.repo.GetCarsWithoutDetails(ctx, source, w.batchSize/len(sources))
@@ -137,56 +148,93 @@ func (w *EnhancementWorker) processBatch(ctx context.Context) (int, int) {
 			log.Printf("Error getting cars without details for %s: %v", source, err)
 			continue
 		}
-		allCars = append(allCars, cars...)
+		log.Printf("Found %d cars without details for source %s", len(cars), source)
+		carsBySource[source] = cars
+		totalCars += len(cars)
 	}
 
-	if len(allCars) == 0 {
+	if totalCars == 0 {
 		log.Println("No cars without details found")
 		return 0, 0
 	}
 
-	log.Printf("Found %d cars without details, processing...", len(allCars))
+	log.Printf("Found %d cars without details, processing in parallel (max %d per source)...", 
+		totalCars, maxConcurrentPerSource)
 
-	// Обрабатываем машины с ограничением параллелизма
-	sem := make(chan struct{}, w.maxConcurrent)
+	// Канал для сбора результатов
+	type result struct {
+		car     domain.Car
+		success bool
+		err     error
+	}
+	resultsChan := make(chan result, totalCars)
+
+	// WaitGroup для ожидания завершения всех горутин
 	var wg sync.WaitGroup
-	enhancedCount := 0
-	var mu sync.Mutex
 
-	for i, car := range allCars {
-		wg.Add(1)
-		sem <- struct{}{} // Захватываем слот
-
-		go func(idx int, c domain.Car) {
-			defer wg.Done()
-			defer func() { <-sem }() // Освобождаем слот
-
-			// Улучшаем машину
-			if err := w.enhanceSingleCar(ctx, c); err != nil {
-				log.Printf("[%d/%d] Error enhancing car %s (source: %s, car_id: %d): %v", idx+1, len(allCars), c.UUID, c.Source, c.CarID, err)
+	// Запускаем обработку для каждого источника
+	for source, cars := range carsBySource {
+		for i, car := range cars {
+			wg.Add(1)
+			
+			// Выбираем соответствующий семафор
+			var semaphore chan struct{}
+			if source == "dongchedi" {
+				semaphore = w.dongchediSemaphore
 			} else {
-				mu.Lock()
-				enhancedCount++
-				mu.Unlock()
-				log.Printf("[%d/%d] Successfully enhanced car %s (source: %s, car_id: %d)", idx+1, len(allCars), c.UUID, c.Source, c.CarID)
+				semaphore = w.che168Semaphore
 			}
-
-			// Пауза между машинами
-			if idx < len(allCars)-1 {
-				time.Sleep(w.delayBetweenCars)
+			
+			// Задержка между отправками (0.5-1 сек)
+			if i > 0 {
+				time.Sleep(delayBetweenSends)
 			}
-		}(i, car)
+			
+			go func(car domain.Car, sem chan struct{}) {
+				defer wg.Done()
+				
+				// Захватываем слот в семафоре (блокируется если уже 5 активных)
+				sem <- struct{}{}
+				defer func() { <-sem }() // Освобождаем слот при завершении
+				
+				log.Printf("Processing car %s (source: %s, car_id: %d) - semaphore acquired", 
+					car.UUID, car.Source, car.CarID)
+				
+				err := w.enhanceSingleCar(ctx, car)
+				resultsChan <- result{car: car, success: err == nil, err: err}
+			}(car, semaphore)
+		}
 	}
 
-	wg.Wait()
-	log.Printf("Batch processing completed: enhanced %d out of %d cars", enhancedCount, len(allCars))
-	return len(allCars), enhancedCount
+	// Ждем завершения всех горутин в отдельной горутине
+	go func() {
+		wg.Wait()
+		close(resultsChan)
+	}()
+
+	// Собираем результаты
+	enhancedCount := 0
+	processedCount := 0
+	for res := range resultsChan {
+		processedCount++
+		if res.success {
+			enhancedCount++
+			log.Printf("[%d/%d] Successfully enhanced car %s (source: %s)", 
+				processedCount, totalCars, res.car.UUID, res.car.Source)
+		} else {
+			log.Printf("[%d/%d] Error enhancing car %s (source: %s): %v", 
+				processedCount, totalCars, res.car.UUID, res.car.Source, res.err)
+		}
+	}
+
+	log.Printf("Batch processing completed: enhanced %d out of %d cars", enhancedCount, totalCars)
+	return totalCars, enhancedCount
 }
 
 // enhanceSingleCar — улучшает одну машину
 func (w *EnhancementWorker) enhanceSingleCar(ctx context.Context, car domain.Car) error {
-	// Создаем контекст с таймаутом
-	enhanceCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	// Создаем контекст с таймаутом 5 минут
+	enhanceCtx, cancel := context.WithTimeout(ctx, enhanceTimeout)
 	defer cancel()
 
 	var enhancedCar *domain.Car
@@ -204,15 +252,47 @@ func (w *EnhancementWorker) enhanceSingleCar(ctx context.Context, car domain.Car
 			carID = fmt.Sprintf("%d", car.CarID)
 		}
 
+		log.Printf("Enhancing dongchedi car: sku_id=%s, car_id=%s", skuID, carID)
 		enhancedCar, err = w.dongchediClient.EnhanceCar(enhanceCtx, skuID, carID)
 	} else if car.Source == "che168" {
+		log.Printf("Enhancing che168 car: car_id=%d", car.CarID)
 		enhancedCar, err = w.che168Client.EnhanceCar(enhanceCtx, car.CarID)
 	} else {
 		return fmt.Errorf("источник %s не поддерживает улучшение деталей", car.Source)
 	}
 
 	if err != nil {
+		log.Printf("Error calling enhance API for car %s (source: %s, car_id: %d): %v", car.UUID, car.Source, car.CarID, err)
+		
+		// Увеличиваем счетчик неудачных попыток
+		car.FailedEnhancementAttempts++
+		
+		// Если достигли лимита (3 попытки), помечаем машину как недоступную
+		if car.FailedEnhancementAttempts >= 3 {
+			car.IsAvailable = false
+			log.Printf("Car %s: достигнут лимит неудачных попыток (%d), помечаем как недоступную", car.UUID, car.FailedEnhancementAttempts)
+		} else {
+			log.Printf("Car %s: неудачная попытка улучшения (%d/3), продолжаем попытки", car.UUID, car.FailedEnhancementAttempts)
+		}
+		
+		// Обновляем машину в БД с новым счетчиком и статусом
+		car.UpdatedAt = time.Now()
+		if updateErr := w.repo.UpdateCar(ctx, car); updateErr != nil {
+			log.Printf("Error updating car %s after failed enhancement: %v", car.UUID, updateErr)
+		}
+		
 		return fmt.Errorf("error calling enhance API: %w", err)
+	}
+	
+	// Успешное улучшение - сбрасываем счетчик неудачных попыток
+	enhancedCar.FailedEnhancementAttempts = 0
+	
+	// Проверяем, если pyparsers вернул информацию о недоступности машины
+	// (например, машина продана или удалена - pyparsers вернул is_available=false)
+	if !enhancedCar.IsAvailable {
+		log.Printf("Car %s: pyparsers сообщил, что машина недоступна, помечаем is_available=false", car.UUID)
+		// Сбрасываем счетчик, так как это не ошибка парсинга, а реальная недоступность
+		enhancedCar.FailedEnhancementAttempts = 0
 	}
 
 	// Сохраняем оригинальные поля
@@ -345,23 +425,62 @@ func (w *EnhancementWorker) enhanceSingleCar(ctx context.Context, car domain.Car
 		} else {
 			log.Printf("Car %s: рассчитана цена в рублях=%.2f", car.UUID, rubPrice)
 			enhancedCar.RubPrice = rubPrice
+			enhancedCar.FinalPrice = rubPrice
 			
 			// Добавляем утильсбор к цене, если есть мощность и объем двигателя
-			if enhancedCar.Power != "" && enhancedCar.EngineVolume != "" && enhancedCar.Year > 0 {
-				totalPrice, err := w.priceCalculator.CalculateUtilizationFeeAndAddToPrice(
+			// Возраст машины рассчитывается из first_registration_time (приоритет) или year
+			if enhancedCar.Power != "" && enhancedCar.EngineVolume != "" && (enhancedCar.Year > 0 || enhancedCar.FirstRegistrationTime != "") {
+				totalPrice, utilizationFee, err := w.priceCalculator.CalculateUtilizationFeeAndAddToPrice(
 					ctx,
 					rubPrice,
 					enhancedCar.Power,
 					enhancedCar.EngineVolume,
 					enhancedCar.Year,
+					enhancedCar.FirstRegistrationTime,
 				)
 				if err != nil {
 					log.Printf("Ошибка расчета утильсбора для машины %s: %v", car.UUID, err)
 				} else {
 					log.Printf("Car %s: итоговая цена с утильсбором=%.2f", car.UUID, totalPrice)
-					enhancedCar.RubPrice = totalPrice
+					enhancedCar.FinalPrice = totalPrice
+					if utilizationFee > 0 {
+						enhancedCar.RecyclingFee = strconv.FormatFloat(utilizationFee, 'f', 0, 64)
+					}
 				}
 			}
+
+			// Рассчитываем таможенную пошлину
+			// Возраст машины рассчитывается из first_registration_time (приоритет) или year
+			if enhancedCar.EngineVolume != "" && (enhancedCar.Year > 0 || enhancedCar.FirstRegistrationTime != "") {
+				customsDuty, dutyErr := w.priceCalculator.CalculateCustomsDuty(
+					ctx,
+					rubPrice,
+					enhancedCar.EngineVolume,
+					enhancedCar.Year,
+					enhancedCar.FirstRegistrationTime,
+				)
+				if dutyErr != nil {
+					log.Printf("Ошибка расчета таможенной пошлины для машины %s: %v", car.UUID, dutyErr)
+				} else if customsDuty > 0 {
+					enhancedCar.FinalPrice = math.Round(enhancedCar.FinalPrice + customsDuty)
+					enhancedCar.CustomsDuty = strconv.FormatFloat(customsDuty, 'f', 0, 64)
+					log.Printf("Car %s: добавлена таможенная пошлина %.0f руб", car.UUID, customsDuty)
+				}
+			}
+
+			// Рассчитываем таможенный сбор по rub_price
+			customsFee, feeErr := w.priceCalculator.CalculateCustomsFee(ctx, rubPrice)
+			if feeErr != nil {
+				log.Printf("Ошибка расчета таможенного сбора для машины %s: %v", car.UUID, feeErr)
+			} else if customsFee > 0 {
+				enhancedCar.CustomsFee = customsFee
+				enhancedCar.FinalPrice = math.Round(enhancedCar.FinalPrice + customsFee)
+				log.Printf("Car %s: добавлен таможенный сбор %.0f руб", car.UUID, customsFee)
+			}
+
+			// Добавляем фиксированные надбавки: 80000 + 80000 = 160000 руб
+			enhancedCar.FinalPrice = math.Round(enhancedCar.FinalPrice + 160000)
+			log.Printf("Car %s: добавлены фиксированные надбавки 160000 руб, итоговая цена=%.0f", car.UUID, enhancedCar.FinalPrice)
 		}
 	} else {
 		if w.priceCalculator == nil {
@@ -400,12 +519,15 @@ func (w *EnhancementWorker) GetStatus(ctx context.Context) (map[string]interface
 	}
 
 	return map[string]interface{}{
-		"is_running":                isRunning,
-		"batch_size":                w.batchSize,
-		"delay_between_batches_sec": w.delayBetweenBatches.Seconds(),
-		"delay_between_cars_sec":    w.delayBetweenCars.Seconds(),
-		"max_concurrent":            w.maxConcurrent,
-		"cars_without_details":      carsWithoutDetails,
+		"is_running":                 isRunning,
+		"batch_size":                 w.batchSize,
+		"delay_between_batches_sec":  w.delayBetweenBatches.Seconds(),
+		"max_concurrent_per_source":  maxConcurrentPerSource,
+		"enhance_timeout_sec":        enhanceTimeout.Seconds(),
+		"delay_between_sends_ms":     delayBetweenSends.Milliseconds(),
+		"dongchedi_active":           len(w.dongchediSemaphore),
+		"che168_active":              len(w.che168Semaphore),
+		"cars_without_details":       carsWithoutDetails,
 	}, nil
 }
 
@@ -420,15 +542,8 @@ func (w *EnhancementWorker) SetConfig(batchSize int, delayBetweenBatches time.Du
 	if delayBetweenBatches > 0 {
 		w.delayBetweenBatches = delayBetweenBatches
 	}
-	if delayBetweenCars > 0 {
-		w.delayBetweenCars = delayBetweenCars
-	}
-	if maxConcurrent > 0 {
-		w.maxConcurrent = maxConcurrent
-	}
+	// delayBetweenCars и maxConcurrent теперь константы, игнорируем
 
-	log.Printf("Enhancement worker config updated: batch_size=%d, delay_batches=%v, delay_cars=%v, max_concurrent=%d",
-		w.batchSize, w.delayBetweenBatches, w.delayBetweenCars, w.maxConcurrent)
+	log.Printf("Enhancement worker config updated: batch_size=%d, delay_batches=%v, max_concurrent_per_source=%d",
+		w.batchSize, w.delayBetweenBatches, maxConcurrentPerSource)
 }
-
-

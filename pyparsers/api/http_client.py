@@ -140,7 +140,14 @@ class HTTPClient:
         """
         if self._session is None or self._session.closed:
             if self._connector is None or self._connector.closed:
-                self._connector = aiohttp.TCPConnector(limit=self.pool_size)
+                # Добавляем таймауты и ограничения для пула соединений
+                self._connector = aiohttp.TCPConnector(
+                    limit=self.pool_size,
+                    limit_per_host=20,  # Максимум 20 соединений на хост
+                    ttl_dns_cache=300,  # TTL для DNS кэша (5 минут)
+                    force_close=False,  # Переиспользование соединений
+                    enable_cleanup_closed=True  # Автоматическая очистка закрытых соединений
+                )
 
             self._session = aiohttp.ClientSession(
                 connector=self._connector,

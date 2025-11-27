@@ -22,7 +22,7 @@
 - 百公里油耗 (fuel_consumption)
 - 燃料形式 (fuel_type)
 - 排量 (engine_volume)
-- 上牌时间 (registration_date)
+- 上牌时间 (first_registration_time)
 - 表显里程 (mileage)
 - 排放标准 (emission_standard)
 - 所在地区 (city)
@@ -131,7 +131,7 @@
 `5.47万公里` → `54700` (км)
 
 #### Извлечение year
-`2016-01` (из registration_date) → `2016`
+`2016-01-01` (из first_registration_time) → `2016`
 
 ### 3. Маппинг в domain.Car
 

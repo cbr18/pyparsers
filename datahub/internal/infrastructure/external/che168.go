@@ -7,6 +7,7 @@ import (
     "encoding/json"
     "fmt"
     "io"
+    "log"
     "net/http"
     "regexp"
     "strconv"
@@ -16,21 +17,25 @@ import (
 
 // Che168Car представляет структуру данных автомобиля из che168
 type Che168Car struct {
-	Title             string      `json:"title"`
-	ShPrice           string      `json:"sh_price"`
-	Image             string      `json:"image"`
-	Link              string      `json:"link"`
-	CarName           string      `json:"car_name"`
-	CarYear           int         `json:"car_year"`
-	CarMileage        string      `json:"car_mileage"`
-	CarSourceCityName string      `json:"car_source_city_name"`
-	BrandName         string      `json:"brand_name"`
-	SeriesName        string      `json:"series_name"`
-	BrandID           int         `json:"brand_id"`
-	SeriesID          int         `json:"series_id"`
-	ShopID            string      `json:"shop_id"`
-	CarID             int64       `json:"car_id"`
-	TagsV2            interface{} `json:"tags_v2"`
+	Title                 string      `json:"title"`
+	ShPrice               string      `json:"sh_price"`
+	Image                 string      `json:"image"`
+	Link                  string      `json:"link"`
+	CarName               string      `json:"car_name"`
+	CarYear               int         `json:"car_year"`
+	CarMileage            string      `json:"car_mileage"`
+	CarSourceCityName     string      `json:"car_source_city_name"`
+	BrandName             string      `json:"brand_name"`
+	SeriesName            string      `json:"series_name"`
+	BrandID               int         `json:"brand_id"`
+	SeriesID              int         `json:"series_id"`
+	ShopID                string      `json:"shop_id"`
+	CarID                 int64       `json:"car_id"`
+	TagsV2                interface{} `json:"tags_v2"`
+	IsAvailable           *bool       `json:"is_available"` // Указатель, чтобы различать отсутствие поля и false
+	RecyclingFee          string      `json:"recycling_fee"` // Утильсбор
+	CustomsDuty           string      `json:"customs_duty"`  // Таможенный сбор
+	FirstRegistrationTime string      `json:"first_registration_time"` // Дата первой регистрации в формате YYYY-MM-DD
 }
 
 // parseMileageToKm converts che168 mileage strings like "3.5万公里" or "5600公里" to kilometers
@@ -104,24 +109,34 @@ func (c *Che168Car) ToCar() domain.Car {
 
     mileage := parseMileageToKm(c.CarMileage)
 
+	// Устанавливаем IsAvailable: если поле установлено в API, используем его, иначе true по умолчанию
+	isAvailable := true
+	if c.IsAvailable != nil {
+		isAvailable = *c.IsAvailable
+	}
+
 	return domain.Car{
-		Source:            "che168",
-		CarID:             c.CarID,
-		Title:             c.Title,
-		CarName:           c.CarName,
-        Year:              year,
-        Price:             c.ShPrice,
-		Image:             c.Image,
-		Link:              c.Link,
-		BrandName:         c.BrandName,
-		SeriesName:        c.SeriesName,
-        City:              c.CarSourceCityName,
-		ShopID:            c.ShopID,
-		BrandID:           c.BrandID,
-		SeriesID:          c.SeriesID,
-		CarSourceCityName: c.CarSourceCityName,
-		TagsV2:            tagsV2Str,
-        Mileage:           mileage,
+		Source:                "che168",
+		CarID:                 c.CarID,
+		Title:                 c.Title,
+		CarName:               c.CarName,
+        Year:                  year,
+        Price:                 c.ShPrice,
+		Image:                 c.Image,
+		Link:                  c.Link,
+		BrandName:             c.BrandName,
+		SeriesName:            c.SeriesName,
+        City:                  c.CarSourceCityName,
+		ShopID:                c.ShopID,
+		BrandID:               c.BrandID,
+		SeriesID:              c.SeriesID,
+		CarSourceCityName:     c.CarSourceCityName,
+		TagsV2:                tagsV2Str,
+        Mileage:               mileage,
+		IsAvailable:           isAvailable,
+		RecyclingFee:          c.RecyclingFee,
+		CustomsDuty:           c.CustomsDuty,
+		FirstRegistrationTime: c.FirstRegistrationTime,
 	}
 }
 
@@ -274,7 +289,16 @@ func (c *Che168Client) CheckCar(ctx context.Context, carIDorURL string) (*domain
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	
+	client := &http.Client{
+		Timeout: 2 * time.Minute,
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -285,12 +309,22 @@ func (c *Che168Client) CheckCar(ctx context.Context, carIDorURL string) (*domain
 		return nil, err
 	}
 
-	var che168Car Che168Car
-	if err := json.Unmarshal(b, &che168Car); err != nil {
-		return nil, err
+	// API возвращает структуру с полем "data"
+	var apiResponse struct {
+		Data    Che168Car `json:"data"`
+		Message string    `json:"message"`
+		Status  int       `json:"status"`
+	}
+	
+	if err := json.Unmarshal(b, &apiResponse); err != nil {
+		return nil, fmt.Errorf("ошибка декодирования ответа: %w", err)
 	}
 
-	car := che168Car.ToCar()
+	if apiResponse.Status != 200 {
+		return nil, fmt.Errorf("ошибка API: %s (код: %d)", apiResponse.Message, apiResponse.Status)
+	}
+
+	car := apiResponse.Data.ToCar()
 	return &car, nil
 }
 
@@ -315,9 +349,9 @@ func (c *Che168Client) EnhanceCar(ctx context.Context, carID int64) (*domain.Car
 
 	req.Header.Set("Content-Type", "application/json")
 
-	// Устанавливаем увеличенный таймаут для клиента (парсинг деталей может занять время)
+	// Устанавливаем таймаут для клиента (парсинг деталей может занять время)
 	client := &http.Client{
-		Timeout: 10 * time.Minute, // Увеличенный таймаут для парсинга деталей
+		Timeout: 5 * time.Minute, // Таймаут 5 минут (согласован с pyparsers)
 	}
 
 	resp, err := client.Do(req)
@@ -352,6 +386,13 @@ func (c *Che168Client) EnhanceCar(ctx context.Context, carID int64) (*domain.Car
 
 	if response.Data == nil {
 		return nil, fmt.Errorf("данные не получены")
+	}
+
+	// Логируем first_registration_time для отладки
+	if response.Data.FirstRegistrationTime != "" {
+		log.Printf("EnhanceCar: получено first_registration_time='%s' для car_id=%d", response.Data.FirstRegistrationTime, carID)
+	} else {
+		log.Printf("EnhanceCar: first_registration_time пустое для car_id=%d", carID)
 	}
 
 	// НЕ устанавливаем HasDetails здесь - это делает enhancement_worker.go

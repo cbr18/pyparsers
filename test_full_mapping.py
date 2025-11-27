@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import re
 from bs4 import BeautifulSoup
+from api.date_utils import normalize_first_registration_date
 
 # Загружаем HTML
 html_path = '/home/alex/CarsParser/samples/detailche/после того как что-то нажал/车源详情.html'
@@ -134,7 +135,7 @@ all_label_matches = [
     ('油箱容积', 'fuel_tank_volume'),
     
     # История (из раздела 档案)
-    ('上牌时间', 'registration_date'),
+    ('上牌时间', 'first_registration_time'),
     ('表显里程', 'mileage'),
     ('所在地区', 'city'),
     ('过户次数', 'owner_count'),
@@ -167,8 +168,14 @@ for div in all_text_divs:
                         if data.get(field_name):
                             continue
                         if label_text == mapping_label or label_text in mapping_label or mapping_label in label_text:
-                            data[field_name] = value_text
-                            print(f"  ✓ {field_name}: {value_text}")
+                            if field_name == 'first_registration_time':
+                                normalized = normalize_first_registration_date(value_text)
+                                if normalized:
+                                    data[field_name] = normalized
+                                    print(f"  ✓ {field_name}: {normalized}")
+                            else:
+                                data[field_name] = value_text
+                                print(f"  ✓ {field_name}: {value_text}")
                             break
                     break
 
@@ -195,10 +202,17 @@ for div in all_divs:
                         value_div = children[label_idx + 1]
                         value_text = value_div.get_text(strip=True)
                         
-                        if value_text and value_text not in label_texts:
-                            data[field_name] = value_text
-                            print(f"  ✓ {field_name}: {value_text}")
-                            found_count += 1
+                            if value_text and value_text not in label_texts:
+                                if field_name == 'first_registration_time':
+                                    normalized = normalize_first_registration_date(value_text)
+                                    if normalized:
+                                        data[field_name] = normalized
+                                        print(f"  ✓ {field_name}: {normalized}")
+                                        found_count += 1
+                                else:
+                                    data[field_name] = value_text
+                                    print(f"  ✓ {field_name}: {value_text}")
+                                    found_count += 1
                 except ValueError:
                     pass
 
@@ -224,13 +238,11 @@ if 'mileage' in data:
         data['mileage'] = str(mileage_km)
         print(f"\n  Пробег преобразован: {mileage_text} -> {mileage_km} км")
 
-# Специальная обработка для year (из даты регистрации)
-if 'registration_date' in data:
-    reg_date = data['registration_date']
-    year_match = re.search(r'(\d{4})', reg_date)
-    if year_match:
-        data['year'] = year_match.group(1)
-        print(f"\n  Год из даты регистрации: {data['year']}")
+# Специальная обработка для year (из даты первой регистрации)
+if 'first_registration_time' in data:
+    reg_date = data['first_registration_time']
+    data['year'] = reg_date[:4]
+    print(f"\n  Год из даты первой регистрации: {data['year']}")
 
 print("\n" + "=" * 80)
 print("ИТОГОВЫЙ РЕЗУЛЬТАТ")
@@ -248,7 +260,7 @@ categories = {
     'Безопасность': ['airbag_count', 'abs', 'esp', 'tcs', 'hill_assist', 'blind_spot_monitor', 'lane_departure'],
     'Комфорт': ['air_conditioning', 'climate_control', 'seat_heating', 'navigation', 'bluetooth', 'usb'],
     'Интерьер': ['interior_color', 'exterior_color', 'seat_count', 'trunk_volume'],
-    'История': ['registration_date', 'owner_count', 'warranty_info', 'insurance_info'],
+    'История': ['first_registration_time', 'owner_count', 'warranty_info', 'insurance_info'],
 }
 
 for category, fields in categories.items():

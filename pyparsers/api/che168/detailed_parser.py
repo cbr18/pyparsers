@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 from .models.detailed_car import Che168DetailedCar
+from api.date_utils import normalize_first_registration_date
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -515,6 +516,102 @@ class Che168DetailedParser:
                                 data['image_count'] = len(image_urls)
                                 found_any = True
                     
+                    # Технические характеристики
+                    if 'power' in obj or 'horsepower' in obj or 'maxPower' in obj:
+                        power = obj.get('power') or obj.get('horsepower') or obj.get('maxPower')
+                        if power and not data.get('power'):
+                            from ..dongchedi.parser import normalize_power_value
+                            normalized = normalize_power_value(str(power))
+                            if normalized:
+                                data['power'] = normalized
+                                found_any = True
+                    
+                    if 'torque' in obj or 'maxTorque' in obj:
+                        torque = obj.get('torque') or obj.get('maxTorque')
+                        if torque and not data.get('torque'):
+                            data['torque'] = str(torque)
+                            found_any = True
+                    
+                    if 'acceleration' in obj or 'accelTime' in obj or 'zeroToHundred' in obj:
+                        accel = obj.get('acceleration') or obj.get('accelTime') or obj.get('zeroToHundred')
+                        if accel and not data.get('acceleration'):
+                            data['acceleration'] = str(accel)
+                            found_any = True
+                    
+                    if 'maxSpeed' in obj or 'topSpeed' in obj:
+                        speed = obj.get('maxSpeed') or obj.get('topSpeed')
+                        if speed and not data.get('max_speed'):
+                            data['max_speed'] = str(speed)
+                            found_any = True
+                    
+                    if 'fuelConsumption' in obj or 'fuelConsump' in obj or 'consumption' in obj:
+                        consumption = obj.get('fuelConsumption') or obj.get('fuelConsump') or obj.get('consumption')
+                        if consumption and not data.get('fuel_consumption'):
+                            data['fuel_consumption'] = str(consumption)
+                            found_any = True
+                    
+                    # Размеры
+                    if 'length' in obj:
+                        length = obj.get('length')
+                        if length and not data.get('length'):
+                            data['length'] = str(length) + 'mm' if isinstance(length, (int, float)) else str(length)
+                            found_any = True
+                    
+                    if 'width' in obj:
+                        width = obj.get('width')
+                        if width and not data.get('width'):
+                            data['width'] = str(width) + 'mm' if isinstance(width, (int, float)) else str(width)
+                            found_any = True
+                    
+                    if 'height' in obj:
+                        height = obj.get('height')
+                        if height and not data.get('height'):
+                            data['height'] = str(height) + 'mm' if isinstance(height, (int, float)) else str(height)
+                            found_any = True
+                    
+                    if 'wheelbase' in obj or 'wheelBase' in obj:
+                        wheelbase = obj.get('wheelbase') or obj.get('wheelBase')
+                        if wheelbase and not data.get('wheelbase'):
+                            data['wheelbase'] = str(wheelbase) + 'mm' if isinstance(wheelbase, (int, float)) else str(wheelbase)
+                            found_any = True
+                    
+                    if 'curbWeight' in obj or 'curb_weight' in obj or 'weight' in obj:
+                        weight = obj.get('curbWeight') or obj.get('curb_weight') or obj.get('weight')
+                        if weight and not data.get('curb_weight'):
+                            data['curb_weight'] = str(weight) + 'kg' if isinstance(weight, (int, float)) else str(weight)
+                            found_any = True
+                    
+                    # Двигатель и трансмиссия
+                    if 'engineVolume' in obj or 'engine_volume' in obj or 'displacement' in obj:
+                        volume = obj.get('engineVolume') or obj.get('engine_volume') or obj.get('displacement')
+                        if volume and not data.get('engine_volume'):
+                            data['engine_volume'] = str(volume) + 'L' if isinstance(volume, (int, float)) else str(volume)
+                            found_any = True
+                    
+                    if 'transmission' in obj or 'gearbox' in obj:
+                        transmission = obj.get('transmission') or obj.get('gearbox')
+                        if transmission and not data.get('transmission'):
+                            data['transmission'] = str(transmission)
+                            found_any = True
+                    
+                    if 'driveType' in obj or 'drive_type' in obj or 'drivetrain' in obj:
+                        drive = obj.get('driveType') or obj.get('drive_type') or obj.get('drivetrain')
+                        if drive and not data.get('drive_type'):
+                            data['drive_type'] = str(drive)
+                            found_any = True
+                    
+                    if 'fuelType' in obj or 'fuel_type' in obj:
+                        fuel = obj.get('fuelType') or obj.get('fuel_type')
+                        if fuel and not data.get('fuel_type'):
+                            data['fuel_type'] = str(fuel)
+                            found_any = True
+                    
+                    if 'emissionStandard' in obj or 'emission_standard' in obj:
+                        emission = obj.get('emissionStandard') or obj.get('emission_standard')
+                        if emission and not data.get('emission_standard'):
+                            data['emission_standard'] = str(emission)
+                            found_any = True
+                    
                     # Рекурсивно ищем в вложенных объектах
                     for key, value in obj.items():
                         search_in_dict(value, f"{path}.{key}" if path else key)
@@ -711,22 +808,19 @@ class Che168DetailedParser:
                 if archive_parent:
                     # Ищем "上牌时间" (дата регистрации) - может содержать год
                     registration_elem = archive_parent.find('div', string=lambda text: text and '上牌时间' in str(text))
-                    if registration_elem and not data.get('year'):
+                    if registration_elem:
                         # Ищем значение даты
                         parent = registration_elem.find_parent('div')
                         if parent:
-                            # Ищем текст с датой (формат YYYY-MM или YYYY年)
-                            date_pattern = re.compile(r'(\d{4})[-年](\d{1,2})?')
                             date_text = parent.get_text()
+                            date_pattern = re.compile(r'(\d{4})[^\d]{0,3}(\d{1,2})?[^\d]{0,3}(\d{1,2})?')
                             match = date_pattern.search(date_text)
                             if match:
-                                try:
-                                    year = int(match.group(1))
-                                    if 1900 <= year <= 2100:
-                                        data['year'] = year
-                                        data['inspection_date'] = match.group(0)
-                                except ValueError:
-                                    pass
+                                normalized_date = normalize_first_registration_date(match.group(0))
+                                if normalized_date:
+                                    data['first_registration_time'] = normalized_date
+                                    if not data.get('year'):
+                                        data['year'] = int(normalized_date.split('-')[0])
                     
                     # Ищем "表显里程" (пробег)
                     mileage_elem = archive_parent.find('div', string=lambda text: text and '表显里程' in str(text))
@@ -1202,13 +1296,13 @@ class Che168DetailedParser:
                         data['mileage'] = str(mileage_km)
                         logger.info(f"✓ Пробег преобразован: {mileage_text} -> {mileage_km} км")
                 
-                # 3. Обработка year (из даты регистрации)
-                if 'registration_date' in data and 'year' not in data:
-                    reg_date = data['registration_date']
-                    year_match = re.search(r'(\d{4})', reg_date)
-                    if year_match:
-                        data['year'] = int(year_match.group(1))
-                        logger.info(f"✓ Год извлечен из даты регистрации: {data['year']}")
+                # 3. Обработка year (из даты первой регистрации)
+                if data.get('first_registration_time') and 'year' not in data:
+                    try:
+                        data['year'] = int(str(data['first_registration_time'])[:4])
+                        logger.info(f"✓ Год извлечен из даты первой регистрации: {data['year']}")
+                    except (ValueError, TypeError):
+                        pass
                 
             except Exception as e:
                 logger.warning(f"Ошибка при пост-обработке полей: {e}", exc_info=True)

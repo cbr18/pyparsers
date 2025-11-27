@@ -45,6 +45,7 @@ class RateLimiter:
 
         # Состояние для ограничителей по эндпоинтам
         self.endpoint_states: Dict[str, Dict[str, Any]] = {}
+        self.max_endpoints = 100  # Максимум 100 эндпоинтов в кэше
 
         logger.info(f"Rate limiter initialized with rate={rate} requests/s, burst={burst}")
 
@@ -59,6 +60,12 @@ class RateLimiter:
             Dict[str, Any]: Состояние эндпоинта
         """
         if endpoint not in self.endpoint_states:
+            # Очищаем старые эндпоинты, если достигли лимита
+            if len(self.endpoint_states) >= self.max_endpoints:
+                # Удаляем самый старый эндпоинт (первый в словаре)
+                oldest = next(iter(self.endpoint_states))
+                del self.endpoint_states[oldest]
+            
             self.endpoint_states[endpoint] = {
                 'tokens': self.burst,
                 'last_refill_time': time.time()
@@ -166,6 +173,7 @@ class ConcurrencyLimiter:
 
         # Семафоры для эндпоинтов
         self.endpoint_semaphores: Dict[str, asyncio.Semaphore] = {}
+        self.max_endpoints = 100  # Максимум 100 эндпоинтов в кэше
 
         # Счетчики активных запросов
         self.active_requests = 0
@@ -184,6 +192,19 @@ class ConcurrencyLimiter:
             asyncio.Semaphore: Семафор для эндпоинта
         """
         if endpoint not in self.endpoint_semaphores:
+            # Очищаем старые эндпоинты, если достигли лимита
+            if len(self.endpoint_semaphores) >= self.max_endpoints:
+                # Удаляем самый старый эндпоинт, но только если у него нет активных запросов
+                for oldest in list(self.endpoint_semaphores.keys()):
+                    active = self.endpoint_active_requests.get(oldest, 0)
+                    if active == 0:  # Безопасно удалять только если нет активных запросов
+                        del self.endpoint_semaphores[oldest]
+                        if oldest in self.endpoint_active_requests:
+                            del self.endpoint_active_requests[oldest]
+                        break
+                # Если все эндпоинты активны, просто увеличиваем лимит (временное решение)
+                # В реальности это маловероятно, так как 100 эндпоинтов - это очень много
+            
             self.endpoint_semaphores[endpoint] = asyncio.Semaphore(self.max_concurrency)
             self.endpoint_active_requests[endpoint] = 0
 

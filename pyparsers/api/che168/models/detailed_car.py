@@ -104,6 +104,7 @@ class Che168DetailedCar(BaseModel):
     daytime_running: Optional[str] = None
     
     # История
+    first_registration_time: Optional[str] = None  # Дата первой регистрации в формате YYYY-MM-DD
     owner_count: Optional[int] = None
     accident_history: Optional[str] = None
     service_history: Optional[str] = None

@@ -7,6 +7,7 @@ import (
 	"datahub/internal/repository"
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"time"
 )
@@ -95,23 +96,61 @@ func (s *EnhancementService) EnhanceCarsWithoutDetails(ctx context.Context, sour
 			} else {
 				log.Printf("Car %s: рассчитана цена в рублях=%.2f", car.UUID, rubPrice)
 				enhancedCar.RubPrice = rubPrice
+				enhancedCar.FinalPrice = rubPrice
 				
 				// Добавляем утильсбор к цене, если есть мощность и объем двигателя
-				if enhancedCar.Power != "" && enhancedCar.EngineVolume != "" && enhancedCar.Year > 0 {
-					totalPrice, err := s.priceCalculator.CalculateUtilizationFeeAndAddToPrice(
+				// Возраст машины рассчитывается из first_registration_time (приоритет) или year
+				if enhancedCar.Power != "" && enhancedCar.EngineVolume != "" && (enhancedCar.Year > 0 || enhancedCar.FirstRegistrationTime != "") {
+					totalPrice, utilizationFee, err := s.priceCalculator.CalculateUtilizationFeeAndAddToPrice(
 						ctx,
 						rubPrice,
 						enhancedCar.Power,
 						enhancedCar.EngineVolume,
 						enhancedCar.Year,
+						enhancedCar.FirstRegistrationTime,
 					)
 					if err != nil {
 						log.Printf("Ошибка расчета утильсбора для машины %s: %v", car.UUID, err)
 					} else {
 						log.Printf("Car %s: итоговая цена с утильсбором=%.2f", car.UUID, totalPrice)
-						enhancedCar.RubPrice = totalPrice
+						enhancedCar.FinalPrice = totalPrice
+						if utilizationFee > 0 {
+							enhancedCar.RecyclingFee = strconv.FormatFloat(utilizationFee, 'f', 0, 64)
+						}
 					}
 				}
+
+			// Возраст машины рассчитывается из first_registration_time (приоритет) или year
+			if enhancedCar.EngineVolume != "" && (enhancedCar.Year > 0 || enhancedCar.FirstRegistrationTime != "") {
+				customsDuty, dutyErr := s.priceCalculator.CalculateCustomsDuty(
+					ctx,
+					rubPrice,
+					enhancedCar.EngineVolume,
+					enhancedCar.Year,
+					enhancedCar.FirstRegistrationTime,
+				)
+				if dutyErr != nil {
+					log.Printf("Ошибка расчета таможенной пошлины для машины %s: %v", car.UUID, dutyErr)
+				} else if customsDuty > 0 {
+					enhancedCar.FinalPrice = math.Round(enhancedCar.FinalPrice + customsDuty)
+					enhancedCar.CustomsDuty = strconv.FormatFloat(customsDuty, 'f', 0, 64)
+					log.Printf("Car %s: добавлена таможенная пошлина %.0f руб", car.UUID, customsDuty)
+				}
+			}
+
+			// Рассчитываем таможенный сбор по rub_price
+			customsFee, feeErr := s.priceCalculator.CalculateCustomsFee(ctx, rubPrice)
+			if feeErr != nil {
+				log.Printf("Ошибка расчета таможенного сбора для машины %s: %v", car.UUID, feeErr)
+			} else if customsFee > 0 {
+				enhancedCar.CustomsFee = customsFee
+				enhancedCar.FinalPrice = math.Round(enhancedCar.FinalPrice + customsFee)
+				log.Printf("Car %s: добавлен таможенный сбор %.0f руб", car.UUID, customsFee)
+			}
+
+			// Добавляем фиксированные надбавки: 80000 + 80000 = 160000 руб
+			enhancedCar.FinalPrice = math.Round(enhancedCar.FinalPrice + 160000)
+			log.Printf("Car %s: добавлены фиксированные надбавки 160000 руб, итоговая цена=%.0f", car.UUID, enhancedCar.FinalPrice)
 			}
 		} else {
 			if s.priceCalculator == nil {
@@ -259,23 +298,61 @@ func (s *EnhancementService) BatchEnhanceCars(ctx context.Context, source string
 					log.Printf("Ошибка расчета цены в рублях для машины %s: %v", enhancedCars[i].UUID, err)
 				} else {
 					enhancedCars[i].RubPrice = rubPrice
+					enhancedCars[i].FinalPrice = rubPrice
 					
 					// Добавляем утильсбор к цене, если есть мощность и объем двигателя
-					if enhancedCars[i].Power != "" && enhancedCars[i].EngineVolume != "" && enhancedCars[i].Year > 0 {
-						totalPrice, err := s.priceCalculator.CalculateUtilizationFeeAndAddToPrice(
+					// Возраст машины рассчитывается из first_registration_time (приоритет) или year
+					if enhancedCars[i].Power != "" && enhancedCars[i].EngineVolume != "" && (enhancedCars[i].Year > 0 || enhancedCars[i].FirstRegistrationTime != "") {
+						totalPrice, utilizationFee, err := s.priceCalculator.CalculateUtilizationFeeAndAddToPrice(
 							ctx,
 							rubPrice,
 							enhancedCars[i].Power,
 							enhancedCars[i].EngineVolume,
 							enhancedCars[i].Year,
+							enhancedCars[i].FirstRegistrationTime,
 						)
 						if err != nil {
 							log.Printf("Ошибка расчета утильсбора для машины %s: %v", enhancedCars[i].UUID, err)
 						} else {
-							enhancedCars[i].RubPrice = totalPrice
+							enhancedCars[i].FinalPrice = totalPrice
+							if utilizationFee > 0 {
+								enhancedCars[i].RecyclingFee = strconv.FormatFloat(utilizationFee, 'f', 0, 64)
+							}
 						}
 					}
 				}
+
+				// Возраст машины рассчитывается из first_registration_time (приоритет) или year
+				if enhancedCars[i].EngineVolume != "" && (enhancedCars[i].Year > 0 || enhancedCars[i].FirstRegistrationTime != "") {
+					customsDuty, dutyErr := s.priceCalculator.CalculateCustomsDuty(
+						ctx,
+						rubPrice,
+						enhancedCars[i].EngineVolume,
+						enhancedCars[i].Year,
+						enhancedCars[i].FirstRegistrationTime,
+					)
+					if dutyErr != nil {
+						log.Printf("Ошибка расчета таможенной пошлины для машины %s: %v", enhancedCars[i].UUID, dutyErr)
+					} else if customsDuty > 0 {
+						enhancedCars[i].FinalPrice = math.Round(enhancedCars[i].FinalPrice + customsDuty)
+						enhancedCars[i].CustomsDuty = strconv.FormatFloat(customsDuty, 'f', 0, 64)
+						log.Printf("Car %s: добавлена таможенная пошлина %.0f руб", enhancedCars[i].UUID, customsDuty)
+					}
+				}
+
+				// Рассчитываем таможенный сбор по rub_price
+				customsFee, feeErr := s.priceCalculator.CalculateCustomsFee(ctx, rubPrice)
+				if feeErr != nil {
+					log.Printf("Ошибка расчета таможенного сбора для машины %s: %v", enhancedCars[i].UUID, feeErr)
+				} else if customsFee > 0 {
+					enhancedCars[i].CustomsFee = customsFee
+					enhancedCars[i].FinalPrice = math.Round(enhancedCars[i].FinalPrice + customsFee)
+					log.Printf("Car %s: добавлен таможенный сбор %.0f руб", enhancedCars[i].UUID, customsFee)
+				}
+
+				// Добавляем фиксированные надбавки: 80000 + 80000 = 160000 руб
+				enhancedCars[i].FinalPrice = math.Round(enhancedCars[i].FinalPrice + 160000)
+				log.Printf("Car %s: добавлены фиксированные надбавки 160000 руб, итоговая цена=%.0f", enhancedCars[i].UUID, enhancedCars[i].FinalPrice)
 			}
 		}
 	}

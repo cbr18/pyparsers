@@ -25,7 +25,7 @@ const formatValue = (key, value) => {
   }
 
   // Форматирование цены в рублях
-  if (key === 'rub_price' && typeof value === 'number' && value > 0) {
+  if ((key === 'rub_price' || key === 'final_price') && typeof value === 'number' && value > 0) {
     return new Intl.NumberFormat('ru-RU', { 
       style: 'currency', 
       currency: 'RUB', 

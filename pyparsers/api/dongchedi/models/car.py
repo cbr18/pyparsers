@@ -32,6 +32,7 @@ class DongchediCar(BaseModel):
     transmission: Optional[str] = None
     fuel_type: Optional[str] = None
     engine_volume: Optional[str] = None
+    engine_volume_ml: Optional[str] = None  # Объем двигателя в миллилитрах
     body_type: Optional[str] = None
     drive_type: Optional[str] = None
     condition: Optional[str] = None
@@ -123,6 +124,7 @@ class DongchediCar(BaseModel):
     daytime_running: Optional[str] = None
 
     # История и состояние
+    first_registration_time: Optional[str] = None  # Дата первой регистрации (как на площадке)
     owner_count: Optional[int] = 0
     accident_history: Optional[str] = None
     service_history: Optional[str] = None
@@ -153,3 +155,7 @@ class DongchediCar(BaseModel):
     door_count: Optional[str] = None
     trunk_volume: Optional[str] = None
     fuel_tank_volume: Optional[str] = None
+
+    # Таможенные и утилизационные сборы
+    recycling_fee: Optional[str] = None  # Утильсбор
+    customs_duty: Optional[str] = None  # Таможенный сбор

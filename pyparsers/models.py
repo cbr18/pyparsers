@@ -33,10 +33,3 @@ class TaskCreateRequest(BaseModel):
 class TaskCreateResponse(BaseModel):
     task_id: str
 
-class TaskCompleteRequest(BaseModel):
-    task_id: str
-    source: str
-    task_type: TaskType
-    status: str
-    data: List[Dict[str, Any]]
-

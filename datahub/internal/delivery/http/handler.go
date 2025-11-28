@@ -7,7 +7,6 @@ import (
 	"datahub/internal/usecase"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -207,14 +206,6 @@ func (h *Handler) FullUpdate(c *gin.Context) {
         "message": "Task created successfully",
         "task_id": resp.TaskID,
     })
-}
-
-// isDuplicateKeyError проверяет, является ли ошибка нарушением ограничения уникальности
-func isDuplicateKeyError(err error) bool {
-	errMsg := err.Error()
-	return strings.Contains(errMsg, "duplicate key value violates unique constraint") ||
-		strings.Contains(errMsg, "UNIQUE constraint failed") ||
-		strings.Contains(errMsg, "Duplicate entry")
 }
 
 // POST /update/{source}

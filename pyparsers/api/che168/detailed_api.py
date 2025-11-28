@@ -66,8 +66,6 @@ def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict
         current_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     except (AttributeError, NameError):
         # Fallback для старых версий Python
-        from datetime import timedelta
-        utc_offset = timedelta(0)
         current_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     
     # Создаем словарь в формате domain.Car

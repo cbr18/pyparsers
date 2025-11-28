@@ -6,8 +6,6 @@ import (
 	"os"
 	"time"
 
-	"datahub/internal/domain"
-
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -53,19 +51,4 @@ func InitDB(dsn string) (*gorm.DB, error) {
 
 	DB = db
 	return db, nil
-}
-
-// AutoMigrate - автоматическая миграция схемы базы данных
-// Примечание: в продакшене лучше использовать миграции через golang-migrate
-func AutoMigrate() error {
-	if DB == nil {
-		return fmt.Errorf("database connection not initialized")
-	}
-
-	// Регистрируем модели для миграции
-	return DB.AutoMigrate(
-		&domain.Car{},
-		&domain.Brand{},
-		// Добавьте здесь другие модели по мере необходимости
-	)
 }

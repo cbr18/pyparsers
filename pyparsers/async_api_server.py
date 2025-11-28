@@ -9,7 +9,7 @@ import functools
 import logging
 import time
 import json
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends, Query, Response, status, Request
+from fastapi import FastAPI, HTTPException, Response, Request
 from fastapi.middleware.cors import CORSMiddleware        
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -21,8 +21,8 @@ from api.dongchedi.models.car import DongchediCar
 from api.memory_optimized import MemoryOptimizedList
 from converters import decode_dongchedi_list_sh_price, decode_dongchedi_detail
 from car_filter import filter_cars_by_year, is_electric_car
-from typing import List, Dict, Optional, Any, Union
-from pydantic import BaseModel, Field
+from typing import List, Dict, Optional, Any
+from pydantic import BaseModel
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 from models import TaskCreateRequest, TaskCreateResponse, TaskType
@@ -42,20 +42,6 @@ class CarUrlRequest(BaseModel):
 # Модель для запроса получения детальной информации о нескольких машинах
 class MultipleCarIdsRequest(BaseModel):
     car_ids: List[str]
-
-# Модель для ответа с информацией о производительности
-class PerformanceInfo(BaseModel):
-    execution_time_ms: float
-    memory_usage_mb: Optional[float] = None
-    request_timestamp: str
-    response_timestamp: str
-
-# Модель для расширенного ответа API
-class ApiResponse(BaseModel):
-    data: Any
-    message: str
-    status: int
-    performance: Optional[PerformanceInfo] = None
 
 # Load environment variables
 load_dotenv()

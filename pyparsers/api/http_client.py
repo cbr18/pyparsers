@@ -7,7 +7,7 @@ import asyncio
 import logging
 import time
 import json
-from typing import Dict, Any, Optional, Union, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple
 import requests
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 from .throttling import ResourceManager, throttle

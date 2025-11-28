@@ -53,7 +53,7 @@ class TestMemoryOptimizationIntegration(unittest.TestCase):
         self.assertLess(after_cleanup_memory, after_list_memory)
 
     @patch('api.dongchedi.async_parser.http_client')
-    def test_process_car_data_memory_optimization(self, mock_http_client):
+    def test_process_car_data_memory_optimization(self, _mock_http_client):
         """Test that _process_car_data uses memory optimization."""
         async def run_test():
             # Create mock car data
@@ -88,7 +88,7 @@ class TestMemoryOptimizationIntegration(unittest.TestCase):
         asyncio.run(run_test())
 
     @patch('api.dongchedi.async_parser.http_client')
-    def test_memory_optimized_list_usage(self, mock_http_client):
+    def test_memory_optimized_list_usage(self, _mock_http_client):
         """Test that MemoryOptimizedList is used correctly."""
         # Create a MemoryOptimizedList
         opt_list = MemoryOptimizedList()
@@ -125,7 +125,7 @@ class TestMemoryOptimizationIntegration(unittest.TestCase):
         self.assertEqual(len(opt_list), 0)
 
     @patch('api.dongchedi.async_parser.http_client')
-    def test_async_batch_processor_usage(self, mock_http_client):
+    def test_async_batch_processor_usage(self, _mock_http_client):
         """Test that AsyncBatchProcessor is used correctly."""
         async def run_test():
             # Create an AsyncBatchProcessor

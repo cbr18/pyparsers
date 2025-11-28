@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional, List
 from collections import OrderedDict
 from threading import Lock as ThreadLock
-from models import Task, TaskStatus, TaskCompleteRequest, TaskType
+from models import Task, TaskStatus, TaskType
 from api.dongchedi.parser import DongchediParser
 from api.che168.parser import Che168Parser
 from converters import decode_dongchedi_list_sh_price

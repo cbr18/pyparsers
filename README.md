@@ -1,114 +1,34 @@
-# CarCatch - Car Parser System
+# CarCatch
 
-Микросервисная система для парсинга, хранения и отображения информации об автомобилях с китайских сайтов dongchedi.com и che168.com.
+CarCatch is a microservice platform that scrapes dongchedi.com and che168.com, enriches the data set, and exposes it through multiple APIs, bots, and web clients.
 
-## 🚀 Quick Start
+## Quick Start
 
 ```bash
-# Clone repository
 git clone <repository>
 cd CarsParser
-
-# Start all services
-docker-compose up -d
-
-# Check health
-./scripts/health-check.ps1  # Windows
-./scripts/health-check.sh   # Linux/Mac
+cp .env.example .env        # fill in secrets
+docker compose up -d
+./scripts/health-check.sh   # or .ps1
 ```
 
-## 🌐 Access Applications
+Useful URLs:
+- React UI: http://localhost/podbortg
+- Angular UI: http://localhost/ng
+- Swagger: http://localhost/docs
+- DataHub API: http://localhost:8080
+- PyParsers API: http://localhost:5000
 
-- **Main App:** http://localhost/podbortg
-- **Angular App:** http://localhost/ng
-- **API Documentation:** http://localhost/docs
-- **Swagger UI:** http://localhost/swagger
-- **Development API:** http://localhost:8000
+## Documentation
 
-## 📋 Basic Commands
+All markdown guides now live in `docs/`.
 
-```bash
-# Start services
-docker-compose up -d
+- [`docs/README.md`](docs/README.md) – entry point + service map
+- [`docs/operations.md`](docs/operations.md) – deployment, migrations, task API, backups
+- [`docs/parsers.md`](docs/parsers.md) – parser pipeline, enhancement worker, HTTP client tooling
+- [`docs/api-documentation.md`](docs/api-documentation.md) / [`docs/api-examples.md`](docs/api-examples.md) – REST reference
+- [`docs/telegram-app.md`](docs/telegram-app.md) – React/Angular UIs and image proxy
+- [`docs/services.md`](docs/services.md) – translator and admin bot details
+- [`docs/testing.md`](docs/testing.md) – acceptance recap + pytest instructions
 
-# View logs
-docker-compose logs -f
-
-# Stop services
-docker-compose down
-
-# Restart services
-docker-compose restart
-
-# Build and start
-docker-compose up -d --build
-```
-
-## 🏗️ Architecture
-
-- **nginx** (80, 443) - Reverse proxy
-- **datahub** (8080) - Main API (Go)
-- **pyparsers** (5000) - Car parsing (Python)
-- **telegrambot** (3001) - Telegram bot (Node.js)
-- **telegramapp** (3002) - React web app
-- **telegramngapp** (3003) - Angular web app
-- **postgres** (5432) - Database
-
-## 📚 Documentation
-
-- [API Documentation](docs/API_DOCUMENTATION.md) - Complete API reference
-- [API Examples](docs/API_EXAMPLES.md) - Usage examples
-- [Deployment Guide](DEPLOYMENT.md) - Detailed setup instructions
-
-## 🔧 Development
-
-The system is configured for development by default with:
-- Debug logging enabled
-- Database port exposed
-- Hot reload support
-- CORS enabled
-
-## 🐛 Troubleshooting
-
-```bash
-# Check service status
-docker-compose ps
-
-# View specific service logs
-docker-compose logs datahub
-docker-compose logs pyparsers
-
-# Restart specific service
-docker-compose restart nginx
-
-# Clean up and restart
-docker-compose down -v
-docker-compose up -d --build
-```
-
-## 📊 Health Monitoring
-
-Use the health check scripts to monitor all services:
-
-```bash
-# Windows
-./scripts/health-check.ps1
-
-# Linux/Mac
-./scripts/health-check.sh
-```
-
-## 🗄️ Database Operations
-
-```bash
-# Backup database
-docker-compose exec postgres pg_dump -U postgres carsdb > backup.sql
-
-# Restore database
-docker-compose exec -T postgres psql -U postgres carsdb < backup.sql
-
-# Access database
-docker-compose exec postgres psql -U postgres carsdb
-```
-
- 
+Use the docs folder for everything else (database schema, changelog, etc.).

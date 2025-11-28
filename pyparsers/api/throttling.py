@@ -5,7 +5,7 @@
 import asyncio
 import time
 import logging
-from typing import Dict, Any, Optional, Callable, TypeVar, Awaitable, List, Set
+from typing import Dict, Any, Optional, Callable, TypeVar, Awaitable, List
 from functools import wraps
 
 # Настройка логирования

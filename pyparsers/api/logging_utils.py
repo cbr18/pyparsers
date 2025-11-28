@@ -10,7 +10,7 @@ import time
 import os
 import uuid
 from enum import Enum
-from typing import Dict, Any, Optional, List, Union, Callable
+from typing import Dict, Any, Optional, List, Callable
 from functools import wraps
 import asyncio
 

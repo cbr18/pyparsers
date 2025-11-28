@@ -1262,14 +1262,13 @@ class DongchediParser(BaseCarParser):
         logger = logging.getLogger(__name__)
         logger.info(f"Starting enhance for sku_id={sku_id}, car_id={car_id}")
         try:
-            detail_car, detail_meta = self.fetch_car_detail(sku_id)
+            detail_car, _ = self.fetch_car_detail(sku_id)
             logger.info(f"fetch_car_detail completed for sku_id={sku_id}")
             if detail_car and hasattr(detail_car, 'power'):
                 logger.info(f"Power from detail_car: {getattr(detail_car, 'power', None)} for sku_id={sku_id}")
         except Exception as e:
             logger.error(f"Error in fetch_car_detail for sku_id={sku_id}: {e}", exc_info=True)
             detail_car = None
-            detail_meta = {"error": str(e), "status": 500}
         
         # Получаем car_id из detail_car, если он не был передан
         if not car_id and detail_car and hasattr(detail_car, 'car_id') and detail_car.car_id:
@@ -1281,7 +1280,7 @@ class DongchediParser(BaseCarParser):
         if car_id:
             try:
                 logger.info(f"Starting fetch_car_specifications for car_id={car_id}")
-                specs, specs_meta = self.fetch_car_specifications(car_id)
+                specs, _ = self.fetch_car_specifications(car_id)
                 logger.info(f"fetch_car_specifications completed for car_id={car_id}, specs keys: {list(specs.keys())}")
                 if 'power' in specs:
                     logger.info(f"Power from specs: {specs['power']} for car_id={car_id}")

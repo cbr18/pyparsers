@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from .detailed_parser_api import Che168DetailedParserAPI as Che168DetailedParser
 from .models.detailed_car import Che168DetailedCar
 from datetime import datetime, timezone
-from car_filter import is_electric_car
+# Определение типа силовой установки перенесено в datahub
 
 logger = logging.getLogger(__name__)
 
@@ -214,20 +214,16 @@ def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict
             logger.warning(f"Invalid power value '{power_str}' for car_id={car_id}, skipping")
             domain_car["power"] = None
     
-    # Проверяем, не является ли машина электромобилем
-    is_electric = is_electric_car(domain_car)
-    
-    # Устанавливаем has_details только если power валиден и это не электромобиль
-    if domain_car["power"] and not is_electric:
+    # Устанавливаем has_details только если power валиден
+    # Тип силовой установки (электро/гибрид/ДВС) определяется в datahub
+    if domain_car["power"]:
         domain_car["has_details"] = True
         domain_car["last_detail_update"] = current_time
+        logger.info(f"car_id={car_id}: power found, has_details=True")
     else:
         domain_car["has_details"] = False
         domain_car["last_detail_update"] = None
-        # Устанавливаем is_available в False для электромобилей
-        if is_electric:
-            domain_car["is_available"] = False
-            logger.info(f"Skipping electric car: car_id={car_id} (fuel_type: {domain_car.get('fuel_type')})")
+        logger.info(f"car_id={car_id}: no power, has_details=False")
     
     return domain_car
 

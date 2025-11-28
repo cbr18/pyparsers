@@ -1,0 +1,38 @@
+# Docker Compose для сервера pyparsers (отдельный сервер)
+# Основные сервисы (datahub, postgres и др.) работают на другом сервере
+
+services:
+  pyparsers:
+    build:
+      context: ./pyparsers
+      dockerfile: Dockerfile
+    container_name: carcatch-pyparsers
+    env_file:
+      - ./pyparsers/.env
+    environment:
+      # Адрес основного сервера с datahub (для отправки результатов)
+      - DATAHUB_URL=http://${MAIN_SERVER_IP}:8080
+      # IP адреса которым разрешён доступ (через запятую)
+      - ALLOWED_IPS=${ALLOWED_IPS}
+    ports:
+      # Открываем порт наружу для запросов от основного сервера
+      - "5000:5000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "--timeout=5", "http://127.0.0.1:5000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    mem_limit: 4g
+    init: true
+
+networks:
+  default:
+    driver: bridge
+
+

@@ -565,10 +565,38 @@ class Che168Parser(BaseCarParser):
 
         if title:
             # Пытаемся извлечь марку и модель из заголовка
-            title_parts = title.split()
-            if len(title_parts) >= 2:
-                brand_name = title_parts[0]  # Первое слово - обычно марка
-                series_name = ' '.join(title_parts[1:3]) if len(title_parts) >= 3 else title_parts[1]
+            # Используем проверку по ключевым словам брендов, чтобы не путать модели с брендами
+            title_parts = re.split(r'[\s\-_]+', title)
+            brand_keywords = ['奔驰', '宝马', '奥迪', '大众', '丰田', '本田', '日产', '现代', '起亚', '福特', '雪佛兰', '别克', '凯迪拉克', '林肯', '雷克萨斯', '英菲尼迪', '讴歌', '沃尔沃', '路虎', '捷豹', '保时捷', '玛莎拉蒂', '法拉利', '兰博基尼', '宾利', '劳斯莱斯', 'MINI', 'Smart', 'DS', '标致', '雪铁龙', '雷诺', '菲亚特', '阿尔法·罗密欧', 'Jeep', '道奇', 'RAM', 'GMC', '特斯拉', '比亚迪', '吉利', '长城', '奇瑞', '长安', '上汽', '一汽', '东风', '广汽', '北汽', '江淮', '众泰', '海马', '力帆', '华晨', '东南', '陆风', '猎豹', '野马', '金杯', '五菱', '宝骏', '启辰', '理念', '思铭', '开瑞', '威麟', '瑞麒', '观致', '纳智捷', '华泰', '永源', '青年', '黄海', '中兴', '双环', '中顺', '新凯', '天马', '大迪', '新大地', '奥克斯', '万丰', '通田', '美鹿', '飞碟', '新雅途', '跃进', '南汽', '昌河', '哈飞', '松花江', '昌河铃木', '哈飞赛豹', '哈飞路宝', '哈飞民意', '哈飞中意', '松花江中意', '松花江民意', '松花江路宝', '松花江赛豹', 'Audi', 'BMW', 'Mercedes', 'Benz', 'Volkswagen', 'Toyota', 'Honda', 'Nissan', 'Hyundai', 'Kia', 'Ford', 'Chevrolet', 'Buick', 'Cadillac', 'Lincoln', 'Lexus', 'Infiniti', 'Acura', 'Volvo', 'Land Rover', 'Jaguar', 'Porsche', 'Maserati', 'Ferrari', 'Lamborghini', 'Bentley', 'Rolls-Royce']
+            
+            # Ищем бренд в заголовке по ключевым словам
+            matched_keyword = None
+            for part in title_parts:
+                for keyword in brand_keywords:
+                    if keyword in part or part == keyword:
+                        brand_name = part
+                        matched_keyword = keyword
+                        break
+                if brand_name:
+                    break
+            
+            # Если нашли бренд, извлекаем модель (следующее слово после бренда)
+            if brand_name:
+                brand_index = -1
+                for i, part in enumerate(title_parts):
+                    if part == brand_name or (matched_keyword and matched_keyword in part):
+                        brand_index = i
+                        break
+                if brand_index >= 0 and brand_index + 1 < len(title_parts):
+                    series_part = title_parts[brand_index + 1]
+                    # Проверяем, что это не год, не пробег и т.д.
+                    if len(series_part) > 1 and not any(char in series_part for char in ['【', '】', '年', '款', 'km', '万']) and not series_part.isdigit():
+                        series_name = series_part
+                        # Можем взять и следующее слово, если оно есть
+                        if brand_index + 2 < len(title_parts):
+                            next_part = title_parts[brand_index + 2]
+                            if len(next_part) > 1 and not any(char in next_part for char in ['【', '】', '年', '款', 'km', '万']) and not next_part.isdigit():
+                                series_name = f"{series_part} {next_part}"
 
         # Формируем данные для Che168Car
         # При парсинге списка машин is_available по умолчанию True
@@ -1055,21 +1083,21 @@ class Che168Parser(BaseCarParser):
                 logger.info(f"che168: Мощность уже найдена: {car_info.get('power')} л.с.")
             
             page_text = soup.get_text()
-            available_indicators = [
-                "我要询价", "查看电话", "询价", "联系", "电话", "咨询",
-                "askprice", "phone", "contact", "inquiry"
-            ]
+            # Индикаторы того, что машина ПРОДАНА (недоступна)
+            # Убрали "sale" - это может означать "for sale" (продаётся), а не "продано"
             unavailable_indicators = [
                 "已售", "售出", "已卖出", "下架", "已下架", "已成交",
-                "sold", "sale", "unavailable", "not available"
+                "sold out", "已售出"
             ]
-            is_available = False
-            if any(indicator in page_text for indicator in available_indicators):
-                is_available = True
-            elif any(indicator in page_text for indicator in unavailable_indicators):
-                is_available = False
-            else:
-                is_available = car_info['sh_price'] is not None and car_info['sh_price'] != ''
+            # По умолчанию считаем машину доступной
+            # Меняем на False только если явно нашли индикатор продажи
+            is_available = True
+            page_text_lower = page_text.lower()
+            for indicator in unavailable_indicators:
+                if indicator.lower() in page_text_lower:
+                    is_available = False
+                    logger.debug(f"che168: найден индикатор недоступности '{indicator}'")
+                    break
             car_info['is_available'] = is_available
         except Exception as e:
             # Логируем ошибку

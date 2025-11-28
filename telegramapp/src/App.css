@@ -215,7 +215,9 @@ body::before {
 /* Filters panel */
 .filters-panel {
   background: rgba(255, 255, 255, 0.95);
+  background-color: #ffffff; /* Fallback для Samsung браузеров */
   backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px); /* Для Safari и Samsung */
   padding: 30px;
   border-radius: 20px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
@@ -228,6 +230,7 @@ body::before {
   overflow: hidden;
   width: 100%;
   box-sizing: border-box;
+  opacity: 1; /* Явно устанавливаем непрозрачность */
 }
 
 @keyframes slideDown {
@@ -263,12 +266,15 @@ body::before {
   border-radius: 12px;
   font-size: 14px;
   background: rgba(255, 255, 255, 0.9);
+  background-color: #ffffff; /* Fallback для Samsung браузеров */
   color: #2d3748;
   transition: all 0.3s ease;
   backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px); /* Для Safari и Samsung */
   width: 100%;
   box-sizing: border-box;
   max-width: 100%;
+  opacity: 1; /* Явно устанавливаем непрозрачность */
 }
 
 .filter-group input:focus,
@@ -281,6 +287,39 @@ body::before {
 
 .filter-group input::placeholder {
   color: #a0aec0;
+}
+
+/* Исправление для datalist на Samsung браузерах */
+datalist {
+  display: none; /* datalist скрыт по умолчанию, но его опции используются */
+}
+
+datalist option {
+  background-color: #ffffff !important;
+  color: #2d3748 !important;
+  opacity: 1 !important;
+  -webkit-opacity: 1 !important;
+  padding: 8px 12px;
+}
+
+/* Для выпадающего списка на Samsung */
+input[list]::-webkit-calendar-picker-indicator {
+  opacity: 1;
+}
+
+/* Дополнительные стили для исправления прозрачности на Samsung */
+@supports (-webkit-touch-callout: none) {
+  /* Safari и Samsung браузеры */
+  .filter-group input,
+  .filter-group select {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+  }
+  
+  .filters-panel {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+  }
 }
 
 .filter-actions {

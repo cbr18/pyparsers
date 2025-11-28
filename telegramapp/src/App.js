@@ -4,6 +4,7 @@ import './App.css';
 import brandLogo from './assets/logo192.png';
 import CarCard from './components/CarCard';
 import CarDetails from './components/CarDetails';
+import CarFullDetails from './components/CarFullDetails';
 import Filters from './components/Filters';
 import Pagination from './components/Pagination';
 import Footer from './components/Footer';
@@ -128,6 +129,7 @@ function App() {
       <main className="app-main">
         <Routes>
           <Route path="/car/:uuid" element={<CarDetails />} />
+          <Route path="/car/:uuid/full" element={<CarFullDetails />} />
           <Route
             path="/"
             element={

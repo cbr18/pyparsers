@@ -245,29 +245,35 @@ func (w *ValidationWorker) validateSingleCar(ctx context.Context, car domain.Car
 		return fmt.Errorf("источник %s не поддерживает валидацию", car.Source)
 	}
 
-	// Если машина не найдена или произошла ошибка - помечаем как недоступную
-	if err != nil || checkedCar == nil {
-		car.IsAvailable = false
-		car.UpdatedAt = time.Now()
-		if err := w.repo.UpdateCar(ctx, car); err != nil {
-			return fmt.Errorf("error updating car in DB: %w", err)
-		}
-		log.Printf("Car %s (source: %s, car_id: %d) marked as unavailable (not found or error: %v)", car.UUID, car.Source, car.CarID, err)
+	// Если произошла ошибка сети/таймаут - НЕ меняем статус машины
+	// Это могла быть временная проблема, машина может быть доступна
+	if err != nil {
+		log.Printf("Car %s (source: %s, car_id: %d): ошибка при проверке, статус НЕ изменён: %v", car.UUID, car.Source, car.CarID, err)
+		return fmt.Errorf("временная ошибка при проверке: %w", err)
+	}
+
+	// Если checkedCar == nil без ошибки - странная ситуация, логируем но не меняем статус
+	if checkedCar == nil {
+		log.Printf("Car %s (source: %s, car_id: %d): получен nil без ошибки, статус НЕ изменён", car.UUID, car.Source, car.CarID)
 		return nil
 	}
 
-	// Если машина найдена, но помечена как продана - помечаем как недоступную
+	// Если машина найдена, но помечена как продана (is_available=false от парсера) - помечаем как недоступную
 	if !checkedCar.IsAvailable {
 		car.IsAvailable = false
 		car.UpdatedAt = time.Now()
 		if err := w.repo.UpdateCar(ctx, car); err != nil {
 			return fmt.Errorf("error updating car in DB: %w", err)
 		}
-		log.Printf("Car %s (source: %s, car_id: %d) marked as unavailable (sold)", car.UUID, car.Source, car.CarID)
+		log.Printf("Car %s (source: %s, car_id: %d) marked as unavailable (sold - парсер вернул is_available=false)", car.UUID, car.Source, car.CarID)
 		return nil
 	}
 
-	// Машина доступна - ничего не делаем
+	// Машина доступна - обновляем updated_at чтобы показать что проверка прошла
+	car.UpdatedAt = time.Now()
+	if err := w.repo.UpdateCar(ctx, car); err != nil {
+		return fmt.Errorf("error updating car timestamp: %w", err)
+	}
 	return nil
 }
 

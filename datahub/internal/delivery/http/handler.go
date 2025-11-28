@@ -467,10 +467,10 @@ func (h *Handler) StopEnhancement(c *gin.Context) {
 // @Router       /enhancement/config [post]
 func (h *Handler) ConfigureEnhancement(c *gin.Context) {
 	var config struct {
-		BatchSize          int `json:"batch_size"`
-		DelayBetweenBatchesSec int `json:"delay_between_batches_sec"`
-		DelayBetweenCarsSec    int `json:"delay_between_cars_sec"`
-		MaxConcurrent      int `json:"max_concurrent"`
+		ChunkSize        int `json:"chunk_size"`
+		ChunkIntervalSec int `json:"chunk_interval_sec"`
+		DelayBetweenCarsSec int `json:"delay_between_cars_sec"`
+		MaxConcurrent    int `json:"max_concurrent"`
 	}
 
 	if err := c.ShouldBindJSON(&config); err != nil {
@@ -479,8 +479,8 @@ func (h *Handler) ConfigureEnhancement(c *gin.Context) {
 	}
 
 	h.enhancementWorker.SetConfig(
-		config.BatchSize,
-		time.Duration(config.DelayBetweenBatchesSec)*time.Second,
+		config.ChunkSize,
+		time.Duration(config.ChunkIntervalSec)*time.Second,
 		time.Duration(config.DelayBetweenCarsSec)*time.Second,
 		config.MaxConcurrent,
 	)

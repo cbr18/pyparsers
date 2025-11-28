@@ -9,9 +9,11 @@ import functools
 import logging
 import time
 import json
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends, Query, Response, status
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends, Query, Response, status, Request
 from fastapi.middleware.cors import CORSMiddleware        
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+import ipaddress
 from api.che168.parser import Che168Parser
 from api.che168.detailed_api import router as che168_detailed_router
 from api.dongchedi.models.response import DongchediApiResponse
@@ -73,6 +75,111 @@ DONGCHEDI_ENHANCE_MAX_CONCURRENT = _get_int_env("DONGCHEDI_ENHANCE_MAX_CONCURREN
 INCREMENTAL_EXISTING_LIMIT = _get_int_env("INCREMENTAL_EXISTING_LIMIT", 15000)
 PERF_ATTACH_BODY = os.getenv("PERF_ATTACH_BODY", "false").lower() == "true"
 
+# IP Whitelist configuration
+# Формат: "192.168.1.100,10.0.0.0/8,172.16.0.0/12" (IP адреса и/или CIDR)
+# Пустая строка или не задано = доступ разрешён всем
+ALLOWED_IPS_RAW = os.getenv("ALLOWED_IPS", "").strip()
+
+def _parse_allowed_ips(raw: str) -> list:
+    """Парсит список разрешённых IP/CIDR в список ipaddress объектов"""
+    if not raw:
+        return []
+    
+    result = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            # Пробуем как сеть (CIDR нотация)
+            if "/" in item:
+                result.append(ipaddress.ip_network(item, strict=False))
+            else:
+                # Одиночный IP адрес
+                result.append(ipaddress.ip_address(item))
+        except ValueError as e:
+            logger.warning(f"Некорректный IP/CIDR в ALLOWED_IPS: {item} - {e}")
+    
+    return result
+
+ALLOWED_IPS = _parse_allowed_ips(ALLOWED_IPS_RAW)
+if ALLOWED_IPS:
+    logger.info(f"IP Whitelist включён. Разрешённые адреса: {ALLOWED_IPS_RAW}")
+else:
+    logger.warning("IP Whitelist отключён (ALLOWED_IPS не задан). Доступ открыт для всех!")
+
+
+class IPWhitelistMiddleware(BaseHTTPMiddleware):
+    """Middleware для проверки IP адреса клиента по whitelist"""
+    
+    # Эндпоинты, доступные без проверки IP (для healthcheck)
+    PUBLIC_PATHS = {"/health", "/"}
+    
+    async def dispatch(self, request: Request, call_next):
+        # Если whitelist не настроен - пропускаем всех
+        if not ALLOWED_IPS:
+            return await call_next(request)
+        
+        # Публичные эндпоинты доступны всем
+        if request.url.path in self.PUBLIC_PATHS:
+            return await call_next(request)
+        
+        # Получаем IP клиента (учитываем прокси)
+        client_ip = self._get_client_ip(request)
+        
+        # Проверяем IP
+        if not self._is_ip_allowed(client_ip):
+            logger.warning(f"Доступ запрещён для IP: {client_ip} -> {request.url.path}")
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "data": None,
+                    "message": "Access denied: IP not in whitelist",
+                    "status": 403
+                }
+            )
+        
+        return await call_next(request)
+    
+    def _get_client_ip(self, request: Request) -> str:
+        """Получает реальный IP клиента (учитывает X-Forwarded-For, X-Real-IP)"""
+        # Проверяем заголовки прокси
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            # X-Forwarded-For может содержать цепочку: "client, proxy1, proxy2"
+            return forwarded_for.split(",")[0].strip()
+        
+        real_ip = request.headers.get("X-Real-IP")
+        if real_ip:
+            return real_ip.strip()
+        
+        # Fallback на прямое подключение
+        if request.client:
+            return request.client.host
+        
+        return "unknown"
+    
+    def _is_ip_allowed(self, client_ip: str) -> bool:
+        """Проверяет, входит ли IP в whitelist"""
+        if client_ip == "unknown":
+            return False
+        
+        try:
+            ip = ipaddress.ip_address(client_ip)
+        except ValueError:
+            logger.warning(f"Некорректный IP адрес клиента: {client_ip}")
+            return False
+        
+        for allowed in ALLOWED_IPS:
+            if isinstance(allowed, (ipaddress.IPv4Network, ipaddress.IPv6Network)):
+                if ip in allowed:
+                    return True
+            elif ip == allowed:
+                return True
+        
+        return False
+
+
 def _get_next_sort_number(existing_cars: List[Dict], source: str) -> int:
     """
     Получает следующий номер для нумерации машин.
@@ -99,6 +206,9 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+# IP Whitelist middleware (первым, до CORS)
+app.add_middleware(IPWhitelistMiddleware)
 
 # CORS configuration from environment variables
 cors_origins = os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
@@ -353,9 +463,8 @@ async def get_dongchedi_cars():
                     # Если не удалось преобразовать, устанавливаем значение по умолчанию
                     car_dict['car_id'] = 0
 
-            # Проверяем, не является ли машина электромобилем
-            if is_electric_car(car_dict):
-                car_dict['is_available'] = False
+            # Тип силовой установки (электро/гибрид/ДВС) определяется в datahub
+            # после получения полных данных, здесь не меняем is_available
 
         filtered_cars.append(car_dict)
 
@@ -409,9 +518,7 @@ async def get_dongchedi_cars_by_page(page: int):
                     # Если не удалось преобразовать, устанавливаем значение по умолчанию
                     car_dict['car_id'] = 0
 
-            # Проверяем, не является ли машина электромобилем
-            if is_electric_car(car_dict):
-                car_dict['is_available'] = False
+            # Тип силовой установки определяется в datahub после получения полных данных
 
         filtered_cars.append(car_dict)
 
@@ -456,9 +563,7 @@ async def _collect_dongchedi_all_cars() -> Dict[str, Any]:
                         # Если не удалось преобразовать, устанавливаем значение по умолчанию
                         car_dict['car_id'] = 0
 
-                # Проверяем, не является ли машина электромобилем
-                if is_electric_car(car_dict):
-                    car_dict['is_available'] = False
+                # Тип силовой установки определяется в datahub после получения полных данных
 
                 all_cars.append(car_dict)
                 seen_ids.add(car_id)
@@ -486,9 +591,7 @@ async def _collect_dongchedi_all_cars() -> Dict[str, Any]:
                         # Если не удалось преобразовать, устанавливаем значение по умолчанию
                         car_dict['car_id'] = 0
 
-                # Проверяем, не является ли машина электромобилем
-                if is_electric_car(car_dict):
-                    car_dict['is_available'] = False
+                # Тип силовой установки определяется в datahub после получения полных данных
 
                 all_cars.append(car_dict)
                 seen_ids.add(car_id)
@@ -905,9 +1008,7 @@ async def _collect_che168_all_cars() -> Dict[str, Any]:
                 car_id = car_dict.get('car_id') or car_dict.get('sku_id') or car_dict.get('link')
 
                 if car_id and car_id not in seen_ids:
-                    # Проверяем, не является ли машина электромобилем
-                    if is_electric_car(car_dict):
-                        car_dict['is_available'] = False
+                    # Тип силовой установки определяется в datahub
                     all_cars.append(car_dict)
                     seen_ids.add(car_id)
                     new_cars_count += 1

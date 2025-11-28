@@ -733,21 +733,21 @@ class DongchediParser(BaseCarParser):
                     if content:
                         car_info['tags_v2'] = content
             page_text = soup.get_text()
-            available_indicators = [
-                "询底价", "点击查看联系电话", "我要优惠", "立即查询",
-                "询价", "联系", "电话", "咨询", "优惠"
-            ]
+            # Индикаторы того, что машина ПРОДАНА (недоступна)
+            # Убрали "sale" - это может означать "for sale" (продаётся), а не "продано"
             unavailable_indicators = [
                 "已售", "售出", "已卖出", "下架", "已下架", "已成交",
-                "sold", "sale", "unavailable", "not available"
+                "sold out", "已售出"
             ]
-            is_available = False
-            if any(indicator in page_text for indicator in available_indicators):
-                is_available = True
-            elif any(indicator in page_text for indicator in unavailable_indicators):
-                is_available = False
-            else:
-                is_available = car_info['sh_price'] is not None and car_info['sh_price'] != ''
+            # По умолчанию считаем машину доступной
+            # Меняем на False только если явно нашли индикатор продажи
+            is_available = True
+            page_text_lower = page_text.lower()
+            for indicator in unavailable_indicators:
+                if indicator.lower() in page_text_lower:
+                    is_available = False
+                    logger.debug(f"dongchedi car_id={car_id}: найден индикатор недоступности '{indicator}'")
+                    break
             car_info['is_available'] = is_available
         except Exception as e:
             # В случае ошибки при парсинге возвращаем None
@@ -1047,59 +1047,126 @@ class DongchediParser(BaseCarParser):
                         label = label_elem.get_text().strip()
                         value = value_elem.get_text().strip()
                         
-                        # Маппинг китайских названий на английские поля
+                        # Маппинг китайских названий на английские поля (только поля которые есть в БД)
                         field_mapping = {
+                            # === Мощность и динамика ===
                             '最大功率(kW)': 'power',
-                            '最大功率': 'power',  # Альтернативный формат без единиц
-                            '最大马力': 'power',  # Альтернативный формат в л.с.
-                            '最大马力(Ps)': 'power',  # Альтернативный формат в л.с.
+                            '最大功率': 'power',
+                            '最大马力': 'power',
+                            '最大马力(Ps)': 'power',
                             '最大扭矩(N·m)': 'torque',
                             '官方百公里加速时间(s)': 'acceleration',
                             '最高车速(km/h)': 'max_speed',
                             '百公里耗电量(kWh/100km)': 'fuel_consumption',
+                            'NEDC综合油耗(L/100km)': 'fuel_consumption',
+                            'WLTC综合油耗(L/100km)': 'fuel_consumption',
+                            '环保标准': 'emission_standard',
+                            
+                            # === Размеры и кузов ===
                             '长x宽x高(mm)': 'dimensions',
-                            '车身结构': 'body_structure',
+                            '长(mm)': 'length',
+                            '宽(mm)': 'width',
+                            '高(mm)': 'height',
+                            '轴距(mm)': 'wheelbase',
+                            '车身结构': 'body_type',
+                            '整备质量(kg)': 'curb_weight',
+                            '满载质量(kg)': 'gross_weight',
+                            '行李舱容积(L)': 'trunk_volume',
+                            '行李厢容积(L)': 'trunk_volume',
+                            '油箱容积(L)': 'fuel_tank_volume',
+                            '座位数(个)': 'seat_count',
+                            '座位数': 'seat_count',
+                            '车门数(个)': 'door_count',
+                            '车门数': 'door_count',
+                            
+                            # === Двигатель ДВС ===
+                            '发动机': 'engine_type',
+                            '发动机型号': 'engine_code',
+                            '排量(mL)': 'engine_volume_ml',
+                            '排量(L)': 'engine_volume',
+                            '气缸数(个)': 'cylinder_count',
+                            '每缸气门数(个)': 'valve_count',
+                            '压缩比': 'compression_ratio',
+                            '进气形式': 'turbo_type',
+                            
+                            # === Электромобили ===
                             '纯电续航里程(km)': 'electric_range',
+                            '纯电续航里程(km)CLTC': 'electric_range',
+                            '纯电续航里程(km)NEDC': 'electric_range',
+                            '纯电续航里程(km)工信部': 'electric_range',
+                            '电池容量(kWh)': 'battery_capacity',
                             '充电时间(小时)': 'charging_time',
                             '快充时间(小时)': 'fast_charge_time',
-                            '发动机': 'engine_type',
-                            '排量(mL)': 'engine_volume_ml',  # Объем в миллилитрах
-                            '排量(L)': 'engine_volume',  # Объем в литрах
+                            '快充接口位置': 'charge_port_type',
+                            
+                            # === Трансмиссия и привод ===
                             '变速箱': 'transmission_type',
+                            '变速箱描述': 'transmission_type',
+                            '变速箱类型': 'transmission_type',
+                            '挡位数': 'gear_count',
                             '驱动方式': 'drive_type',
+                            
+                            # === Подвеска и тормоза ===
+                            '前悬挂形式': 'front_suspension',
                             '前悬架类型': 'front_suspension',
+                            '后悬挂形式': 'rear_suspension',
                             '后悬架类型': 'rear_suspension',
                             '前制动器类型': 'front_brakes',
                             '后制动器类型': 'rear_brakes',
+                            '驻车制动类型': 'brake_system',
+                            
+                            # === Колёса и шины ===
+                            '前轮胎规格尺寸': 'tire_size',
+                            '后轮胎规格尺寸': 'tire_size',
                             '轮胎规格': 'tire_size',
                             '轮毂规格': 'wheel_size',
+                            '铝合金轮毂': 'wheel_type',
+                            '备胎规格': 'tire_type',
+                            
+                            # === Безопасность ===
                             '主/副驾驶座安全气囊': 'airbag_count',
+                            '前排安全气囊': 'airbag_count',
                             'ABS防抱死': 'abs',
+                            '车身稳定系统(ESP/DSC等)': 'esp',
                             'ESP车身稳定系统': 'esp',
+                            '牵引力控制(TCS/ASR等)': 'tcs',
                             'TCS牵引力控制': 'tcs',
+                            '上坡辅助(HAC)': 'hill_assist',
                             '上坡辅助': 'hill_assist',
+                            '并线辅助': 'blind_spot_monitor',
                             '盲区监测': 'blind_spot_monitor',
                             '车道偏离预警': 'lane_departure',
+                            
+                            # === Комфорт ===
+                            '空调控制方式': 'air_conditioning',
                             '空调': 'air_conditioning',
                             '自动空调': 'climate_control',
+                            '座椅材质': 'upholstery',
                             '座椅加热': 'seat_heating',
                             '座椅通风': 'seat_ventilation',
                             '座椅按摩': 'seat_massage',
                             '方向盘加热': 'steering_wheel_heating',
+                            '天窗类型': 'sunroof',
+                            '全景天窗': 'panoramic_roof',
+                            
+                            # === Мультимедиа ===
                             'GPS导航': 'navigation',
+                            '卫星导航系统': 'navigation',
                             '音响系统': 'audio_system',
+                            '扬声器数量(个)': 'speakers_count',
                             '扬声器数量': 'speakers_count',
+                            '蓝牙/车载电话': 'bluetooth',
                             '蓝牙': 'bluetooth',
                             'USB接口': 'usb',
                             'AUX接口': 'aux',
+                            
+                            # === Освещение ===
                             '前大灯类型': 'headlight_type',
+                            '近光灯': 'headlight_type',
+                            '远光灯': 'headlight_type',
                             '前雾灯': 'fog_lights',
                             'LED大灯': 'led_lights',
                             '日间行车灯': 'daytime_running',
-                            '座位数': 'seat_count',
-                            '车门数': 'door_count',
-                            '行李厢容积(L)': 'trunk_volume',
-                            '油箱容积(L)': 'fuel_tank_volume'
                         }
                         
                         if label in field_mapping:
@@ -1351,14 +1418,9 @@ class DongchediParser(BaseCarParser):
         else:
             # Если power не был распарсен, не содержит цифр или это электромобиль, оставляем has_details = False
             car_obj.has_details = False
-            # Очищаем невалидное значение power только для электромобилей
-            if is_electric and power_value:
-                car_obj.power = None
             # Не обновляем last_detail_update, если парсинг не удался
             if is_electric:
-                logger.info(f"Skipping electric car details for sku_id={sku_id} (fuel_type: {car_dict.get('fuel_type')})")
-                # Устанавливаем is_available в False для электромобилей
-                car_obj.is_available = False
+                logger.info(f"Electric car detected for sku_id={sku_id}, powertrain_type will be set in datahub")
             elif not has_power:
                 logger.info(f"No power found for sku_id={sku_id}, has_details=False")
         

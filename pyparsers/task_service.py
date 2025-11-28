@@ -266,10 +266,7 @@ class TaskService:
                             car_dict['car_id'] = int(car_dict['car_id'])
                         except (ValueError, TypeError):
                             car_dict['car_id'] = 0
-                    # Проверяем, не является ли машина электромобилем
-                    if is_electric_car(car_dict):
-                        car_dict['is_available'] = False
-                        logger.debug(f"Skipping electric car in task service: {car_dict.get('car_id')} (fuel_type: {car_dict.get('fuel_type')})")
+                    # Тип силовой установки определяется в datahub
                     all_data.append(car_dict)
                 if not getattr(response.data, 'has_more', False):
                     break
@@ -314,10 +311,7 @@ class TaskService:
                             car_dict['car_id'] = int(car_dict['car_id'])
                         except (ValueError, TypeError):
                             car_dict['car_id'] = 0
-                    # Проверяем, не является ли машина электромобилем
-                    if is_electric_car(car_dict):
-                        car_dict['is_available'] = False
-                        logger.debug(f"Skipping electric car in incremental task: {car_dict.get('car_id')} (fuel_type: {car_dict.get('fuel_type')})")
+                    # Тип силовой установки определяется в datahub
                     data.append(car_dict)
                 if found_existing:
                     break
@@ -401,10 +395,7 @@ class TaskService:
                     
                     if car_dict.get('car_source_city_name'):
                         car_dict['city'] = car_dict.get('car_source_city_name')
-                    # Проверяем, не является ли машина электромобилем
-                    if is_electric_car(car_dict):
-                        car_dict['is_available'] = False
-                        logger.debug(f"Skipping electric car in che168 task: {car_dict.get('car_id')} (fuel_type: {car_dict.get('fuel_type')})")
+                    # Тип силовой установки определяется в datahub
                     mileage_raw = car_dict.get('car_mileage')
                     if isinstance(mileage_raw, str) and mileage_raw.strip() != '':
                         text = mileage_raw.strip()

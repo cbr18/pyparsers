@@ -104,7 +104,7 @@ func (c *DongchediClient) CheckCar(ctx context.Context, carIDorURL string) (*dom
 
 	// Устанавливаем таймаут для клиента
 	client := &http.Client{
-		Timeout: 3600 * time.Second, // Таймаут для проверки одной машины
+		Timeout: 5 * time.Minute, // Таймаут для проверки одной машины
 	}
 
 	// Выполняем запрос
@@ -113,15 +113,26 @@ func (c *DongchediClient) CheckCar(ctx context.Context, carIDorURL string) (*dom
 		return nil, fmt.Errorf("ошибка выполнения запроса: %w", err)
 	}
 	defer resp.Body.Close()
-	var car domain.Car
+	
+	// Парсим ответ в правильную структуру (API возвращает {"data": {...}, "status": ...})
+	var result struct {
+		Data   domain.Car `json:"data"`
+		Status int        `json:"status"`
+	}
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(b, &car); err != nil {
+	if err := json.Unmarshal(b, &result); err != nil {
 		return nil, err
 	}
-	return &car, nil
+	
+	// Если API вернул статус ошибки (500), возвращаем ошибку
+	if result.Status >= 400 {
+		return nil, fmt.Errorf("API вернул статус %d", result.Status)
+	}
+	
+	return &result.Data, nil
 }
 
 // EnhanceCar — улучшает машину детальной информацией (GET /cars/dongchedi/enhance/{sku_id})

@@ -1,7 +1,30 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 
 const Filters = ({ tempFilters, setTempFilters, applyFilters, resetFilters, sources, brands }) => {
   const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // Дедуплицируем бренды по названию
+  const uniqueBrands = useMemo(() => {
+    if (!brands || brands.length === 0) return [];
+    
+    const seen = new Set();
+    const unique = [];
+    
+    brands.forEach((brand, index) => {
+      const label = brand.name || brand.orig_name || '';
+      if (label && !seen.has(label.toLowerCase())) {
+        seen.add(label.toLowerCase());
+        unique.push({
+          ...brand,
+          displayName: label,
+          uniqueKey: brand.id || `brand-${label}-${index}`
+        });
+      }
+    });
+    
+    // Сортируем по алфавиту
+    return unique.sort((a, b) => a.displayName.localeCompare(b.displayName, 'ru'));
+  }, [brands]);
 
   return (
     <div className="filters-panel">
@@ -17,11 +40,9 @@ const Filters = ({ tempFilters, setTempFilters, applyFilters, resetFilters, sour
         />
         <datalist id="brand-options">
           <option value="">Все бренды</option>
-          {brands && brands.length > 0 && brands.map((brand, index) => {
-            const label = brand.name || brand.orig_name || '';
-            const key = brand.id || label || index;
-            return label ? <option key={key} value={label} /> : null;
-          })}
+          {uniqueBrands.map((brand) => (
+            <option key={brand.uniqueKey} value={brand.displayName} />
+          ))}
         </datalist>
       </div>
 

@@ -756,6 +756,7 @@ func (r *CarRepository) UpdateCar(ctx context.Context, car domain.Car) error {
 		"last_detail_update":     car.LastDetailUpdate,
 		"is_available":           car.IsAvailable,
 		"power":                  car.Power,
+		"powertrain_type":        car.PowertrainType,
 		"updated_at":             car.UpdatedAt,
 		"failed_enhancement_attempts": car.FailedEnhancementAttempts,
 	}

@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"datahub/internal/domain"
+	"datahub/internal/filters"
 	"datahub/internal/infrastructure/external"
 	"datahub/internal/repository"
 	"fmt"
@@ -32,8 +33,8 @@ type EnhancementWorker struct {
 	stopChan           chan struct{}
 	mu                 sync.Mutex
 	
-	batchSize          int
-	delayBetweenBatches time.Duration
+	chunkSize     int
+	chunkInterval time.Duration
 	
 	// Семафоры для ограничения параллельных запросов по источникам
 	dongchediSemaphore chan struct{}
@@ -48,8 +49,8 @@ func NewEnhancementWorker(repo repository.CarRepository, dongchediClient *extern
 		translationService: translationService,
 		priceCalculator:    priceCalculator,
 		stopChan:           make(chan struct{}),
-		batchSize:          10,               // Обрабатываем по 10 машин за раз (5+5)
-		delayBetweenBatches: 1 * time.Minute,  // Пауза между батчами
+		chunkSize:     10,              // Обрабатываем по 10 машин за раз (5+5)
+		chunkInterval: 1 * time.Minute, // Пауза между порциями
 		dongchediSemaphore: make(chan struct{}, maxConcurrentPerSource),
 		che168Semaphore:    make(chan struct{}, maxConcurrentPerSource),
 	}
@@ -101,8 +102,8 @@ func (w *EnhancementWorker) run() {
 			log.Println("Enhancement worker received stop signal")
 			return
 		default:
-			// Обрабатываем батч
-			carsFound, carsProcessed := w.processBatch(context.Background())
+			// Обрабатываем порцию машин
+			carsFound, carsProcessed := w.processChunk(context.Background())
 			
 			if carsFound == 0 {
 				// Машин не было - делаем длинную паузу перед следующей проверкой
@@ -111,7 +112,7 @@ func (w *EnhancementWorker) run() {
 				case <-w.stopChan:
 					log.Println("Enhancement worker received stop signal")
 					return
-				case <-time.After(w.delayBetweenBatches):
+				case <-time.After(w.chunkInterval):
 					// Продолжаем цикл после паузы
 				}
 			} else if carsProcessed == 0 {
@@ -126,16 +127,16 @@ func (w *EnhancementWorker) run() {
 					// Короткая пауза перед повторной попыткой
 				}
 			} else {
-				// Машины были обработаны - сразу переходим к следующему батчу
+				// Машины были обработаны - сразу переходим к следующей порции
 			}
 		}
 	}
 }
 
-// processBatch — обрабатывает один батч машин без деталей
+// processChunk — обрабатывает порцию машин без деталей (параллельно)
 // Возвращает (количество найденных машин, количество успешно обработанных машин)
-func (w *EnhancementWorker) processBatch(ctx context.Context) (int, int) {
-	log.Println("Starting enhancement batch processing (parallel mode)...")
+func (w *EnhancementWorker) processChunk(ctx context.Context) (int, int) {
+	log.Println("Starting chunk processing (parallel mode)...")
 
 	// Получаем машины без детальной информации для всех источников
 	sources := []string{"dongchedi", "che168"}
@@ -143,7 +144,7 @@ func (w *EnhancementWorker) processBatch(ctx context.Context) (int, int) {
 	totalCars := 0
 	
 	for _, source := range sources {
-		cars, err := w.repo.GetCarsWithoutDetails(ctx, source, w.batchSize/len(sources))
+		cars, err := w.repo.GetCarsWithoutDetails(ctx, source, w.chunkSize/len(sources))
 		if err != nil {
 			log.Printf("Error getting cars without details for %s: %v", source, err)
 			continue
@@ -227,7 +228,7 @@ func (w *EnhancementWorker) processBatch(ctx context.Context) (int, int) {
 		}
 	}
 
-	log.Printf("Batch processing completed: enhanced %d out of %d cars", enhancedCount, totalCars)
+	log.Printf("Chunk processing completed: enhanced %d out of %d cars", enhancedCount, totalCars)
 	return totalCars, enhancedCount
 }
 
@@ -267,15 +268,15 @@ func (w *EnhancementWorker) enhanceSingleCar(ctx context.Context, car domain.Car
 		// Увеличиваем счетчик неудачных попыток
 		car.FailedEnhancementAttempts++
 		
-		// Если достигли лимита (3 попытки), помечаем машину как недоступную
+		// НЕ меняем is_available при ошибках улучшения - это могут быть временные сетевые проблемы
+		// Машина остаётся доступной, просто без детальной информации
 		if car.FailedEnhancementAttempts >= 3 {
-			car.IsAvailable = false
-			log.Printf("Car %s: достигнут лимит неудачных попыток (%d), помечаем как недоступную", car.UUID, car.FailedEnhancementAttempts)
+			log.Printf("Car %s: достигнут лимит неудачных попыток (%d), пропускаем (is_available НЕ изменён)", car.UUID, car.FailedEnhancementAttempts)
 		} else {
 			log.Printf("Car %s: неудачная попытка улучшения (%d/3), продолжаем попытки", car.UUID, car.FailedEnhancementAttempts)
 		}
 		
-		// Обновляем машину в БД с новым счетчиком и статусом
+		// Обновляем машину в БД с новым счетчиком (is_available не трогаем)
 		car.UpdatedAt = time.Now()
 		if updateErr := w.repo.UpdateCar(ctx, car); updateErr != nil {
 			log.Printf("Error updating car %s after failed enhancement: %v", car.UUID, updateErr)
@@ -491,6 +492,10 @@ func (w *EnhancementWorker) enhanceSingleCar(ctx context.Context, car domain.Car
 		}
 	}
 
+	// Определяем тип силовой установки на основе всех собранных данных
+	enhancedCar.PowertrainType = filters.DeterminePowertrainType(enhancedCar)
+	log.Printf("Car %s: определён тип силовой установки: %s", car.UUID, enhancedCar.PowertrainType)
+
 	// Обновляем машину в БД
 	if err := w.repo.UpdateCar(ctx, *enhancedCar); err != nil {
 		return fmt.Errorf("error updating car in DB: %w", err)
@@ -519,31 +524,31 @@ func (w *EnhancementWorker) GetStatus(ctx context.Context) (map[string]interface
 	}
 
 	return map[string]interface{}{
-		"is_running":                 isRunning,
-		"batch_size":                 w.batchSize,
-		"delay_between_batches_sec":  w.delayBetweenBatches.Seconds(),
-		"max_concurrent_per_source":  maxConcurrentPerSource,
-		"enhance_timeout_sec":        enhanceTimeout.Seconds(),
-		"delay_between_sends_ms":     delayBetweenSends.Milliseconds(),
-		"dongchedi_active":           len(w.dongchediSemaphore),
-		"che168_active":              len(w.che168Semaphore),
-		"cars_without_details":       carsWithoutDetails,
+		"is_running":                isRunning,
+		"chunk_size":                w.chunkSize,
+		"chunk_interval_sec":        w.chunkInterval.Seconds(),
+		"max_concurrent_per_source": maxConcurrentPerSource,
+		"enhance_timeout_sec":       enhanceTimeout.Seconds(),
+		"delay_between_sends_ms":    delayBetweenSends.Milliseconds(),
+		"dongchedi_active":          len(w.dongchediSemaphore),
+		"che168_active":             len(w.che168Semaphore),
+		"cars_without_details":      carsWithoutDetails,
 	}, nil
 }
 
 // SetConfig — обновляет конфигурацию воркера
-func (w *EnhancementWorker) SetConfig(batchSize int, delayBetweenBatches time.Duration, delayBetweenCars time.Duration, maxConcurrent int) {
+func (w *EnhancementWorker) SetConfig(chunkSize int, chunkInterval time.Duration, delayBetweenCars time.Duration, maxConcurrent int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if batchSize > 0 {
-		w.batchSize = batchSize
+	if chunkSize > 0 {
+		w.chunkSize = chunkSize
 	}
-	if delayBetweenBatches > 0 {
-		w.delayBetweenBatches = delayBetweenBatches
+	if chunkInterval > 0 {
+		w.chunkInterval = chunkInterval
 	}
 	// delayBetweenCars и maxConcurrent теперь константы, игнорируем
 
-	log.Printf("Enhancement worker config updated: batch_size=%d, delay_batches=%v, max_concurrent_per_source=%d",
-		w.batchSize, w.delayBetweenBatches, maxConcurrentPerSource)
+	log.Printf("Enhancement worker config updated: chunk_size=%d, chunk_interval=%v, max_concurrent_per_source=%d",
+		w.chunkSize, w.chunkInterval, maxConcurrentPerSource)
 }

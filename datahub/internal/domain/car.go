@@ -68,6 +68,9 @@ type Car struct {
 	CurbWeight         string `json:"curb_weight"`              // Снаряженная масса (кг)
 	GrossWeight        string `json:"gross_weight"`             // Полная масса (кг)
 
+	// Тип силовой установки: ice (ДВС), electric (электро), hybrid (гибрид), phev (плагин-гибрид)
+	PowertrainType     string `json:"powertrain_type" gorm:"column:powertrain_type"`          // Тип силовой установки
+	
 	// Двигатель и трансмиссия (для ДВС)
 	EngineType         string `json:"engine_type"`              // Тип двигателя
 	EngineCode         string `json:"engine_code"`              // Код двигателя

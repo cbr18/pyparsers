@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { fetchCarByUUID, createOrder } from '../services/api';
 import ImageCarousel from './ImageCarousel';
 import './CarDetails.css';
@@ -588,6 +589,9 @@ const CarDetails = () => {
             <button className="write-btn" onClick={handleWriteMessage}>
               Написать
             </button>
+            <Link to={`/car/${uuid}/full`} className="details-btn">
+              Показать подробности
+            </Link>
           </div>
         </div>
       </div>

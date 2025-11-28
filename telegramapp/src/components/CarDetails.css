@@ -210,7 +210,8 @@
 }
 
 .car-details-buttons .lead-btn,
-.car-details-buttons .write-btn {
+.car-details-buttons .write-btn,
+.car-details-buttons .details-btn {
   flex: 1;
   min-width: 200px;
   padding: 16px 32px;
@@ -221,6 +222,8 @@
   transition: all 0.3s ease;
   border: none;
   text-align: center;
+  text-decoration: none;
+  display: inline-block;
 }
 
 .car-details-buttons .lead-btn {
@@ -242,6 +245,17 @@
   background: linear-gradient(135deg, var(--brand-accent), var(--brand-secondary));
   transform: translateY(-2px);
   box-shadow: 0 8px 20px var(--cta-shadow-strong);
+}
+
+.car-details-buttons .details-btn {
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: white;
+}
+
+.car-details-buttons .details-btn:hover {
+  background: linear-gradient(135deg, #764ba2, #667eea);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(102, 126, 234, 0.6);
 }
 
 @media (max-width: 768px) {
@@ -276,7 +290,8 @@
   }
 
   .car-details-buttons .lead-btn,
-  .car-details-buttons .write-btn {
+  .car-details-buttons .write-btn,
+  .car-details-buttons .details-btn {
     width: 100%;
   }
 
@@ -449,7 +464,8 @@
 }
 
 .car-details-buttons .lead-btn,
-.car-details-buttons .write-btn {
+.car-details-buttons .write-btn,
+.car-details-buttons .details-btn {
   flex: 1;
   min-width: 200px;
   padding: 16px 32px;
@@ -460,6 +476,8 @@
   transition: all 0.3s ease;
   border: none;
   text-align: center;
+  text-decoration: none;
+  display: inline-block;
 }
 
 .car-details-buttons .lead-btn {
@@ -481,6 +499,17 @@
   background: linear-gradient(135deg, var(--brand-accent), var(--brand-secondary));
   transform: translateY(-2px);
   box-shadow: 0 8px 20px var(--cta-shadow-strong);
+}
+
+.car-details-buttons .details-btn {
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: white;
+}
+
+.car-details-buttons .details-btn:hover {
+  background: linear-gradient(135deg, #764ba2, #667eea);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(102, 126, 234, 0.6);
 }
 
 @media (max-width: 768px) {
@@ -515,7 +544,8 @@
   }
 
   .car-details-buttons .lead-btn,
-  .car-details-buttons .write-btn {
+  .car-details-buttons .write-btn,
+  .car-details-buttons .details-btn {
     width: 100%;
   }
 }

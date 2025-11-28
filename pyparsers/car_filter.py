@@ -46,16 +46,34 @@ def is_electric_car(car_dict: dict) -> bool:
         return True
     
     # Проверяем наличие полей, характерных для электромобилей
-    battery_capacity = car_dict.get('battery_capacity')
-    electric_range = car_dict.get('electric_range')
-    if battery_capacity or electric_range:
-        logger.debug(f"is_electric_car({car_id}): True - battery_capacity='{battery_capacity}', electric_range='{electric_range}'")
+    battery_capacity = str(car_dict.get('battery_capacity', '')).strip()
+    electric_range = str(car_dict.get('electric_range', '')).strip()
+    engine_volume = str(car_dict.get('engine_volume', '')).strip()
+    engine_volume_ml = str(car_dict.get('engine_volume_ml', '')).strip()
+    fuel_tank_volume = str(car_dict.get('fuel_tank_volume', '')).strip()
+    cylinder_count = str(car_dict.get('cylinder_count', '')).strip()
+    emission_standard = str(car_dict.get('emission_standard', '')).strip()
+    
+    # Признаки наличия ДВС (любой из них означает что это НЕ чисто электромобиль)
+    has_engine = (bool(engine_volume) or bool(engine_volume_ml) or 
+                  bool(fuel_tank_volume) or bool(cylinder_count) or bool(emission_standard))
+    
+    # Если есть батарея/запас хода, но НЕТ признаков ДВС - это электромобиль
+    # Если есть и батарея, и признаки ДВС - это гибрид, НЕ фильтруем
+    has_battery_info = bool(battery_capacity) or bool(electric_range)
+    
+    if has_battery_info and not has_engine:
+        logger.debug(f"is_electric_car({car_id}): True - battery_capacity='{battery_capacity}', electric_range='{electric_range}', no engine signs")
         return True
+    elif has_battery_info and has_engine:
+        logger.debug(f"is_electric_car({car_id}): False - гибрид (battery + engine signs: vol='{engine_volume}', tank='{fuel_tank_volume}')")
+        # Это гибрид - НЕ электромобиль
     
     # Точные фразы для определения электромобиля (более строгий критерий)
     # Убрал проверку tags, description, title - слишком много ложных срабатываний
     # Основной критерий - fuel_type и battery_capacity/electric_range
     
+    logger.info(f"is_electric_car({car_id}): False - fuel_type='{fuel_type}', battery='{battery_capacity}', range='{electric_range}', engine='{engine_volume}'")
     return False
 
 def filter_cars_by_year(cars, min_year=2017):

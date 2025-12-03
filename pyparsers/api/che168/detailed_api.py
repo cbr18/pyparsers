@@ -1,7 +1,8 @@
 import asyncio
 import logging
 import os
-from typing import Optional, List
+import re
+from typing import Optional, List, Union
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -13,6 +14,90 @@ from datetime import datetime, timezone
 # Определение типа силовой установки перенесено в datahub
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_int(value) -> Optional[int]:
+    """Безопасное преобразование в int."""
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    try:
+        # Извлекаем число из строки
+        match = re.search(r'(\d+)', str(value))
+        if match:
+            return int(match.group(1))
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+def _safe_float(value) -> Optional[float]:
+    """Безопасное преобразование в float."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        # Извлекаем число из строки
+        match = re.search(r'([\d.]+)', str(value))
+        if match:
+            return float(match.group(1).replace(',', '.'))
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+def _convert_circle_to_bool(value) -> Optional[bool]:
+    """
+    Конвертирует символы ● (закрашенный круг) в True, 
+    а незакрашенный круг (○) в False.
+    
+    Args:
+        value: Значение для конвертации (может быть str, bool, None)
+        
+    Returns:
+        bool или None
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        value = value.strip()
+        # Закрашенный круг ● -> True
+        if '●' in value:
+            return True
+        # Незакрашенный круг ○ -> False
+        if '○' in value:
+            return False
+    return None
+
+
+def _convert_field_with_circle(value) -> Optional[bool]:
+    """
+    Конвертирует поле с символами ●/○ в boolean.
+    ● (закрашенный круг) -> True
+    ○ (незакрашенный круг) -> False
+    Если символов нет или значение пустое, возвращает None.
+    
+    Args:
+        value: Значение для конвертации
+        
+    Returns:
+        bool - True если найден ●, False если найден ○, None если символов нет или значение пустое
+    """
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    converted = _convert_circle_to_bool(value)
+    if converted is not None:
+        return converted
+    # Если символов нет, возвращаем None
+    return None
 
 router = APIRouter(prefix="/che168/detailed", tags=["che168-detailed"])
 
@@ -68,7 +153,7 @@ def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict
         # Fallback для старых версий Python
         current_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     
-    # Создаем словарь в формате domain.Car
+    # Создаем словарь в формате domain.Car с числовыми типами
     domain_car = {
         "source": "che168",
         "car_id": car_id,
@@ -77,14 +162,14 @@ def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict
         "car_name": detailed_car.title or "",
         "year": detailed_car.year or 0,
         "mileage": mileage_km,
-        "price": detailed_car.price or "",
+        "price": detailed_car.price,  # float - цена в wan юаней
         "rub_price": 0.0,
         "image": detailed_car.image or "",
         "link": f"https://m.che168.com/cardetail/index?infoid={car_id}",
         "brand_name": detailed_car.brand_name or "",
         "series_name": detailed_car.series_name or "",
         "city": detailed_car.city or "",
-        "shop_id": "",
+        "shop_id": None,  # int - будет установлен позже если есть
         "tags": "",
         "is_available": True,
         "sort_number": 0,
@@ -97,25 +182,25 @@ def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict
         "transmission": detailed_car.transmission or "",
         "fuel_type": detailed_car.fuel_type or "",
         "engine_volume": detailed_car.engine_volume or "",
-        "engine_volume_ml": detailed_car.engine_volume_ml or "",  # Объём двигателя в мл
+        "engine_volume_ml": detailed_car.engine_volume_ml,  # int - объём двигателя в мл
         "body_type": detailed_car.body_type or "",
         "drive_type": detailed_car.drive_type or "",
         "condition": detailed_car.condition or "",
         "created_at": current_time,
         "updated_at": current_time,
-        # Технические характеристики
-        "power": None,
-        "torque": detailed_car.torque or "",
-        "acceleration": detailed_car.acceleration or "",
-        "max_speed": detailed_car.max_speed or "",
-        "fuel_consumption": detailed_car.fuel_consumption or "",
+        # Технические характеристики (числовые типы)
+        "power": detailed_car.power,  # int - мощность в л.с.
+        "torque": detailed_car.torque,  # float - крутящий момент в Н·м
+        "acceleration": detailed_car.acceleration,  # float - разгон до 100 км/ч в секундах
+        "max_speed": detailed_car.max_speed,  # int - максимальная скорость в км/ч
+        "fuel_consumption": detailed_car.fuel_consumption,  # float - расход топлива л/100км
         "emission_standard": detailed_car.emission_standard or "",
-        # Размеры и вес
-        "length": detailed_car.length or "",
-        "width": detailed_car.width or "",
-        "height": detailed_car.height or "",
-        "wheelbase": detailed_car.wheelbase or "",
-        "curb_weight": detailed_car.curb_weight or "",
+        # Размеры и вес (int - SMALLINT в БД)
+        "length": detailed_car.length,  # int - длина (мм)
+        "width": detailed_car.width,  # int - ширина (мм)
+        "height": detailed_car.height,  # int - высота (мм)
+        "wheelbase": detailed_car.wheelbase,  # int - колесная база (мм)
+        "curb_weight": detailed_car.curb_weight,  # int - снаряженная масса (кг)
         "gross_weight": detailed_car.gross_weight or "",
         # Двигатель
         "engine_type": detailed_car.engine_type or "",
@@ -124,9 +209,9 @@ def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict
         "valve_count": detailed_car.valve_count or "",
         "compression_ratio": detailed_car.compression_ratio or "",
         "turbo_type": detailed_car.turbo_type or "",
-        # Электрические характеристики
-        "battery_capacity": detailed_car.battery_capacity or "",
-        "electric_range": detailed_car.electric_range or "",
+        # Электрические характеристики (числовые типы)
+        "battery_capacity": detailed_car.battery_capacity,  # float - емкость батареи в кВт·ч
+        "electric_range": detailed_car.electric_range,  # int - запас хода в км
         "charging_time": detailed_car.charging_time or "",
         "fast_charge_time": detailed_car.fast_charge_time or "",
         "charge_port_type": detailed_car.charge_port_type or "",
@@ -152,14 +237,14 @@ def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict
         "tcs": detailed_car.tcs or "",
         "hill_assist": detailed_car.hill_assist or "",
         "blind_spot_monitor": detailed_car.blind_spot_monitor or "",
-        "lane_departure": detailed_car.lane_departure or "",
+        "lane_departure": _convert_field_with_circle(detailed_car.lane_departure),
         # Комфорт
         "air_conditioning": detailed_car.air_conditioning or "",
-        "climate_control": detailed_car.climate_control or "",
+        "climate_control": _convert_field_with_circle(detailed_car.climate_control),
         "seat_heating": detailed_car.seat_heating or "",
         "seat_ventilation": detailed_car.seat_ventilation or "",
         "seat_massage": detailed_car.seat_massage or "",
-        "steering_wheel_heating": detailed_car.steering_wheel_heating or "",
+        "steering_wheel_heating": _convert_field_with_circle(detailed_car.steering_wheel_heating),
         # Мультимедиа
         "navigation": detailed_car.navigation or "",
         "audio_system": detailed_car.audio_system or "",
@@ -195,22 +280,21 @@ def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict
         # Изображения
         "image_gallery": detailed_car.image_gallery or "",
         "image_count": detailed_car.image_count or 0,
-        # Дополнительные характеристики
+        # Дополнительные характеристики (числовые типы)
         "seat_count": detailed_car.seat_count or "",
-        "door_count": detailed_car.door_count or "",
+        "door_count": detailed_car.door_count,  # int - количество дверей
         "trunk_volume": detailed_car.trunk_volume or "",
         "fuel_tank_volume": detailed_car.fuel_tank_volume or "",
     }
     
-    # Проверяем валидность power - должны быть цифры
+    # Проверяем валидность power - должен быть int > 0
     power_value = detailed_car.power
-    if power_value:
-        power_str = str(power_value).strip()
-        if power_str and any(c.isdigit() for c in power_str):
-            domain_car["power"] = power_str
-        else:
-            logger.warning(f"Invalid power value '{power_str}' for car_id={car_id}, skipping")
-            domain_car["power"] = None
+    if isinstance(power_value, int) and power_value > 0:
+        domain_car["power"] = power_value
+        logger.info(f"car_id={car_id}: power={power_value}")
+    else:
+        logger.warning(f"Invalid power value '{power_value}' for car_id={car_id}, skipping")
+        domain_car["power"] = None
     
     # Устанавливаем has_details только если power валиден
     # Тип силовой установки (электро/гибрид/ДВС) определяется в datahub

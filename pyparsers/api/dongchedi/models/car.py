@@ -5,7 +5,7 @@ class DongchediCar(BaseModel):
     uuid: Optional[str] = None
     title: Optional[str] = None
     sh_price: Optional[str] = None
-    price: Optional[str] = None
+    price: Optional[float] = None  # Цена в wan юаней (10,000 юаней) - NUMERIC(8,2)
     image: Optional[str] = None
     link: Optional[str] = None
     car_name: Optional[str] = None
@@ -18,8 +18,8 @@ class DongchediCar(BaseModel):
     series_name: Optional[str] = None
     brand_id: Optional[int] = None
     series_id: Optional[int] = None
-    shop_id: Optional[str] = None
-    car_id: Optional[str] = None  # Changed from int to str to match Go struct
+    shop_id: Optional[int] = None  # ID магазина - INTEGER
+    car_id: Optional[int] = None
     tags_v2: Optional[str] = None
     tags: Optional[str] = None
     sku_id: Optional[str] = None  # Changed from int to str to match Go struct
@@ -32,7 +32,7 @@ class DongchediCar(BaseModel):
     transmission: Optional[str] = None
     fuel_type: Optional[str] = None
     engine_volume: Optional[str] = None
-    engine_volume_ml: Optional[str] = None  # Объем двигателя в миллилитрах
+    engine_volume_ml: Optional[int] = None  # Объем двигателя в миллилитрах - INTEGER
     body_type: Optional[str] = None
     drive_type: Optional[str] = None
     condition: Optional[str] = None
@@ -44,19 +44,19 @@ class DongchediCar(BaseModel):
     last_detail_update: Optional[str] = None
 
     # Дополнительные технические характеристики
-    power: Optional[str] = None
-    torque: Optional[str] = None
-    acceleration: Optional[str] = None
-    max_speed: Optional[str] = None
-    fuel_consumption: Optional[str] = None
+    power: Optional[int] = None  # Мощность в л.с. - SMALLINT
+    torque: Optional[float] = None  # Крутящий момент в Н·м - NUMERIC(6,1)
+    acceleration: Optional[float] = None  # Разгон до 100 км/ч в секундах - NUMERIC(4,1)
+    max_speed: Optional[int] = None  # Максимальная скорость в км/ч - SMALLINT
+    fuel_consumption: Optional[float] = None  # Расход топлива л/100км - NUMERIC(4,1)
     emission_standard: Optional[str] = None
 
     # Размеры и вес
-    length: Optional[str] = None
-    width: Optional[str] = None
-    height: Optional[str] = None
-    wheelbase: Optional[str] = None
-    curb_weight: Optional[str] = None
+    length: Optional[int] = None  # Длина (мм) - SMALLINT
+    width: Optional[int] = None  # Ширина (мм) - SMALLINT
+    height: Optional[int] = None  # Высота (мм) - SMALLINT
+    wheelbase: Optional[int] = None  # Колесная база (мм) - SMALLINT
+    curb_weight: Optional[int] = None  # Снаряженная масса (кг) - SMALLINT
     gross_weight: Optional[str] = None
 
     # Двигатель и трансмиссия (для ДВС)
@@ -68,8 +68,8 @@ class DongchediCar(BaseModel):
     turbo_type: Optional[str] = None
 
     # Электрические характеристики (для электромобилей)
-    battery_capacity: Optional[str] = None
-    electric_range: Optional[str] = None
+    battery_capacity: Optional[float] = None  # Емкость батареи в кВт·ч - NUMERIC(6,2)
+    electric_range: Optional[int] = None  # Запас хода в км - SMALLINT
     charging_time: Optional[str] = None
     fast_charge_time: Optional[str] = None
     charge_port_type: Optional[str] = None
@@ -152,10 +152,10 @@ class DongchediCar(BaseModel):
 
     # Дополнительные характеристики
     seat_count: Optional[str] = None
-    door_count: Optional[str] = None
+    door_count: Optional[int] = None  # Количество дверей - SMALLINT
     trunk_volume: Optional[str] = None
     fuel_tank_volume: Optional[str] = None
 
     # Таможенные и утилизационные сборы
-    recycling_fee: Optional[str] = None  # Утильсбор
-    customs_duty: Optional[str] = None  # Таможенный сбор
+    recycling_fee: Optional[int] = None  # Утильсбор в рублях - INTEGER
+    customs_duty: Optional[int] = None  # Таможенная пошлина в рублях - INTEGER

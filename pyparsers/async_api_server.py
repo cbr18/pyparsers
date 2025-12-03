@@ -1402,5 +1402,13 @@ async def shutdown_event():
     await http_client.close()
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, timeout_keep_alive=3600)
+    import subprocess
+    import sys
+    subprocess.run([
+        sys.executable, "-m", "granian",
+        "--interface", "asgi",
+        "--host", "0.0.0.0",
+        "--port", "8000",
+        "--http1-keep-alive",
+        "async_api_server:app"
+    ])

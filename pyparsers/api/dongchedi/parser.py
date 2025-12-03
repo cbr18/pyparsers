@@ -1,11 +1,69 @@
 import re
+import logging
 import requests
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 from .models.response import DongchediApiResponse, DongchediData
 from .models.car import DongchediCar
 from ..base_parser import BaseCarParser
 from api.date_utils import normalize_first_registration_date
-from car_filter import is_electric_car
+
+logger = logging.getLogger(__name__)
+
+
+def parse_float_value(raw_value: Union[str, int, float, None]) -> Optional[float]:
+    """
+    Преобразует строковое значение в float.
+    
+    Args:
+        raw_value: Исходное значение
+        
+    Returns:
+        float или None
+    """
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, (int, float)):
+        return float(raw_value)
+    value_str = str(raw_value).strip()
+    if not value_str:
+        return None
+    # Извлекаем число из строки
+    match = re.search(r'([\d.,]+)', value_str)
+    if match:
+        try:
+            return float(match.group(1).replace(',', '.'))
+        except ValueError:
+            return None
+    return None
+
+
+def parse_int_value(raw_value: Union[str, int, float, None]) -> Optional[int]:
+    """
+    Преобразует строковое значение в int.
+    
+    Args:
+        raw_value: Исходное значение
+        
+    Returns:
+        int или None
+    """
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, int):
+        return raw_value
+    if isinstance(raw_value, float):
+        return int(raw_value)
+    value_str = str(raw_value).strip()
+    if not value_str:
+        return None
+    # Извлекаем число из строки
+    match = re.search(r'(\d+)', value_str)
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+    return None
 
 
 _PS_PATTERN = re.compile(r'\(([\d.,]+)\s*[Pp][Ss]?\)')
@@ -26,11 +84,22 @@ def _parse_number(text: str) -> Optional[float]:
         return None
 
 
-def _format_hp(value: float) -> str:
-    return str(int(round(value)))
+def _format_hp(value: float) -> int:
+    """Форматирует значение мощности как целое число л.с."""
+    return int(round(value))
 
 
-def normalize_power_value(raw_value, assume_kw: bool = False) -> Optional[str]:
+def normalize_power_value(raw_value, assume_kw: bool = False) -> Optional[int]:
+    """
+    Нормализует значение мощности и возвращает его как целое число л.с.
+    
+    Args:
+        raw_value: Исходное значение (строка или число)
+        assume_kw: Если True, предполагаем что значение в кВт если единицы не указаны
+        
+    Returns:
+        Мощность в л.с. как int или None
+    """
     if raw_value is None:
         return None
     value_str = str(raw_value).strip()
@@ -170,7 +239,9 @@ class DongchediParser(BaseCarParser):
             # Преобразуем данные в наши модели
             cars = []
             if 'data' in data and 'search_sh_sku_info_list' in data['data']:
-                for car_data in data['data']['search_sh_sku_info_list']:
+                cars_list = data['data']['search_sh_sku_info_list']
+                logger.info(f"Received {len(cars_list) if isinstance(cars_list, list) else 'non-list'} items in search_sh_sku_info_list for page {page}")
+                for car_data in cars_list:
                     try:
                         # Генерируем UUID для каждой машины
                         import uuid
@@ -191,13 +262,6 @@ class DongchediParser(BaseCarParser):
 
                         # Устанавливаем source
                         filtered_car_data['source'] = 'dongchedi'
-
-                        # Convert car_id and sku_id to strings to match Go struct expectations
-                        if 'car_id' in filtered_car_data and filtered_car_data['car_id'] is not None:
-                            filtered_car_data['car_id'] = str(filtered_car_data['car_id'])
-
-                        if 'sku_id' in filtered_car_data and filtered_car_data['sku_id'] is not None:
-                            filtered_car_data['sku_id'] = str(filtered_car_data['sku_id'])
 
                         # Копируем значения из одних полей в другие для совместимости
                         if 'car_year' in filtered_car_data and filtered_car_data['car_year'] is not None:
@@ -227,20 +291,14 @@ class DongchediParser(BaseCarParser):
                                             filtered_car_data['mileage'] = int(float(mileage_numeric))
                             except Exception as e:
                                 # Логируем ошибку для отладки, но не прерываем обработку
-                                import logging
-                                logging.debug(f"Ошибка парсинга mileage '{filtered_car_data.get('car_mileage')}': {e}")
+                                logger.debug(f"Ошибка парсинга mileage '{filtered_car_data.get('car_mileage')}': {e}")
                                 pass
 
                         if 'car_source_city_name' in filtered_car_data and filtered_car_data['car_source_city_name'] is not None:
                             from converters import decode_dongchedi_detail
                             filtered_car_data['city'] = decode_dongchedi_detail(filtered_car_data['car_source_city_name'])
 
-                        # Проверяем, не является ли машина электромобилем
-                        is_electric = is_electric_car(filtered_car_data)
-                        # Устанавливаем is_available в False для электромобилей
-                        filtered_car_data['is_available'] = not is_electric
-                        if is_electric:
-                            logging.debug(f"Skipping electric car: {filtered_car_data.get('car_id')} (fuel_type: {filtered_car_data.get('fuel_type')})")
+                        filtered_car_data['is_available'] = True
 
                         # Декодируем поля, которые могут содержать специальные символы
                         from converters import decode_dongchedi_list_sh_price, decode_dongchedi_detail
@@ -254,15 +312,20 @@ class DongchediParser(BaseCarParser):
                             if text_field in filtered_car_data and filtered_car_data[text_field] is not None:
                                 filtered_car_data[text_field] = decode_dongchedi_detail(str(filtered_car_data[text_field]))
 
-                        # Ensure price is properly set from sh_price
+                        # Ensure price is properly set from sh_price (convert to float)
                         if 'sh_price' in filtered_car_data and filtered_car_data['sh_price'] is not None:
                             # Convert price to a numeric value if it's a string with units
-                            price_str = str(filtered_car_data['sh_price'])
-                            # Remove any non-numeric characters except decimal point
-                            import re
-                            price_numeric = re.sub(r'[^\d.]', '', price_str)
-                            if price_numeric:
-                                filtered_car_data['price'] = price_numeric
+                            price_value = parse_float_value(filtered_car_data['sh_price'])
+                            if price_value is not None:
+                                filtered_car_data['price'] = price_value
+                        
+                        # Convert shop_id to int
+                        if 'shop_id' in filtered_car_data and filtered_car_data['shop_id'] is not None:
+                            filtered_car_data['shop_id'] = parse_int_value(filtered_car_data['shop_id'])
+
+                        # Convert sku_id to string (API returns int, but model expects str)
+                        if 'sku_id' in filtered_car_data and filtered_car_data['sku_id'] is not None:
+                            filtered_car_data['sku_id'] = str(filtered_car_data['sku_id'])
 
                         # Add current timestamp for created_at and updated_at if they don't exist
                         import datetime
@@ -275,11 +338,31 @@ class DongchediParser(BaseCarParser):
 
                         car = DongchediCar(**filtered_car_data)
                         cars.append(car)
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(f"Failed to parse car data on page {page}: {e}. Car data keys: {list(car_data.keys()) if isinstance(car_data, dict) else type(car_data)}")
+                        logger.debug(f"Filtered car data keys: {list(filtered_car_data.keys())}")
                         continue
 
             # Если данных нет или список пуст, считаем что страницы не существует
             if not cars:
+                logger.warning(f"No cars found on dongchedi page {page}. Response data keys: {list(data.keys()) if isinstance(data, dict) else 'not a dict'}")
+                if isinstance(data, dict) and 'data' in data:
+                    logger.warning(f"Response data structure: {list(data['data'].keys()) if isinstance(data['data'], dict) else type(data['data'])}")
+                    if 'search_sh_sku_info_list' in data['data']:
+                        cars_list = data['data']['search_sh_sku_info_list']
+                        logger.warning(f"search_sh_sku_info_list length: {len(cars_list) if isinstance(cars_list, list) else 'not a list'}")
+                        if isinstance(cars_list, list) and len(cars_list) > 0:
+                            logger.warning(f"First car item type: {type(cars_list[0])}, keys: {list(cars_list[0].keys()) if isinstance(cars_list[0], dict) else 'not a dict'}")
+                            # Логируем первые несколько полей первой машины для отладки
+                            if isinstance(cars_list[0], dict):
+                                sample_keys = list(cars_list[0].keys())[:10]
+                                logger.warning(f"Sample car data (first 10 keys): {[(k, type(cars_list[0][k]).__name__ if k in cars_list[0] else None) for k in sample_keys]}")
+                        elif isinstance(cars_list, list) and len(cars_list) == 0:
+                            logger.warning(f"search_sh_sku_info_list is an empty list!")
+                        else:
+                            logger.warning(f"search_sh_sku_info_list is not a list: {type(cars_list)}")
+                    else:
+                        logger.warning(f"'search_sh_sku_info_list' key not found in data['data']")
                 return DongchediApiResponse(
                     data=DongchediData(has_more=False, search_sh_sku_info_list=[], total=0),
                     message=f"Страница {page} не найдена или данные не соответствуют ожидаемому формату",
@@ -299,6 +382,7 @@ class DongchediParser(BaseCarParser):
             )
 
         except Exception as e:
+            logger.error(f"Error fetching dongchedi page {page}: {e}", exc_info=True)
             return DongchediApiResponse(
                 data=DongchediData(has_more=False, search_sh_sku_info_list=[], total=0),
                 message=f"Ошибка при получении данных: {str(e)}",
@@ -310,6 +394,7 @@ class DongchediParser(BaseCarParser):
         Парсит детальную информацию о машине по car_id через selenium/beautifulsoup.
         Возвращает (DongchediCar | None, meta: dict)
         """
+        logger.info(f"fetch_car_detail: ВХОД в функцию для car_id={car_id}")
         import time
         import random
         import json
@@ -370,17 +455,27 @@ class DongchediParser(BaseCarParser):
 
             driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             driver.get(url)
-            time.sleep(random.uniform(2, 3))
+            time.sleep(random.uniform(3, 5))  # Увеличено время ожидания
             try:
-                WebDriverWait(driver, 10).until(
+                WebDriverWait(driver, 15).until(
                     EC.presence_of_element_located((By.TAG_NAME, "body"))
                 )
             except TimeoutException:
                 pass
+            
+            # Ждем загрузки скрипта с __NEXT_DATA__
+            try:
+                WebDriverWait(driver, 10).until(
+                    lambda d: d.execute_script("return document.getElementById('__NEXT_DATA__') !== null || document.body.innerHTML.includes('__NEXT_DATA__')")
+                )
+                logger.info(f"fetch_car_detail: Скрипт __NEXT_DATA__ загружен для car_id={car_id}")
+            except TimeoutException:
+                logger.warning(f"fetch_car_detail: Скрипт __NEXT_DATA__ не загрузился в течение 10 секунд для car_id={car_id}")
+            
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1)
+            time.sleep(2)  # Увеличено время ожидания
             driver.execute_script("window.scrollTo(0, 0);")
-            time.sleep(1)
+            time.sleep(2)  # Увеличено время ожидания
             page_source = driver.page_source
             soup = BeautifulSoup(page_source, 'html.parser')
             
@@ -396,7 +491,7 @@ class DongchediParser(BaseCarParser):
                     "uuid": str(uuid.uuid4()),  # Генерируем UUID
                 "title": None,
                 "sh_price": None,
-                "price": None,
+                "price": None,  # float - цена в wan юаней
                 "image": None,
                 "link": url,
                 "car_name": None,
@@ -410,7 +505,7 @@ class DongchediParser(BaseCarParser):
                 "series_name": None,
                 "brand_id": None,
                 "series_id": None,
-                "shop_id": None,
+                "shop_id": None,  # int - ID магазина
                 "car_id": car_id,  # Keep as string to match Go struct
                 "tags_v2": None,
                 "tags": None,
@@ -431,11 +526,11 @@ class DongchediParser(BaseCarParser):
                 # Новые поля для детальной информации
                 "has_details": False,
                 "last_detail_update": None,
-                "power": None,
-                "torque": None,
-                "acceleration": None,
-                "max_speed": None,
-                "fuel_consumption": None,
+                "power": None,  # int - мощность в л.с.
+                "torque": None,  # float - крутящий момент в Н·м
+                "acceleration": None,  # float - разгон до 100 км/ч в секундах
+                "max_speed": None,  # int - максимальная скорость в км/ч
+                "fuel_consumption": None,  # float - расход топлива л/100км
                 "emission_standard": None,
                 "length": None,
                 "width": None,
@@ -516,13 +611,68 @@ class DongchediParser(BaseCarParser):
             # Ищем скрипт с __NEXT_DATA__ по id
             script_tag = soup.find('script', {'id': '__NEXT_DATA__'})
             json_data_found = False
-            if script_tag and script_tag.string:
+            logger.info(f"fetch_car_detail: script_tag найден для car_id={car_id}: {script_tag is not None}")
+            
+            # Альтернативный поиск по содержимому, если не нашли по id
+            if not script_tag:
+                logger.info(f"fetch_car_detail: Пробуем альтернативный поиск скрипта по содержимому для car_id={car_id}")
+                script_tags = soup.find_all('script')
+                logger.info(f"fetch_car_detail: Найдено всего script тегов для car_id={car_id}: {len(script_tags)}")
+                
+                # Диагностика: выводим информацию о каждом script теге
+                for idx, script in enumerate(script_tags):
+                    script_id = script.get('id', 'нет id')
+                    script_type = script.get('type', 'нет type')
+                    script_src = script.get('src', 'нет src')
+                    has_content = script.string is not None
+                    content_preview = (script.string[:200] if script.string else 'нет содержимого')[:200]
+                    contains_next_data = '__NEXT_DATA__' in (script.string or '')
+                    logger.info(f"fetch_car_detail: Script #{idx+1} для car_id={car_id}: id={script_id}, type={script_type}, src={script_src}, has_content={has_content}, contains_next_data={contains_next_data}, preview={content_preview}")
+                    
+                    if script.string and '__NEXT_DATA__' in script.string:
+                        script_tag = script
+                        logger.info(f"fetch_car_detail: Найден скрипт с __NEXT_DATA__ по содержимому для car_id={car_id}")
+                        break
+                
+                # Если не нашли по строке, пробуем поискать по тексту через get_text()
+                if not script_tag:
+                    logger.info(f"fetch_car_detail: Не нашли скрипт по строке, пробуем через get_text() для car_id={car_id}")
+                    for script in script_tags:
+                        script_text = script.get_text()
+                        if '__NEXT_DATA__' in script_text:
+                            script_tag = script
+                            logger.info(f"fetch_car_detail: Найден скрипт с __NEXT_DATA__ через get_text() для car_id={car_id}")
+                            break
+            
+            # Проверяем, есть ли вообще __NEXT_DATA__ в HTML
+            if '__NEXT_DATA__' not in page_source:
+                logger.warning(f"fetch_car_detail: __NEXT_DATA__ НЕ найден в HTML страницы для car_id={car_id}, размер HTML: {len(page_source)} байт")
+            
+            # Пытаемся получить содержимое скрипта разными способами
+            script_content = None
+            if script_tag:
+                if script_tag.string:
+                    script_content = script_tag.string
+                    logger.info(f"fetch_car_detail: script_tag.string существует для car_id={car_id}, длина: {len(script_content)}")
+                elif script_tag.contents:
+                    script_content = ''.join(str(c) for c in script_tag.contents if isinstance(c, str))
+                    logger.info(f"fetch_car_detail: script_content получен из contents для car_id={car_id}, длина: {len(script_content) if script_content else 0}")
+                else:
+                    script_text = script_tag.get_text()
+                    if script_text:
+                        script_content = script_text
+                        logger.info(f"fetch_car_detail: script_content получен через get_text() для car_id={car_id}, длина: {len(script_content)}")
+            
+            if script_tag and script_content:
                 try:
-                    json_data = json.loads(script_tag.string)
+                    json_data = json.loads(script_content)
+                    logger.info(f"fetch_car_detail: JSON успешно распарсен для car_id={car_id}")
                     if 'props' in json_data and 'pageProps' in json_data['props']:
                         page_props = json_data['props']['pageProps']
+                        logger.info(f"fetch_car_detail: pageProps найден для car_id={car_id}, ключи: {list(page_props.keys())[:10]}")
                         if 'skuDetail' in page_props:
                             sku_detail = page_props['skuDetail']
+                            logger.info(f"fetch_car_detail: skuDetail найден для car_id={car_id}, ключи: {list(sku_detail.keys())[:15] if isinstance(sku_detail, dict) else 'not a dict'}")
                             
                             # Парсим галерею изображений
                             head_images = sku_detail.get('head_images', [])
@@ -532,17 +682,17 @@ class DongchediParser(BaseCarParser):
                                 # Сохраняем все картинки через пробел
                                 car_info['image_gallery'] = ' '.join(head_images)
                                 car_info['image_count'] = len(head_images)
+                                logger.info(f"fetch_car_detail: Найдена image_gallery для car_id={car_id}: {len(head_images)} изображений")
                             else:
                                 car_info['image'] = sku_detail.get('image', '')
+                                logger.debug(f"fetch_car_detail: head_images не найден или пуст для car_id={car_id}, используем image={car_info['image']}")
                             
                             # Парсим дополнительные данные
                             shop_info = sku_detail.get('shop_info', {})
                             other_params = sku_detail.get('other_params', [])
                             
                             # Извлекаем информацию о владельцах, пробеге и т.д. из other_params
-                            import logging
-                            detail_logger = logging.getLogger(__name__)
-                            detail_logger.info(f"fetch_car_detail: other_params для car_id={car_id}: {[(p.get('name'), p.get('value')) for p in other_params]}")
+                            logger.info(f"fetch_car_detail: other_params для car_id={car_id}: {[(p.get('name'), p.get('value')) for p in other_params]}")
                             
                             for param in other_params:
                                 param_name = param.get('name', '')
@@ -557,9 +707,13 @@ class DongchediParser(BaseCarParser):
                                 elif param_name == '上牌地':
                                     car_info['inspection_date'] = param_value
                                 elif param_name in ('上牌时间', '首次上牌', '首次上牌时间'):
+                                    logger.info(f"fetch_car_detail: Найден параметр даты регистрации для car_id={car_id}: {param_name}={param_value}")
                                     normalized_date = normalize_first_registration_date(param_value)
                                     if normalized_date:
                                         car_info['first_registration_time'] = normalized_date
+                                        logger.info(f"fetch_car_detail: first_registration_time нормализован для car_id={car_id}: {param_value} -> {normalized_date}")
+                                    else:
+                                        logger.warning(f"fetch_car_detail: Не удалось нормализовать first_registration_time для car_id={car_id}: {param_value}")
                                 elif param_name == '内饰颜色':
                                     car_info['interior_color'] = param_value
                                 elif param_name == '车身颜色':
@@ -605,7 +759,10 @@ class DongchediParser(BaseCarParser):
                                 # Характеристики электромобиля
                                 new_energy = car_config.get('new_energy_power', {})
                                 if new_energy:
-                                    car_info['acceleration'] = new_energy.get('acceleration_time', '')
+                                    # acceleration - float
+                                    accel_value = new_energy.get('acceleration_time', '')
+                                    if accel_value:
+                                        car_info['acceleration'] = parse_float_value(accel_value)
                                     car_info['fuel_type'] = new_energy.get('fuel_form', '')
                                     car_info['transmission_type'] = new_energy.get('gearbox_description', '')
                                     horsepower_value = new_energy.get('horsepower')
@@ -615,19 +772,16 @@ class DongchediParser(BaseCarParser):
                                         if any(c.isdigit() for c in horsepower_str):
                                             normalized_hp = normalize_power_value(horsepower_value)
                                             if normalized_hp:
-                                                car_info['power'] = normalized_hp
-                                            elif any(c.isdigit() for c in horsepower_str):
-                                                # Если не удалось нормализовать, но есть цифры, оставляем оригинал
-                                                car_info['power'] = horsepower_str
+                                                car_info['power'] = normalized_hp  # уже int
                                             # Если нет цифр или normalize_power_value вернул None, не устанавливаем power
                                 
                                 # Размеры из space
                                 space = car_config.get('space', {})
                                 if space:
-                                    car_info['height'] = space.get('height', '')
-                                    car_info['length'] = space.get('length', '')
-                                    car_info['width'] = space.get('width', '')
-                                    car_info['wheelbase'] = space.get('wheelbase', '')
+                                    car_info['height'] = parse_int_value(space.get('height'))
+                                    car_info['length'] = parse_int_value(space.get('length'))
+                                    car_info['width'] = parse_int_value(space.get('width'))
+                                    car_info['wheelbase'] = parse_int_value(space.get('wheelbase'))
                             
                             # Парсим engine_volume и engine_volume_ml из разных источников
                             # Примечание: для электромобилей и некоторых страниц объявлений объема может не быть
@@ -669,12 +823,16 @@ class DongchediParser(BaseCarParser):
                                 engine_volume_ml = None
                             
                             # Логируем найденные значения для отладки
-                            import logging
-                            detail_logger = logging.getLogger(__name__)
                             if engine_volume_ml:
-                                detail_logger.info(f"fetch_car_detail: Найден engine_volume_ml={engine_volume_ml} для car_id={car_id}")
+                                logger.info(f"fetch_car_detail: Найден engine_volume_ml={engine_volume_ml} для car_id={car_id}")
                             if car_info.get('first_registration_time'):
-                                detail_logger.info(f"fetch_car_detail: Найден first_registration_time={car_info.get('first_registration_time')} для car_id={car_id}")
+                                logger.info(f"fetch_car_detail: Найден first_registration_time={car_info.get('first_registration_time')} для car_id={car_id}")
+                            else:
+                                logger.debug(f"fetch_car_detail: first_registration_time не найден для car_id={car_id}")
+                            if car_info.get('image_gallery'):
+                                logger.info(f"fetch_car_detail: image_gallery заполнен для car_id={car_id}, количество изображений: {car_info.get('image_count', 0)}")
+                            else:
+                                logger.debug(f"fetch_car_detail: image_gallery не заполнен для car_id={car_id}")
                             
                             car_info.update({
                                 'title': sku_detail.get('title', ''),
@@ -702,9 +860,11 @@ class DongchediParser(BaseCarParser):
                                 'condition': sku_detail.get('car_info', {}).get('condition', ''),
                             })
                             json_data_found = True
-                except (json.JSONDecodeError, KeyError):
+                except (json.JSONDecodeError, KeyError) as e:
+                    logger.warning(f"fetch_car_detail: Ошибка при парсинге JSON для car_id={car_id}: {type(e).__name__}: {e}")
                     pass
             if not json_data_found:
+                logger.warning(f"fetch_car_detail: json_data_found=False для car_id={car_id}, используем fallback парсинг HTML")
                 title_tag = soup.find('title')
                 if title_tag:
                     car_info['title'] = title_tag.get_text().strip()
@@ -732,6 +892,88 @@ class DongchediParser(BaseCarParser):
                     content = meta_description.get('content', '')
                     if content:
                         car_info['tags_v2'] = content
+                
+                # УЛУЧШЕННЫЙ FALLBACK: Извлечение image_gallery и first_registration_time из HTML
+                logger.info(f"fetch_car_detail: Пробуем извлечь image_gallery и first_registration_time из HTML для car_id={car_id}")
+                
+                # Извлекаем изображения из HTML
+                image_selectors = [
+                    'img[src*="car"]',
+                    'img[src*="dongchedi"]',
+                    'img[class*="car"]',
+                    'img[class*="image"]',
+                    '.car-image img',
+                    '.image-gallery img',
+                    '[class*="gallery"] img',
+                    '[class*="photo"] img',
+                ]
+                images_found = []
+                for selector in image_selectors:
+                    img_elements = soup.select(selector)
+                    for img in img_elements:
+                        src = img.get('src', '') or img.get('data-src', '') or img.get('data-lazy-src', '')
+                        if src and 'http' in src and src not in images_found:
+                            images_found.append(src)
+                            logger.info(f"fetch_car_detail: Найдено изображение для car_id={car_id}: {src[:100]}")
+                
+                if images_found:
+                    car_info['image'] = images_found[0] if images_found else ''
+                    car_info['image_gallery'] = ' '.join(images_found)
+                    car_info['image_count'] = len(images_found)
+                    logger.info(f"fetch_car_detail: [FALLBACK] Извлечена image_gallery из HTML для car_id={car_id}: {len(images_found)} изображений")
+                else:
+                    logger.info(f"fetch_car_detail: [FALLBACK] Изображения не найдены в HTML для car_id={car_id} (проверено {len(image_selectors)} селекторов)")
+                
+                # Извлекаем first_registration_time из текста страницы
+                page_text = soup.get_text()
+                
+                # Паттерны для поиска даты регистрации
+                import re
+                registration_patterns = [
+                    r'上牌时间[：:]\s*(\d{4}[年\-/]\d{1,2}[月\-/]\d{1,2})',
+                    r'首次上牌[：:]\s*(\d{4}[年\-/]\d{1,2}[月\-/]\d{1,2})',
+                    r'首次上牌时间[：:]\s*(\d{4}[年\-/]\d{1,2}[月\-/]\d{1,2})',
+                    r'上牌[：:]\s*(\d{4}[年\-/]\d{1,2}[月\-/]\d{1,2})',
+                    r'(\d{4}[年\-/]\d{1,2}[月\-/]\d{1,2}).*上牌',
+                    r'注册时间[：:]\s*(\d{4}[年\-/]\d{1,2}[月\-/]\d{1,2})',
+                ]
+                
+                for pattern in registration_patterns:
+                    match = re.search(pattern, page_text)
+                    if match:
+                        date_str = match.group(1)
+                        logger.info(f"fetch_car_detail: Найдена дата регистрации в тексте для car_id={car_id}: {date_str}")
+                        normalized_date = normalize_first_registration_date(date_str)
+                        if normalized_date:
+                            car_info['first_registration_time'] = normalized_date
+                            logger.info(f"fetch_car_detail: first_registration_time нормализован из HTML для car_id={car_id}: {date_str} -> {normalized_date}")
+                            break
+                
+                # Также ищем в meta тегах
+                meta_tags = soup.find_all('meta')
+                for meta in meta_tags:
+                    content = meta.get('content', '')
+                    if content and any(keyword in content for keyword in ['上牌', '注册', '首次']):
+                        date_match = re.search(r'(\d{4}[年\-/]\d{1,2}[月\-/]\d{1,2})', content)
+                        if date_match:
+                            date_str = date_match.group(1)
+                            normalized_date = normalize_first_registration_date(date_str)
+                            if normalized_date:
+                                car_info['first_registration_time'] = normalized_date
+                                logger.info(f"fetch_car_detail: first_registration_time найден в meta для car_id={car_id}: {normalized_date}")
+                                break
+                
+                # Логируем финальный статус извлеченных данных из fallback
+                if car_info.get('image_gallery'):
+                    logger.info(f"fetch_car_detail: [FALLBACK] image_gallery заполнен для car_id={car_id}, количество изображений: {car_info.get('image_count', 0)}")
+                else:
+                    logger.debug(f"fetch_car_detail: [FALLBACK] image_gallery не заполнен для car_id={car_id}")
+                
+                if car_info.get('first_registration_time'):
+                    logger.info(f"fetch_car_detail: [FALLBACK] first_registration_time заполнен для car_id={car_id}: {car_info.get('first_registration_time')}")
+                else:
+                    logger.info(f"fetch_car_detail: [FALLBACK] first_registration_time не заполнен для car_id={car_id} (проверено {len(registration_patterns)} паттернов в тексте и {len(meta_tags)} meta тегов)")
+            
             page_text = soup.get_text()
             # Индикаторы того, что машина ПРОДАНА (недоступна)
             # Убрали "sale" - это может означать "for sale" (продаётся), а не "продано"
@@ -801,15 +1043,15 @@ class DongchediParser(BaseCarParser):
                     except:
                         car_info[key] = str(car_info[key])
 
-            # Ensure price is properly set from sh_price
+            # Ensure price is properly set from sh_price (convert to float)
             if car_info.get('sh_price'):
-                # Convert price to a numeric value if it's a string with units
-                price_str = str(car_info['sh_price'])
-                # Remove any non-numeric characters except decimal point
-                import re
-                price_numeric = re.sub(r'[^\d.]', '', price_str)
-                if price_numeric:
-                    car_info['price'] = price_numeric
+                price_value = parse_float_value(car_info['sh_price'])
+                if price_value is not None:
+                    car_info['price'] = price_value
+            
+            # Convert shop_id to int
+            if car_info.get('shop_id'):
+                car_info['shop_id'] = parse_int_value(car_info['shop_id'])
 
             # Преобразуем car_mileage в mileage (числовое значение в км)
             if 'car_mileage' in car_info and car_info['car_mileage'] is not None:
@@ -833,8 +1075,7 @@ class DongchediParser(BaseCarParser):
                                 car_info['mileage'] = int(float(mileage_numeric))
                 except Exception as e:
                     # Логируем ошибку для отладки, но не прерываем обработку
-                    import logging
-                    logging.debug(f"Ошибка парсинга mileage в fetch_car_detail '{car_info.get('car_mileage')}': {e}")
+                    logger.debug(f"Ошибка парсинга mileage в fetch_car_detail '{car_info.get('car_mileage')}': {e}")
                     pass
 
             car_obj = DongchediCar(**{k: v for k, v in car_info.items() if k in DongchediCar.__fields__})
@@ -918,8 +1159,6 @@ class DongchediParser(BaseCarParser):
         Парсит технические характеристики машины по car_id через страницу параметров.
         Возвращает (dict | None, meta: dict)
         """
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info(f"fetch_car_specifications: ВХОД в функцию для car_id={car_id}")
         import time
         import random
@@ -985,19 +1224,74 @@ class DongchediParser(BaseCarParser):
             driver.set_page_load_timeout(60)  # 60 секунд на загрузку страницы
             driver.implicitly_wait(10)  # 10 секунд неявного ожидания
             driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            driver.get(url)
-            time.sleep(random.uniform(2, 3))
+            
+            # Обертка для безопасной работы с driver
+            def safe_driver_operation(operation, description="", check_session=True):
+                """Безопасное выполнение операции с driver"""
+                try:
+                    if driver is None:
+                        raise WebDriverException("Driver is None")
+                    # Проверяем что driver все еще активен (только если нужно)
+                    if check_session:
+                        try:
+                            # Используем более легкую проверку - просто пытаемся выполнить операцию
+                            # Если сессия потеряна, операция сама выбросит исключение
+                            pass
+                        except Exception:
+                            raise WebDriverException("Driver session is lost")
+                    # Выполняем операцию напрямую - она сама выбросит ConnectionRefusedError если сессия потеряна
+                    return operation()
+                except (ConnectionRefusedError, OSError) as e:
+                    # Специальная обработка для ConnectionRefusedError - это означает что Chrome упал
+                    logger.error(f"fetch_car_specifications: Chrome процесс упал при {description} для car_id={car_id}: {e}")
+                    raise WebDriverException(f"Chrome process crashed: {e}")
+                except (WebDriverException, Exception) as e:
+                    logger.warning(f"fetch_car_specifications: Ошибка при выполнении {description} для car_id={car_id}: {e}")
+                    raise
+            
+            # Получаем page_source максимально быстро после загрузки, чтобы минимизировать риск потери сессии
             try:
-                WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                logger.info(f"fetch_car_specifications: Загрузка страницы для car_id={car_id}")
+                safe_driver_operation(lambda: driver.get(url), "driver.get()", check_session=False)
+                logger.info(f"fetch_car_specifications: Страница загружена для car_id={car_id}")
+            except Exception as e:
+                logger.error(f"fetch_car_specifications: Не удалось загрузить страницу для car_id={car_id}: {e}", exc_info=True)
+                raise
+            
+            time.sleep(random.uniform(1, 2))  # Уменьшено время ожидания
+            
+            try:
+                logger.info(f"fetch_car_specifications: Ожидание body для car_id={car_id}")
+                safe_driver_operation(
+                    lambda: WebDriverWait(driver, 10).until(
+                        EC.presence_of_element_located((By.TAG_NAME, "body"))
+                    ),
+                    "wait for body",
+                    check_session=False
                 )
-            except TimeoutException:
-                pass
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1)
-            driver.execute_script("window.scrollTo(0, 0);")
-            time.sleep(1)
-            page_source = driver.page_source
+                logger.info(f"fetch_car_specifications: Body найден для car_id={car_id}")
+            except (TimeoutException, Exception) as e:
+                logger.warning(f"fetch_car_specifications: Timeout ожидания body для car_id={car_id}: {e}, продолжаем")
+            
+            # Получаем page_source СРАЗУ после загрузки, до любых других операций
+            # Это минимизирует риск потери сессии между операциями
+            try:
+                logger.info(f"fetch_car_specifications: Получение page_source для car_id={car_id}")
+                page_source = safe_driver_operation(lambda: driver.page_source, "driver.page_source", check_session=False)
+                logger.info(f"fetch_car_specifications: page_source получен для car_id={car_id}, размер: {len(page_source)} байт")
+            except Exception as e:
+                logger.error(f"fetch_car_specifications: Не удалось получить page_source для car_id={car_id}: {e}", exc_info=True)
+                raise
+            
+            # Скролл выполняем ПОСЛЕ получения page_source (это не критично для парсинга)
+            try:
+                safe_driver_operation(lambda: driver.execute_script("window.scrollTo(0, document.body.scrollHeight);"), "scroll down", check_session=False)
+                time.sleep(0.5)
+                safe_driver_operation(lambda: driver.execute_script("window.scrollTo(0, 0);"), "scroll up", check_session=False)
+                time.sleep(0.5)
+            except Exception as e:
+                # Скролл не критичен, мы уже получили page_source
+                logger.debug(f"fetch_car_specifications: Ошибка при скролле для car_id={car_id}: {e} (не критично, page_source уже получен)")
             logger.info(f"fetch_car_specifications: page_source получен для car_id={car_id}, размер: {len(page_source)} байт")
             soup = BeautifulSoup(page_source, 'html.parser')
             logger.info(f"fetch_car_specifications: BeautifulSoup создан для car_id={car_id}")
@@ -1169,29 +1463,45 @@ class DongchediParser(BaseCarParser):
                             '日间行车灯': 'daytime_running',
                         }
                         
-                        if label in field_mapping:
-                            field_name = field_mapping[label]
-                            clean_value = value.strip()
-                            if field_name == 'power':
-                                logger.info(f"Raw power value from HTML: '{clean_value}' for label '{label}'")
-                                # Проверяем, что значение содержит цифры перед обработкой
-                                if not any(c.isdigit() for c in clean_value):
-                                    logger.warning(f"Power value '{clean_value}' does not contain digits, skipping")
-                                    continue  # Пропускаем это поле
-                                # Если label содержит '马力' или 'Ps', это уже л.с., не конвертируем
-                                is_already_hp = '马力' in label or 'Ps' in label
-                                normalized_hp = normalize_power_value(clean_value, assume_kw=not is_already_hp)
-                                logger.info(f"Normalized power value: '{normalized_hp}' for label '{label}' (is_already_hp={is_already_hp})")
-                                if normalized_hp:
-                                    clean_value = normalized_hp
-                                else:
-                                    # Если не удалось нормализовать, проверяем наличие цифр
-                                    if any(c.isdigit() for c in clean_value):
-                                        # Оставляем оригинальное значение, если в нем есть цифры
-                                        pass
-                                    else:
-                                        logger.warning(f"Power value '{clean_value}' is invalid (no digits), skipping")
-                                        continue  # Пропускаем это поле
+                    if label in field_mapping:
+                        field_name = field_mapping[label]
+                        clean_value = value.strip()
+                        
+                        # Преобразуем в числовые типы в зависимости от поля
+                        if field_name == 'power':
+                            logger.info(f"Raw power value from HTML: '{clean_value}' for label '{label}'")
+                            # Проверяем, что значение содержит цифры перед обработкой
+                            if not any(c.isdigit() for c in clean_value):
+                                logger.warning(f"Power value '{clean_value}' does not contain digits, skipping")
+                                continue  # Пропускаем это поле
+                            # Если label содержит '马力' или 'Ps', это уже л.с., не конвертируем
+                            is_already_hp = '马力' in label or 'Ps' in label
+                            normalized_hp = normalize_power_value(clean_value, assume_kw=not is_already_hp)
+                            logger.info(f"Normalized power value: '{normalized_hp}' for label '{label}' (is_already_hp={is_already_hp})")
+                            if normalized_hp:
+                                specs[field_name] = normalized_hp  # уже int
+                            else:
+                                logger.warning(f"Power value '{clean_value}' is invalid, skipping")
+                            continue
+                        elif field_name == 'max_speed':
+                            # int - максимальная скорость в км/ч
+                            specs[field_name] = parse_int_value(clean_value)
+                        elif field_name == 'electric_range':
+                            # int - запас хода в км
+                            specs[field_name] = parse_int_value(clean_value)
+                        elif field_name == 'engine_volume_ml':
+                            # int - объём двигателя в мл
+                            specs[field_name] = parse_int_value(clean_value)
+                        elif field_name == 'door_count':
+                            # int - количество дверей
+                            specs[field_name] = parse_int_value(clean_value)
+                        elif field_name in ('length', 'width', 'height', 'wheelbase', 'curb_weight'):
+                            # Размеры и вес - int (SMALLINT в БД)
+                            specs[field_name] = parse_int_value(clean_value)
+                        elif field_name in ('torque', 'acceleration', 'fuel_consumption', 'battery_capacity'):
+                            # float - числовые характеристики с дробной частью
+                            specs[field_name] = parse_float_value(clean_value)
+                        else:
                             specs[field_name] = clean_value
                             
                             # Обработка специальных случаев
@@ -1200,15 +1510,31 @@ class DongchediParser(BaseCarParser):
                                 try:
                                     parts = value.split('x')
                                     if len(parts) == 3:
-                                        specs['length'] = parts[0]
-                                        specs['width'] = parts[1]
-                                        specs['height'] = parts[2]
+                                        specs['length'] = parse_int_value(parts[0])
+                                        specs['width'] = parse_int_value(parts[1])
+                                        specs['height'] = parse_int_value(parts[2])
                                 except:
                                     pass
                             
                 except Exception as row_e:
                     logger.debug(f"Ошибка при парсинге строки таблицы для car_id={car_id}: {row_e}")
                     continue
+            
+            # Fallback: если power не найден, пробуем извлечь из поля engine_type (发动机)
+            # Формат: "2.0T 250马力 H4" или "3.0T 150马力 L4"
+            if 'power' not in specs and 'engine_type' in specs:
+                engine_desc = specs.get('engine_type', '')
+                hp_match = re.search(r'(\d+)\s*马力', engine_desc)
+                if hp_match:
+                    power_from_engine = parse_int_value(hp_match.group(1))
+                    logger.info(f"Fallback: Power extracted from engine_type '{engine_desc}': {power_from_engine} for car_id={car_id}")
+                    specs['power'] = power_from_engine
+            
+            # Логируем итоговые specs
+            if 'power' in specs:
+                logger.info(f"Final power in specs: {specs['power']} for car_id={car_id}")
+            else:
+                logger.warning(f"Power NOT found in specs for car_id={car_id}, engine_type={specs.get('engine_type', 'N/A')}")
         except Exception as e:
             # В случае ошибки логируем и возвращаем пустой словарь
             logger.error(f"Ошибка в fetch_car_specifications для car_id={car_id}: {e}", exc_info=True)
@@ -1217,13 +1543,21 @@ class DongchediParser(BaseCarParser):
             if 'soup' not in locals() or soup is None:
                 soup = None
         finally:
-            # Гарантируем закрытие драйвера
+            # Гарантируем закрытие драйвера с проверкой валидности сессии
             if driver:
                 try:
-                    driver.quit()
-                except Exception:
-                    pass
-                driver = None
+                    # Проверяем что driver еще активен перед закрытием
+                    try:
+                        driver.current_url  # Проверка что сессия жива
+                        driver.quit()
+                    except (ConnectionRefusedError, WebDriverException, Exception):
+                        # Driver уже закрыт или сессия потеряна, просто помечаем как None
+                        logger.debug(f"fetch_car_specifications: Driver уже закрыт для car_id={car_id}")
+                        pass
+                except Exception as e:
+                    logger.debug(f"fetch_car_specifications: Ошибка при закрытии driver для car_id={car_id}: {e}")
+                finally:
+                    driver = None
             # Удаляем временную директорию
             try:
                 if temp_dir and os.path.exists(temp_dir):
@@ -1258,8 +1592,6 @@ class DongchediParser(BaseCarParser):
         import datetime
         
         # Получаем детальную информацию
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info(f"Starting enhance for sku_id={sku_id}, car_id={car_id}")
         try:
             detail_car, _ = self.fetch_car_detail(sku_id)
@@ -1304,11 +1636,18 @@ class DongchediParser(BaseCarParser):
             if hasattr(detail_car, 'engine_volume_ml'):
                 engine_volume_ml_from_detail = getattr(detail_car, 'engine_volume_ml')
                 logger.debug(f"enhance_car_with_details: engine_volume_ml из detail_car для sku_id={sku_id}: {repr(engine_volume_ml_from_detail)} (type: {type(engine_volume_ml_from_detail)})")
-                if engine_volume_ml_from_detail is not None and str(engine_volume_ml_from_detail).strip():
-                    car_obj.engine_volume_ml = engine_volume_ml_from_detail
-                    logger.info(f"engine_volume_ml from detail_car: {engine_volume_ml_from_detail} for sku_id={sku_id}")
-                else:
-                    logger.debug(f"engine_volume_ml из detail_car пустое или None для sku_id={sku_id}")
+                # Преобразуем в int если это строка
+                if engine_volume_ml_from_detail is not None:
+                    if isinstance(engine_volume_ml_from_detail, int):
+                        car_obj.engine_volume_ml = engine_volume_ml_from_detail
+                        logger.info(f"engine_volume_ml from detail_car: {engine_volume_ml_from_detail} for sku_id={sku_id}")
+                    else:
+                        parsed_value = parse_int_value(engine_volume_ml_from_detail)
+                        if parsed_value is not None:
+                            car_obj.engine_volume_ml = parsed_value
+                            logger.info(f"engine_volume_ml from detail_car (parsed): {parsed_value} for sku_id={sku_id}")
+                        else:
+                            logger.debug(f"engine_volume_ml из detail_car не удалось распарсить для sku_id={sku_id}")
             
             # Логируем first_registration_time из detail_car
             if hasattr(detail_car, 'first_registration_time'):
@@ -1318,6 +1657,10 @@ class DongchediParser(BaseCarParser):
                     logger.info(f"first_registration_time from detail_car: {first_reg_time} for sku_id={sku_id}")
             
             # Копируем детальную информацию
+            # Поля, которые нужно преобразовать в числовые типы
+            int_fields = {'power', 'max_speed', 'electric_range', 'door_count'}
+            float_fields = {'torque', 'acceleration', 'fuel_consumption', 'battery_capacity'}
+            
             for field in ['power', 'torque', 'acceleration', 'max_speed', 'fuel_consumption',
                          'emission_standard', 'length', 'width', 'height', 'wheelbase',
                          'curb_weight', 'gross_weight', 'engine_type', 'engine_code',
@@ -1341,40 +1684,51 @@ class DongchediParser(BaseCarParser):
                 raw_value = getattr(detail_car, field)
                 if raw_value is None:
                     continue
+                
+                # Логируем важные поля
+                if field == 'image_gallery':
+                    logger.info(f"enhance_car_with_details: Копируем image_gallery для sku_id={sku_id}: {len(raw_value.split()) if raw_value else 0} изображений")
+                elif field == 'first_registration_time':
+                    logger.info(f"enhance_car_with_details: Копируем first_registration_time для sku_id={sku_id}: {raw_value}")
+                
                 if field == 'power':
+                    # Используем normalize_power_value который теперь возвращает int
                     normalized_hp = normalize_power_value(raw_value)
                     if normalized_hp:
                         setattr(car_obj, field, normalized_hp)
-                    else:
-                        # Не устанавливаем power, если normalize_power_value вернул None
-                        # Это означает, что значение невалидно
-                        pass
+                elif field in int_fields:
+                    # Преобразуем в int
+                    parsed_value = parse_int_value(raw_value) if not isinstance(raw_value, int) else raw_value
+                    if parsed_value is not None:
+                        setattr(car_obj, field, parsed_value)
+                elif field in float_fields:
+                    # Преобразуем в float
+                    parsed_value = parse_float_value(raw_value) if not isinstance(raw_value, float) else raw_value
+                    if parsed_value is not None:
+                        setattr(car_obj, field, parsed_value)
                 else:
                     setattr(car_obj, field, raw_value)
         
         # Добавляем технические характеристики
         for field, value in specs.items():
             if hasattr(car_obj, field):
-                # Для power проверяем валидность - должны быть цифры
+                # Для power проверяем валидность - должны быть числом
                 if field == 'power':
-                    # Проверяем, что значение содержит хотя бы одну цифру
-                    value_str = str(value).strip() if value is not None else ''
-                    if value_str and any(c.isdigit() for c in value_str):
-                        setattr(car_obj, field, value_str)
-                        logger.info(f"Power from specs: {value_str} for sku_id={sku_id}")
+                    if isinstance(value, int) and value > 0:
+                        setattr(car_obj, field, value)
+                        logger.info(f"Power from specs: {value} for sku_id={sku_id}")
                     else:
-                        logger.warning(f"Invalid power value from specs: '{value_str}' for sku_id={sku_id}, skipping")
+                        logger.warning(f"Invalid power value from specs: '{value}' for sku_id={sku_id}, skipping")
                 elif field == 'engine_volume_ml':
                     # engine_volume_ml: используем значение из specs только если его еще нет из detail_car
                     # Приоритет отдаем detail_car, так как там более точное значение
                     existing_value = getattr(car_obj, field, None)
-                    if not existing_value or (isinstance(existing_value, str) and not existing_value.strip()):
-                        value_str = str(value).strip() if value is not None else ''
-                        if value_str:
-                            setattr(car_obj, field, value_str)
-                            logger.info(f"engine_volume_ml from specs: {value_str} for sku_id={sku_id}")
+                    if not existing_value:
+                        if isinstance(value, int) and value > 0:
+                            setattr(car_obj, field, value)
+                            logger.info(f"engine_volume_ml from specs: {value} for sku_id={sku_id}")
                         else:
-                            logger.debug(f"engine_volume_ml from specs пустое, пропускаем для sku_id={sku_id}")
+                            logger.debug(f"engine_volume_ml from specs пустое или невалидное, пропускаем для sku_id={sku_id}")
                     else:
                         logger.info(f"engine_volume_ml уже установлен из detail_car ({existing_value}), не перезаписываем значением из specs ({value}) для sku_id={sku_id}")
                 else:
@@ -1387,40 +1741,18 @@ class DongchediParser(BaseCarParser):
             power_value = getattr(car_obj, 'power')
             logger.info(f"Final power value: {power_value} for sku_id={sku_id}")
         
-        # Проверяем валидность power - должны быть цифры
-        # Это более надежная проверка, чем список невалидных значений
-        power_str = str(power_value).strip() if power_value is not None else ''
-        has_power = (
-            power_value is not None 
-            and power_str != '' 
-            and any(c.isdigit() for c in power_str)  # Должна быть хотя бы одна цифра
-        )
-        logger.info(f"has_power={has_power} for sku_id={sku_id}, power_value={power_value}, power_str={power_str}")
+        # Проверяем валидность power - должен быть int > 0
+        has_power = isinstance(power_value, int) and power_value > 0
+        logger.info(f"has_power={has_power} for sku_id={sku_id}, power_value={power_value}")
         
-        # Проверяем, не является ли машина электромобилем
-        car_dict = car_obj.dict() if hasattr(car_obj, 'dict') else {}
-        
-        # Логируем ключевые поля для отладки is_electric
-        logger.info(f"is_electric check for sku_id={sku_id}: fuel_type='{car_dict.get('fuel_type')}', "
-                   f"battery_capacity='{car_dict.get('battery_capacity')}', "
-                   f"electric_range='{car_dict.get('electric_range')}', "
-                   f"engine_volume='{car_dict.get('engine_volume')}'")
-        
-        is_electric = is_electric_car(car_dict)
-        logger.info(f"is_electric={is_electric} for sku_id={sku_id}")
-        
-        # Устанавливаем флаги только если power был успешно распарсен, содержит цифры и это не электромобиль
-        if has_power and not is_electric:
+        # Устанавливаем флаги только если power был успешно распарсен и содержит цифры
+        if has_power:
             car_obj.has_details = True
             car_obj.last_detail_update = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             logger.info(f"Setting has_details=True for sku_id={sku_id}")
         else:
-            # Если power не был распарсен, не содержит цифр или это электромобиль, оставляем has_details = False
+            # Если power не был распарсен или не содержит цифр, оставляем has_details = False
             car_obj.has_details = False
-            # Не обновляем last_detail_update, если парсинг не удался
-            if is_electric:
-                logger.info(f"Electric car detected for sku_id={sku_id}, powertrain_type will be set in datahub")
-            elif not has_power:
-                logger.info(f"No power found for sku_id={sku_id}, has_details=False")
+            logger.info(f"No power found for sku_id={sku_id}, has_details=False")
         
         return car_obj

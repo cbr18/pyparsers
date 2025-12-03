@@ -3,12 +3,12 @@ import time
 import random
 import re
 import logging
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 from .models.car import Che168Car
 from .models.response import Che168ApiResponse, Che168Data
 from ..base_parser import BaseCarParser
 from ..date_utils import normalize_first_registration_date
-from ..dongchedi.parser import normalize_power_value
+from ..dongchedi.parser import normalize_power_value, parse_int_value, parse_float_value
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -194,17 +194,17 @@ class Che168Parser(BaseCarParser):
                 # УМЕНЬШАЕМ ЗАДЕРЖКУ ДЛЯ УСКОРЕНИЯ
                 time.sleep(random.uniform(1, 2))  # Было 2-4, стало 1-2
 
-                # Ожидаем загрузки страницы
-                if not self._wait_for_page_load():
-                    return Che168ApiResponse(
-                        data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
-                        message=f"Страница {page} не найдена",
-                        status=404
-                    )
-
-                # Прокручиваем страницу
+                # Ожидаем загрузки страницы (увеличиваем timeout для медленных страниц)
+                page_loaded = self._wait_for_page_load(timeout=30)
+                
+                # Прокручиваем страницу (даже если элементы не найдены сразу)
                 self._scroll_page()
-
+                
+                # Если элементы не были найдены сразу, пробуем еще раз после скролла
+                if not page_loaded:
+                    logger.warning(f"Страница {page}: элементы не найдены сразу, повторная проверка после скролла")
+                    page_loaded = self._wait_for_page_load(timeout=10)
+                
                 # Получаем HTML после полной загрузки
                 page_source = self.driver.page_source
 
@@ -222,11 +222,13 @@ class Che168Parser(BaseCarParser):
                     # Фильтруем рекламные блоки (car_id == None)
                     cars = [car for car in cars if car.car_id is not None]
 
-                    # Если данных нет или список пуст, считаем что страницы не существует
+                    # Если данных нет или список пуст, возвращаем пустой результат
+                    # (но не считаем это ошибкой - возможно страница действительно пустая)
                     if not cars:
+                        logger.warning(f"Страница {page}: не найдено машин после парсинга (элементов найдено: {len(cars_elements)})")
                         return Che168ApiResponse(
                             data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
-                            message=f"Страница {page} не найдена",
+                            message=f"Страница {page} не содержит машин",
                             status=404
                         )
 
@@ -601,6 +603,11 @@ class Che168Parser(BaseCarParser):
         # Формируем данные для Che168Car
         # При парсинге списка машин is_available по умолчанию True
         # Детальная проверка доступности выполняется в fetch_car_detail
+        
+        # Преобразуем shop_id в int
+        shop_id_raw = attrs.get('dealerid')
+        shop_id = parse_int_value(shop_id_raw) if shop_id_raw else None
+        
         data = {
             'title': title,
             'sh_price': sh_price,
@@ -614,7 +621,7 @@ class Che168Parser(BaseCarParser):
             'series_name': series_name,
             'brand_id': int(attrs.get('brandid')) if attrs.get('brandid') and attrs.get('brandid').isdigit() else None,
             'series_id': int(attrs.get('seriesid')) if attrs.get('seriesid') and attrs.get('seriesid').isdigit() else None,
-            'shop_id': attrs.get('dealerid'),
+            'shop_id': shop_id,  # int - ID магазина
             'car_id': int(attrs.get('infoid')) if attrs.get('infoid') and attrs.get('infoid').isdigit() else None,
             'tags_v2': ', '.join(tags) if tags else None,
             'is_available': True,  # По умолчанию True при парсинге списка
@@ -820,7 +827,7 @@ class Che168Parser(BaseCarParser):
                                                 power_match = re.search(r'(\d+)\s*马力', engine_text)
                                                 if power_match:
                                                     raw_power = power_match.group(1) + '马力'
-                                                    normalized_power = normalize_power_value(raw_power)
+                                                    normalized_power = normalize_power_value(raw_power)  # возвращает int
                                                     if normalized_power:
                                                         car_info['power'] = normalized_power
                                                         logger.info(f"che168: Найдена мощность из engine_info: {raw_power} -> {normalized_power} л.с.")
@@ -832,7 +839,7 @@ class Che168Parser(BaseCarParser):
                                             if 'power' in car_data and not car_info.get('power'):
                                                 raw_power = str(car_data['power'])
                                                 logger.debug(f"che168: Найдено поле power: {raw_power}")
-                                                normalized_power = normalize_power_value(raw_power)
+                                                normalized_power = normalize_power_value(raw_power)  # возвращает int
                                                 if normalized_power:
                                                     car_info['power'] = normalized_power
                                                     logger.info(f"che168: Найдена мощность из power: {raw_power} -> {normalized_power} л.с.")
@@ -841,7 +848,8 @@ class Che168Parser(BaseCarParser):
                                             if 'shop_name' in shop_data:
                                                 car_info['car_source_city_name'] = shop_data['shop_name']
                                             if 'shop_id' in shop_data:
-                                                car_info['shop_id'] = shop_data['shop_id']
+                                                # Преобразуем shop_id в int
+                                                car_info['shop_id'] = parse_int_value(shop_data['shop_id'])
                                             if 'shop_address' in shop_data:
                                                 car_info['car_source_city_name'] = shop_data['shop_address']
                                         if 'head_images' in sku_detail and sku_detail['head_images']:
@@ -955,11 +963,11 @@ class Che168Parser(BaseCarParser):
                     pass
             dealer_input = soup.find('input', {'id': 'car_dealerid'})
             if dealer_input and dealer_input.get('value'):
-                car_info['shop_id'] = dealer_input.get('value')
+                car_info['shop_id'] = parse_int_value(dealer_input.get('value'))
             else:
                 url_parts = clean_url.split('/')
                 if len(url_parts) >= 4:
-                    car_info['shop_id'] = url_parts[3]
+                    car_info['shop_id'] = parse_int_value(url_parts[3])
             img_elements = soup.find_all('img')
             for img in img_elements:
                 src = img.get('src') or img.get('data-src')
@@ -1051,7 +1059,7 @@ class Che168Parser(BaseCarParser):
                                             raw_power = raw_power + 'kW'
                                         else:
                                             raw_power = raw_power + '马力'
-                                        normalized_power = normalize_power_value(raw_power)
+                                        normalized_power = normalize_power_value(raw_power)  # возвращает int
                                         if normalized_power:
                                             car_info['power'] = normalized_power
                                             logger.info(f"che168: Найдена мощность из HTML ({label}): {raw_power} -> {normalized_power} л.с.")
@@ -1072,7 +1080,7 @@ class Che168Parser(BaseCarParser):
                             match = re.search(pattern, page_text)
                             if match:
                                 raw_power = match.group(1) + '马力'
-                                normalized_power = normalize_power_value(raw_power)
+                                normalized_power = normalize_power_value(raw_power)  # возвращает int
                                 if normalized_power:
                                     car_info['power'] = normalized_power
                                     logger.info(f"che168: Найдена мощность из текста страницы: {raw_power} -> {normalized_power} л.с.")
@@ -1093,11 +1101,48 @@ class Che168Parser(BaseCarParser):
             # Меняем на False только если явно нашли индикатор продажи
             is_available = True
             page_text_lower = page_text.lower()
-            for indicator in unavailable_indicators:
-                if indicator.lower() in page_text_lower:
-                    is_available = False
-                    logger.debug(f"che168: найден индикатор недоступности '{indicator}'")
+            
+            # Ищем индикаторы недоступности в тексте страницы
+            # Сначала проверяем в специфичных элементах (статусы, заголовки)
+            found_unavailable = False
+            status_elements = soup.find_all(['div', 'span', 'p', 'h1', 'h2', 'h3', 'h4', 'strong', 'b'], 
+                                             class_=re.compile(r'status|sold|unavailable|sale|sold-out|tag|badge', re.I))
+            for elem in status_elements:
+                elem_text = elem.get_text().lower()
+                for indicator in unavailable_indicators:
+                    if indicator.lower() in elem_text:
+                        found_unavailable = True
+                        logger.info(f"che168: найден индикатор недоступности '{indicator}' в элементе статуса")
+                        break
+                if found_unavailable:
                     break
+            
+            # Если не нашли в специфичных элементах, проверяем общий текст страницы
+            # Используем более точные паттерны для избежания ложных срабатываний
+            if not found_unavailable:
+                for indicator in unavailable_indicators:
+                    indicator_lower = indicator.lower()
+                    # Ищем индикатор в контексте, который указывает на статус машины
+                    # Паттерны для более точного поиска
+                    context_patterns = [
+                        r'状态[：:]\s*' + re.escape(indicator),
+                        r'车辆状态[：:]\s*' + re.escape(indicator),
+                        r'销售状态[：:]\s*' + re.escape(indicator),
+                        r'已' + re.escape(indicator),  # "已售", "已下架" и т.д.
+                        r'\b' + re.escape(indicator) + r'\b',  # Точное совпадение слова
+                    ]
+                    for pattern in context_patterns:
+                        if re.search(pattern, page_text, re.IGNORECASE):
+                            found_unavailable = True
+                            logger.info(f"che168: найден индикатор недоступности '{indicator}' в тексте страницы")
+                            break
+                    if found_unavailable:
+                        break
+            
+            if found_unavailable:
+                is_available = False
+                logger.info(f"che168: машина помечена как недоступная (car_id={car_info.get('car_id')})")
+            
             car_info['is_available'] = is_available
         except Exception as e:
             # Логируем ошибку

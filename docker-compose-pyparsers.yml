@@ -9,11 +9,8 @@ services:
     container_name: carcatch-pyparsers
     env_file:
       - ./pyparsers/.env
-    environment:
-      # Адрес основного сервера с datahub (для отправки результатов)
-      - DATAHUB_URL=http://${MAIN_SERVER_IP}:8080
-      # IP адреса которым разрешён доступ (через запятую)
-      - ALLOWED_IPS=${ALLOWED_IPS}
+    # Все переменные окружения берутся из ./pyparsers/.env
+    # (DATAHUB_URL, ALLOWED_IPS и др.)
     ports:
       # Открываем порт наружу для запросов от основного сервера
       - "5000:5000"

@@ -14,11 +14,11 @@ class Che168Car(BaseModel):
     series_name: Optional[str] = None
     brand_id: Optional[int] = None
     series_id: Optional[int] = None
-    shop_id: Optional[str] = None
+    shop_id: Optional[int] = None  # ID магазина - INTEGER
     car_id: Optional[int] = None
     tags_v2: Optional[str] = None
     is_available: Optional[bool] = True
-    recycling_fee: Optional[str] = None  # Утильсбор
-    customs_duty: Optional[str] = None  # Таможенный сбор
+    recycling_fee: Optional[int] = None  # Утильсбор в рублях - INTEGER
+    customs_duty: Optional[int] = None  # Таможенная пошлина в рублях - INTEGER
     first_registration_time: Optional[str] = None  # Дата первой регистрации в формате YYYY-MM-DD
-    power: Optional[str] = None  # Мощность в л.с. 
+    power: Optional[int] = None  # Мощность в л.с. - SMALLINT 

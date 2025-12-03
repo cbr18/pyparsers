@@ -55,4 +55,4 @@ ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
 
 EXPOSE 5000
 
-CMD ["uvicorn", "async_api_server:app", "--host", "0.0.0.0", "--port", "5000", "--timeout-keep-alive", "3600"]
+CMD ["granian", "--interface", "asgi", "--host", "0.0.0.0", "--port", "5000", "--http1-keep-alive", "async_api_server:app"]

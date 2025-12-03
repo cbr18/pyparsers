@@ -6,13 +6,69 @@ API-based парсер детальной информации с che168.com
 import re
 import logging
 import requests
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 from .models.detailed_car import Che168DetailedCar
 from api.date_utils import normalize_first_registration_date
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _parse_int(value: Union[str, int, float, None]) -> Optional[int]:
+    """Безопасное преобразование в int."""
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    try:
+        match = re.search(r'(\d+)', str(value))
+        if match:
+            return int(match.group(1))
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+def _parse_float(value: Union[str, int, float, None]) -> Optional[float]:
+    """Безопасное преобразование в float."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        match = re.search(r'([\d.,]+)', str(value))
+        if match:
+            return float(match.group(1).replace(',', '.'))
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+def _convert_circle_to_bool(value: Union[str, None]) -> Optional[bool]:
+    """
+    Конвертирует символы ● (закрашенный круг) в True, 
+    а незакрашенный круг (○) в False.
+    
+    Args:
+        value: Значение для конвертации (может быть str или None)
+        
+    Returns:
+        bool или None
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        # Закрашенный круг ● -> True
+        if '●' in value:
+            return True
+        # Незакрашенный круг ○ -> False
+        if '○' in value:
+            return False
+    return None
 
 
 class Che168DetailedParserAPI:
@@ -37,6 +93,7 @@ class Che168DetailedParserAPI:
         '排量(L)': 'engine_volume',
         '最大马力(Ps)': 'power',
         '最大功率(kW)': 'power_kw',
+        '电动机(Ps)': 'power',  # Мощность электромотора для EV
         '最大扭矩(N·m)': 'torque',
         '最大功率转速(rpm)': 'power_rpm',
         '最大扭矩转速(rpm)': 'torque_rpm',
@@ -132,8 +189,12 @@ class Che168DetailedParserAPI:
         # Электро
         '电池能量(kWh)': 'battery_capacity',
         'NEDC纯电续航里程(km)': 'electric_range',
+        'CLTC纯电续航里程(km)': 'electric_range',
         '快充时间(小时)': 'fast_charge_time',
         '慢充时间(小时)': 'charging_time',
+        '电动机总功率(kW)': 'power_kw',  # Общая мощность электромоторов в кВт
+        '电动机总扭矩(N·m)': 'torque',  # Общий крутящий момент электромоторов
+        '能源类型': 'fuel_type',  # Тип топлива/энергии (纯电动 = электро)
     }
     
     def __init__(self, timeout: int = 30):
@@ -195,7 +256,7 @@ class Che168DetailedParserAPI:
                 if engine_info:
                     power_match = re.search(r'(\d+)\s*马力', engine_info)
                     if power_match:
-                        extracted['power'] = power_match.group(1)
+                        extracted['power'] = _parse_int(power_match.group(1))  # int
                         logger.info(f"[API] Извлечено power из engine_info: {extracted['power']}")
             
             # Проверяем валидность данных
@@ -269,33 +330,65 @@ class Che168DetailedParserAPI:
                     if name in self.API_FIELD_MAPPING:
                         field_name = self.API_FIELD_MAPPING[name]
                         
-                        # Специальная обработка для некоторых полей
+                        # Специальная обработка для некоторых полей с числовыми типами
                         if field_name == 'power':
-                            # Мощность в л.с.
-                            extracted[field_name] = content
-                            logger.debug(f"[API] power: {content}")
+                            # Мощность в л.с. - int
+                            power_val = _parse_int(content)
+                            if power_val:
+                                extracted[field_name] = power_val
+                                logger.debug(f"[API] power: {power_val}")
                         elif field_name == 'power_kw':
                             # Мощность в кВт - конвертируем в л.с. если нет power
                             if 'power' not in extracted:
                                 try:
                                     kw = float(content)
                                     hp = int(kw * 1.35962)
-                                    extracted['power'] = str(hp)
+                                    extracted['power'] = hp  # int
                                     logger.debug(f"[API] power (из kW): {hp}")
                                 except (ValueError, TypeError):
                                     pass
+                        elif field_name == 'torque':
+                            # Крутящий момент - float
+                            extracted[field_name] = _parse_float(content)
+                        elif field_name == 'acceleration':
+                            # Разгон до 100 км/ч - float
+                            extracted[field_name] = _parse_float(content)
+                        elif field_name == 'max_speed':
+                            # Максимальная скорость - int
+                            extracted[field_name] = _parse_int(content)
+                        elif field_name == 'fuel_consumption':
+                            # Расход топлива - float
+                            extracted[field_name] = _parse_float(content)
+                        elif field_name == 'battery_capacity':
+                            # Емкость батареи - float
+                            extracted[field_name] = _parse_float(content)
+                        elif field_name == 'electric_range':
+                            # Запас хода - int
+                            extracted[field_name] = _parse_int(content)
+                        elif field_name == 'engine_volume_ml':
+                            # Объём двигателя в мл - int
+                            extracted[field_name] = _parse_int(content)
+                        elif field_name == 'door_count':
+                            # Количество дверей - int
+                            extracted[field_name] = _parse_int(content)
+                        elif field_name in ('length', 'width', 'height', 'wheelbase', 'curb_weight'):
+                            # Размеры и вес - int (SMALLINT в БД)
+                            extracted[field_name] = _parse_int(content)
                         elif field_name == 'dimensions':
                             # Разбираем размеры "5052*1989*1773"
                             dims = re.findall(r'(\d+)', content)
                             if len(dims) >= 3:
-                                extracted['length'] = dims[0]
-                                extracted['width'] = dims[1]
-                                extracted['height'] = dims[2]
+                                extracted['length'] = _parse_int(dims[0])
+                                extracted['width'] = _parse_int(dims[1])
+                                extracted['height'] = _parse_int(dims[2])
                         elif field_name == 'first_registration_time':
                             # Нормализуем дату
                             normalized = normalize_first_registration_date(content)
                             if normalized:
                                 extracted[field_name] = normalized
+                        elif field_name in ('climate_control', 'lane_departure', 'steering_wheel_heating'):
+                            # Оставляем как строку, конвертация будет в detailed_api.py при отправке
+                            extracted[field_name] = content
                         else:
                             extracted[field_name] = content
                     
@@ -303,7 +396,7 @@ class Che168DetailedParserAPI:
                     if name == '发动机' and '马力' in content and 'power' not in extracted:
                         power_match = re.search(r'(\d+)\s*马力', content)
                         if power_match:
-                            extracted['power'] = power_match.group(1)
+                            extracted['power'] = _parse_int(power_match.group(1))  # int
                             logger.debug(f"[API] power (из 发动机): {extracted['power']}")
                         extracted['engine_info'] = content
             
@@ -383,6 +476,12 @@ class Che168DetailedParserAPI:
                             extracted[db_field] = str(int(float(match.group(1)) * 10000))
                         else:
                             extracted[db_field] = re.sub(r'[^\d]', '', mileage_str)
+                    elif db_field == 'price':
+                        # Цена - float
+                        extracted[db_field] = _parse_float(value)
+                    elif db_field == 'shop_id':
+                        # ID магазина - int
+                        extracted[db_field] = _parse_int(value)
                     else:
                         extracted[db_field] = str(value)
             
@@ -396,20 +495,91 @@ class Che168DetailedParserAPI:
                 except (ValueError, TypeError):
                     pass
             
-            # Галерея изображений (API возвращает piclist)
-            images = result.get('piclist', [])
-            if images and isinstance(images, list):
-                extracted['image'] = images[0] if images else ''
-                extracted['image_gallery'] = ' '.join(images)
-                extracted['image_count'] = len(images)
-                logger.debug(f"[API] Найдено {len(images)} изображений в piclist")
+            # Галерея изображений - проверяем разные источники
+            images = None
+            image_source = None
             
-            # Если piclist пуст, пробуем imageurl
+            # 1. Пробуем piclist (основной источник)
+            piclist = result.get('piclist', [])
+            if piclist and isinstance(piclist, list) and len(piclist) > 0:
+                images = piclist
+                image_source = 'piclist'
+                logger.info(f"[API] Найдено {len(images)} изображений в piclist для car_id={car_id}")
+            
+            # 2. Если piclist пуст, пробуем head_images (как в dongchedi)
+            if not images:
+                head_images = result.get('head_images', [])
+                if head_images and isinstance(head_images, list) and len(head_images) > 0:
+                    images = head_images
+                    image_source = 'head_images'
+                    logger.info(f"[API] Найдено {len(images)} изображений в head_images для car_id={car_id}")
+            
+            # 3. Пробуем images (альтернативное поле)
+            if not images:
+                images_list = result.get('images', [])
+                if images_list and isinstance(images_list, list) and len(images_list) > 0:
+                    images = images_list
+                    image_source = 'images'
+                    logger.info(f"[API] Найдено {len(images)} изображений в images для car_id={car_id}")
+            
+            # 4. Пробуем picurl (может быть массивом)
+            if not images:
+                picurl = result.get('picurl', [])
+                if picurl:
+                    if isinstance(picurl, list) and len(picurl) > 0:
+                        images = picurl
+                        image_source = 'picurl (list)'
+                        logger.info(f"[API] Найдено {len(images)} изображений в picurl для car_id={car_id}")
+                    elif isinstance(picurl, str) and picurl.strip():
+                        images = [picurl]
+                        image_source = 'picurl (string)'
+                        logger.info(f"[API] Найдено 1 изображение в picurl (string) для car_id={car_id}")
+            
+            # Сохраняем галерею, если нашли изображения
+            if images:
+                # Фильтруем пустые строки и нормализуем URLs
+                valid_images = []
+                for img in images:
+                    img_url = None
+                    
+                    # Если изображение - строка
+                    if isinstance(img, str) and img.strip():
+                        img_url = img.strip()
+                    # Если изображение - словарь/объект, пробуем извлечь URL из разных полей
+                    elif isinstance(img, dict):
+                        img_url = (img.get('url') or img.get('src') or img.get('image') or 
+                                 img.get('picurl') or img.get('link') or 
+                                 list(img.values())[0] if img else None)
+                        if img_url and not isinstance(img_url, str):
+                            img_url = str(img_url) if img_url else None
+                    
+                    if img_url and img_url.strip():
+                        # Нормализуем URL (добавляем https: если начинается с //)
+                        if img_url.startswith('//'):
+                            img_url = 'https:' + img_url
+                        valid_images.append(img_url.strip())
+                
+                if valid_images:
+                    extracted['image'] = valid_images[0]
+                    extracted['image_gallery'] = ' '.join(valid_images)
+                    extracted['image_count'] = len(valid_images)
+                    logger.info(f"[API] Сохранена image_gallery из {image_source} для car_id={car_id}: {len(valid_images)} изображений")
+                else:
+                    logger.warning(f"[API] Все изображения из {image_source} оказались пустыми для car_id={car_id}. Пример первого элемента: {images[0] if images else 'None'}")
+            else:
+                # Логируем доступные поля для отладки
+                image_fields = ['piclist', 'head_images', 'images', 'picurl', 'imageurl', 'carimage']
+                available_fields = {field: result.get(field) for field in image_fields if field in result}
+                logger.warning(f"[API] Изображения не найдены для car_id={car_id}. Доступные поля: {list(available_fields.keys())}")
+            
+            # Если image все еще пуст, пробуем imageurl или carimage (одиночные изображения)
             if not extracted.get('image'):
-                imageurl = result.get('imageurl', '')
-                if imageurl:
-                    extracted['image'] = imageurl
-                    logger.debug(f"[API] Использовано imageurl: {imageurl[:50]}...")
+                imageurl = result.get('imageurl', '') or result.get('carimage', '')
+                if imageurl and isinstance(imageurl, str) and imageurl.strip():
+                    if imageurl.startswith('//'):
+                        imageurl = 'https:' + imageurl
+                    extracted['image'] = imageurl.strip()
+                    logger.info(f"[API] Использовано imageurl/carimage для car_id={car_id}: {imageurl[:50]}...")
             
             return extracted
             

@@ -9,6 +9,7 @@ import traceback
 import time
 import os
 import uuid
+import threading
 from enum import Enum
 from typing import Dict, Any, Optional, List, Callable
 from functools import wraps
@@ -155,13 +156,24 @@ class StructuredLogger:
         microseconds = int((current_time - int(current_time)) * 1000000)
         timestamp = f"{timestamp}.{microseconds:06d}Z"
 
+        # Определяем thread_id безопасным способом
+        try:
+            # Пытаемся получить текущий event loop
+            asyncio.get_running_loop()
+            # Если event loop запущен, пытаемся получить имя задачи
+            task = asyncio.current_task()
+            thread_id = task.get_name() if task else "unknown"
+        except RuntimeError:
+            # Если нет запущенного event loop, используем thread ID
+            thread_id = threading.get_ident()
+
         log_data = {
             "timestamp": timestamp,
             "level": level,
             "message": message,
             "logger": self.name,
             "process_id": os.getpid(),
-            "thread_id": threading.get_ident() if not asyncio.get_event_loop().is_running() else asyncio.current_task().get_name() if asyncio.current_task() else "unknown",
+            "thread_id": thread_id,
             "log_id": str(uuid.uuid4())
         }
 
@@ -458,7 +470,6 @@ class ErrorHandler:
 
 
 # Создаем глобальные экземпляры для использования в приложении
-import threading
 default_logger = StructuredLogger(name="pyparsers")
 default_error_handler = ErrorHandler(logger=default_logger)
 

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional, List
 from collections import OrderedDict
 from threading import Lock as ThreadLock
+from concurrent.futures import ThreadPoolExecutor
 from models import Task, TaskStatus, TaskType
 from api.dongchedi.parser import DongchediParser
 from api.che168.parser import Che168Parser
@@ -45,6 +46,8 @@ class TaskService:
         self._source_locks: OrderedDict[str, asyncio.Lock] = OrderedDict()
         self._source_locks_max_size = 50  # Максимум 50 блокировок
         self._source_locks_lock = ThreadLock()
+        # Executor для выполнения синхронных операций парсеров в отдельных потоках
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="parser")
     
     async def get_session(self) -> aiohttp.ClientSession:
         """Получить или создать HTTP сессию"""
@@ -56,6 +59,11 @@ class TaskService:
         """Закрыть HTTP сессию"""
         if self.session and not self.session.closed:
             await self.session.close()
+    
+    def shutdown_executor(self):
+        """Закрыть executor для парсеров"""
+        if self._executor:
+            self._executor.shutdown(wait=True)
     
     def create_task(self, source: str, task_type: TaskType = TaskType.FULL, id_field: Optional[str] = None, existing_ids: Optional[List[str]] = None) -> Task:
         """Создать новую задачу"""
@@ -130,23 +138,141 @@ class TaskService:
             self._source_locks[key] = lock
             return lock
 
+    def _normalize_car_data(self, car_dict: dict, source: str) -> dict:
+        """Нормализует данные машины для отправки в datahub"""
+        normalized = {}
+        
+        # Обязательные поля
+        if 'car_id' not in car_dict or car_dict['car_id'] is None:
+            logger.warning(f"Missing car_id in car data, skipping normalization")
+            return None
+        
+        normalized['car_id'] = int(car_dict['car_id'])
+        normalized['source'] = source
+        
+        # year (int) - НЕ car_year!
+        if 'year' in car_dict and car_dict['year'] is not None:
+            try:
+                normalized['year'] = int(car_dict['year'])
+            except (ValueError, TypeError):
+                pass
+        
+        # mileage (int32) - НЕ car_mileage строка!
+        if 'mileage' in car_dict and car_dict['mileage'] is not None:
+            try:
+                normalized['mileage'] = int(car_dict['mileage'])
+            except (ValueError, TypeError):
+                pass
+        
+        # price (float64) - НЕ sh_price строка!
+        if 'price' in car_dict and car_dict['price'] is not None:
+            try:
+                # Если price строка, преобразуем в float
+                if isinstance(car_dict['price'], str):
+                    normalized['price'] = float(car_dict['price'])
+                else:
+                    normalized['price'] = float(car_dict['price'])
+            except (ValueError, TypeError):
+                pass
+        
+        # shop_id (int32) - НЕ строка!
+        if 'shop_id' in car_dict and car_dict['shop_id'] is not None:
+            try:
+                normalized['shop_id'] = int(car_dict['shop_id'])
+            except (ValueError, TypeError):
+                normalized['shop_id'] = 0
+        else:
+            normalized['shop_id'] = 0
+        
+        # is_available (bool) - НЕ null!
+        if 'is_available' in car_dict:
+            normalized['is_available'] = bool(car_dict['is_available']) if car_dict['is_available'] is not None else True
+        else:
+            normalized['is_available'] = True
+        
+        # Копируем остальные поля как есть
+        for key, value in car_dict.items():
+            if key not in normalized and key not in ['car_year', 'car_mileage', 'sh_price']:  # Удаляем лишние поля
+                normalized[key] = value
+        
+        return normalized
+
     def _build_payload_bytes(self, task_id: str, source: str, task_type: TaskType, data: list) -> bytes:
         """Сериализует полезную нагрузку и освобождает исходные данные из памяти."""
+        # Нормализуем данные перед отправкой
+        normalized_data = []
+        skipped_count = 0
+        for car_dict in data:
+            normalized = self._normalize_car_data(car_dict, source)
+            if normalized:
+                normalized_data.append(normalized)
+            else:
+                skipped_count += 1
+        
+        if skipped_count > 0:
+            logger.warning(f"Skipped {skipped_count} cars due to missing car_id")
+        
+        # Логируем информацию о данных перед сериализацией
+        if normalized_data and len(normalized_data) > 0:
+            sample_car = normalized_data[0]
+            logger.info(f"Building payload for task {task_id} (source={source}, type={task_type}): {len(normalized_data)} cars (skipped {skipped_count}), sample car keys: {list(sample_car.keys())[:20] if isinstance(sample_car, dict) else type(sample_car)}")
+        
         payload = {
             "task_id": task_id,
             "source": source,
-            "task_type": task_type,
+            "task_type": str(task_type.value) if isinstance(task_type, TaskType) else str(task_type),
             "status": "done",
-            "data": data,
+            "data": normalized_data,
         }
         payload_bytes = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        logger.info(f"Payload size for task {task_id}: {len(payload_bytes)} bytes")
         if hasattr(data, "clear"):
             data.clear()
         gc.collect()
         return payload_bytes
 
+    async def send_task_to_datahub(self, task_id: str, source: str, task_type: TaskType, status: str, data: list = None) -> bool:
+        """Отправить задачу в datahub (при создании или обновлении статуса)"""
+        try:
+            session = await self.get_session()
+            url = f"{self.datahub_url}/api/tasks/{task_id}/complete"
+            headers = {"Content-Type": "application/json"}
+            
+            # Если данные не переданы, используем пустой массив
+            if data is None:
+                data = []
+            
+            payload = {
+                "task_id": task_id,
+                "source": source,
+                "task_type": str(task_type.value) if isinstance(task_type, TaskType) else str(task_type),
+                "status": status,
+                "data": data,
+            }
+            payload_bytes = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            
+            async with session.post(
+                url,
+                data=payload_bytes,
+                headers=headers,
+                timeout=self._session_timeout,
+            ) as response:
+                if response.status == 200:
+                    logger.info(f"Successfully sent task {task_id} to datahub with status {status}")
+                    return True
+                else:
+                    text = await response.text()
+                    payload_preview = payload_bytes[:1000].decode('utf-8', errors='ignore') if len(payload_bytes) > 0 else "empty"
+                    logger.error(f"Failed to send task {task_id} to datahub (source={source}, type={task_type}, status={status}): {response.status} body={text[:500]}")
+                    logger.debug(f"Payload preview (first 1000 chars): {payload_preview}")
+                    return False
+                    
+        except Exception as e:
+            logger.exception(f"Error sending task {task_id} to datahub: {e}")
+            return False
+
     async def send_to_datahub(self, task_id: str, source: str, task_type: TaskType, payload_bytes: bytes) -> bool:
-        """Отправить сериализованные данные в datahub"""
+        """Отправить сериализованные данные в datahub (legacy метод для обратной совместимости)"""
         try:
             session = await self.get_session()
             url = f"{self.datahub_url}/api/tasks/{task_id}/complete"
@@ -163,7 +289,10 @@ class TaskService:
                     return True
                 else:
                     text = await response.text()
-                    logger.error(f"Failed to send data to datahub for task {task_id}: {response.status} body={text[:500]}")
+                    # Логируем первые 1000 символов payload для отладки
+                    payload_preview = payload_bytes[:1000].decode('utf-8', errors='ignore') if len(payload_bytes) > 0 else "empty"
+                    logger.error(f"Failed to send data to datahub for task {task_id} (source={source}, type={task_type}): {response.status} body={text[:500]}")
+                    logger.debug(f"Payload preview (first 1000 chars): {payload_preview}")
                     return False
                     
         except Exception as e:
@@ -175,6 +304,9 @@ class TaskService:
         while True:
             success = await self.send_to_datahub(task_id, source, task_type, payload_bytes)
             if success:
+                # Обновляем статус задачи на DONE после успешной отправки
+                if task_id in self.tasks:
+                    self.update_task_status(task_id, TaskStatus.DONE)
                 # Удаляем данные из памяти после успешной отправки
                 if task_id in self.tasks:
                     del self.tasks[task_id]
@@ -193,7 +325,13 @@ class TaskService:
             return
         
         task = self.tasks[task_id]
+        
+        # Отправляем задачу в datahub со статусом "pending" при создании
+        await self.send_task_to_datahub(task_id, task.source, task.task_type, "pending", [])
+        
+        # Обновляем статус на IN_PROGRESS и отправляем в datahub
         self.update_task_status(task_id, TaskStatus.IN_PROGRESS)
+        await self.send_task_to_datahub(task_id, task.source, task.task_type, "in_progress", [])
         
         try:
             data = []
@@ -212,6 +350,8 @@ class TaskService:
             else:
                 logger.error(f"Unknown source: {task.source}")
                 self.update_task_status(task_id, TaskStatus.FAILED)
+                # Отправляем задачу как failed в datahub
+                await self.send_task_to_datahub(task_id, task.source, task.task_type, "failed", [])
                 return
             
             # Уникальность по car_id
@@ -221,7 +361,7 @@ class TaskService:
             logger.info(f"Collected {len(data)} cars for source {task.source} (task {task_id}); unique car_id={len(unique_ids)}, duplicates={dup_count}")
 
             if data:
-                # Запускаем отправку в фоне с повторными попытками
+                # Отправляем задачу как выполненную с данными
                 payload_bytes = self._build_payload_bytes(task_id, task.source, task.task_type, data)
                 asyncio.create_task(self.retry_send_to_datahub(task_id, task.source, task.task_type, payload_bytes))
                 # Пока отправляем, держим задачу IN_PROGRESS; DONE поставит отправка при очистке
@@ -229,10 +369,14 @@ class TaskService:
             else:
                 logger.warning(f"No data collected for task {task_id} source {task.source}")
                 self.update_task_status(task_id, TaskStatus.FAILED)
+                # Отправляем задачу как failed в datahub
+                await self.send_task_to_datahub(task_id, task.source, task.task_type, "failed", [])
                 
         except Exception as e:
             logger.exception(f"Error processing task {task_id}: {e}")
             self.update_task_status(task_id, TaskStatus.FAILED)
+            # Отправляем задачу как failed в datahub
+            await self.send_task_to_datahub(task_id, task.source, task.task_type, "failed", [])
     
     async def _parse_dongchedi_full(self) -> list:
         """Полный парсинг dongchedi (все страницы) с защитой от параллельных запусков"""
@@ -247,9 +391,15 @@ class TaskService:
             # Собираем все страницы
             all_data = MemoryOptimizedList()
             page = 1
+            loop = asyncio.get_event_loop()
             while True:
-                response = parser.fetch_cars_by_page(page)
+                # Выполняем синхронный вызов парсера в отдельном потоке, чтобы не блокировать event loop
+                response = await loop.run_in_executor(self._executor, parser.fetch_cars_by_page, page)
                 if not response.data or not response.data.search_sh_sku_info_list:
+                    if response.status != 200:
+                        logger.warning(f"Dongchedi API returned status {response.status} for page {page}: {response.message}")
+                    else:
+                        logger.info(f"No more data available for dongchedi page {page}")
                     break
                 cars_list = response.data.search_sh_sku_info_list
                 filtered_cars = filter_cars_by_year(cars_list, min_year=2017)
@@ -285,8 +435,10 @@ class TaskService:
             existing_set = set(limited_existing_ids)
             del limited_existing_ids  # Освобождаем генератор
 
+            loop = asyncio.get_event_loop()
             for page in range(1, 101):
-                response = parser.fetch_cars_by_page(page)
+                # Выполняем синхронный вызов парсера в отдельном потоке
+                response = await loop.run_in_executor(self._executor, parser.fetch_cars_by_page, page)
                 if not response.data or not response.data.search_sh_sku_info_list:
                     break
                 cars_list = response.data.search_sh_sku_info_list
@@ -339,11 +491,23 @@ class TaskService:
             data = MemoryOptimizedList()
             missing_id_count = 0
             filtered_by_year = 0
+            empty_pages_count = 0  # Счетчик подряд идущих пустых страниц
+            max_empty_pages = 3  # Останавливаемся после 3 подряд идущих пустых страниц
+            loop = asyncio.get_event_loop()
             # Собираем страницы 1..100 или до конца
             for page in range(1, 101):
-                response = parser.fetch_cars_by_page(page)
+                # Выполняем синхронный вызов парсера в отдельном потоке, чтобы не блокировать event loop
+                response = await loop.run_in_executor(self._executor, parser.fetch_cars_by_page, page)
                 if not response.data or not response.data.search_sh_sku_info_list:
-                    break
+                    empty_pages_count += 1
+                    logger.warning(f"che168 page {page}: пустая страница (статус: {response.status}, сообщение: {response.message})")
+                    if empty_pages_count >= max_empty_pages:
+                        logger.info(f"che168: остановка парсинга после {empty_pages_count} подряд идущих пустых страниц")
+                        break
+                    continue  # Пропускаем пустую страницу, но продолжаем парсинг
+                
+                # Если страница не пустая, сбрасываем счетчик пустых страниц
+                empty_pages_count = 0
                 cars_list = response.data.search_sh_sku_info_list
                 logger.info(f"che168 page {page}: processing {len(cars_list)} cars")
                 
@@ -368,8 +532,13 @@ class TaskService:
                         'sort_number': len(cars_list) - i,
                         'source': 'che168'
                     })
+                    # price должен быть float64, не строка!
                     if car_dict.get('sh_price') is not None and car_dict.get('sh_price') != '':
-                        car_dict['price'] = str(car_dict['sh_price'])
+                        try:
+                            price_str = str(car_dict['sh_price']).strip()
+                            car_dict['price'] = float(price_str)
+                        except (ValueError, TypeError):
+                            pass
                     year_val = car_dict.get('car_year')
                     if year_val is not None:
                         try:
@@ -447,8 +616,10 @@ class TaskService:
             del limited_existing_ids  # Освобождаем генератор
             logger.info(f"che168 incremental: checking against {len(existing_set)} existing IDs")
 
+            loop = asyncio.get_event_loop()
             for page in range(1, 101):
-                response = parser.fetch_cars_by_page(page)
+                # Выполняем синхронный вызов парсера в отдельном потоке
+                response = await loop.run_in_executor(self._executor, parser.fetch_cars_by_page, page)
                 if not response.data or not response.data.search_sh_sku_info_list:
                     break
                 cars_list = response.data.search_sh_sku_info_list
@@ -474,8 +645,13 @@ class TaskService:
                         'sort_number': len(cars_list) - i,
                         'source': 'che168'
                     })
+                    # price должен быть float64, не строка!
                     if car_dict.get('sh_price') is not None and car_dict.get('sh_price') != '':
-                        car_dict['price'] = str(car_dict['sh_price'])
+                        try:
+                            price_str = str(car_dict['sh_price']).strip()
+                            car_dict['price'] = float(price_str)
+                        except (ValueError, TypeError):
+                            pass
                     year_val = car_dict.get('car_year')
                     if year_val is not None:
                         try:

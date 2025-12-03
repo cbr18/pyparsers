@@ -7,7 +7,7 @@ class Che168DetailedCar(BaseModel):
     # Основная информация
     car_id: Optional[int] = None
     title: Optional[str] = None
-    price: Optional[str] = None
+    price: Optional[float] = None  # Цена в wan юаней - NUMERIC(8,2)
     year: Optional[int] = None
     mileage: Optional[str] = None
     city: Optional[str] = None
@@ -17,7 +17,7 @@ class Che168DetailedCar(BaseModel):
     
     # Технические характеристики
     engine_volume: Optional[str] = None
-    engine_volume_ml: Optional[str] = None  # Объём двигателя в миллилитрах
+    engine_volume_ml: Optional[int] = None  # Объём двигателя в миллилитрах - INTEGER
     fuel_type: Optional[str] = None
     transmission: Optional[str] = None
     drive_type: Optional[str] = None
@@ -26,19 +26,19 @@ class Che168DetailedCar(BaseModel):
     condition: Optional[str] = None
     
     # Дополнительные характеристики
-    power: Optional[str] = None
-    torque: Optional[str] = None
-    acceleration: Optional[str] = None
-    max_speed: Optional[str] = None
-    fuel_consumption: Optional[str] = None
+    power: Optional[int] = None  # Мощность в л.с. - SMALLINT
+    torque: Optional[float] = None  # Крутящий момент в Н·м - NUMERIC(6,1)
+    acceleration: Optional[float] = None  # Разгон до 100 км/ч в секундах - NUMERIC(4,1)
+    max_speed: Optional[int] = None  # Максимальная скорость в км/ч - SMALLINT
+    fuel_consumption: Optional[float] = None  # Расход топлива л/100км - NUMERIC(4,1)
     emission_standard: Optional[str] = None
     
     # Размеры и вес
-    length: Optional[str] = None
-    width: Optional[str] = None
-    height: Optional[str] = None
-    wheelbase: Optional[str] = None
-    curb_weight: Optional[str] = None
+    length: Optional[int] = None  # Длина (мм) - SMALLINT
+    width: Optional[int] = None  # Ширина (мм) - SMALLINT
+    height: Optional[int] = None  # Высота (мм) - SMALLINT
+    wheelbase: Optional[int] = None  # Колесная база (мм) - SMALLINT
+    curb_weight: Optional[int] = None  # Снаряженная масса (кг) - SMALLINT
     gross_weight: Optional[str] = None
     
     # Двигатель
@@ -50,8 +50,8 @@ class Che168DetailedCar(BaseModel):
     turbo_type: Optional[str] = None
     
     # Электрические характеристики
-    battery_capacity: Optional[str] = None
-    electric_range: Optional[str] = None
+    battery_capacity: Optional[float] = None  # Емкость батареи в кВт·ч - NUMERIC(6,2)
+    electric_range: Optional[int] = None  # Запас хода в км - SMALLINT
     charging_time: Optional[str] = None
     fast_charge_time: Optional[str] = None
     charge_port_type: Optional[str] = None
@@ -134,7 +134,7 @@ class Che168DetailedCar(BaseModel):
     
     # Дополнительные характеристики
     seat_count: Optional[str] = None
-    door_count: Optional[str] = None
+    door_count: Optional[int] = None  # Количество дверей - SMALLINT
     trunk_volume: Optional[str] = None
     fuel_tank_volume: Optional[str] = None
     

@@ -16,8 +16,6 @@ if (-not $API_HOST) { $API_HOST = "0.0.0.0" }
 $API_PORT = $env:API_PORT
 if (-not $API_PORT) { $API_PORT = "8000" }
 
-$API_RELOAD = $env:API_RELOAD
-if (-not $API_RELOAD) { $API_RELOAD = "true" }
-
-# Start the server with increased timeout for long-running requests
-uvicorn api_server:app --host $API_HOST --port $API_PORT --reload --timeout-keep-alive 3600
+# Start the server with HTTP/1 keep-alive enabled
+# Note: granian doesn't support --reload flag, use watchfiles or similar for development
+granian --interface asgi --host $API_HOST --port $API_PORT --http1-keep-alive async_api_server:app

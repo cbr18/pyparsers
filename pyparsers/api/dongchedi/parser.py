@@ -6,6 +6,7 @@ from .models.response import DongchediApiResponse, DongchediData
 from .models.car import DongchediCar
 from ..base_parser import BaseCarParser
 from api.date_utils import normalize_first_registration_date
+from api.mileage_utils import normalize_mileage
 
 logger = logging.getLogger(__name__)
 
@@ -149,124 +150,206 @@ class DongchediParser(BaseCarParser):
             "Referer": "https://www.dongchedi.com/",
             "Connection": "keep-alive"
         }
+
+    def _parse_sku_detail(self, sku_detail: Dict[str, Any], car_id: str) -> Dict[str, Any]:
+        """
+        Общий метод для парсинга данных из skuDetail.
+        Используется в _fetch_with_playwright, _fetch_mobile_version и fetch_car_detail.
+        """
+        result = {}
+        
+        # Изображения
+        head_images = sku_detail.get('head_images', [])
+        if head_images and isinstance(head_images, list) and len(head_images) > 0:
+            result['image'] = head_images[0]
+            result['image_gallery'] = ' '.join(head_images)
+            result['image_count'] = len(head_images)
+        
+        # Пробег из important_text (формат: "2023年上牌 | 4万公里 | 城市")
+        mileage_km = None
+        imp_text = sku_detail.get("important_text", "")
+        if imp_text:
+            m = re.search(r'(\d+\.?\d*)\s*万公里', imp_text)
+            if m:
+                mileage_km = int(float(m.group(1)) * 10000)
+                result['mileage'] = mileage_km
+                result['car_mileage'] = str(mileage_km)
+        
+        # Данные из other_params
+        other_params = sku_detail.get("other_params", [])
+        for param in other_params:
+            if not isinstance(param, dict):
+                continue
+            param_name = param.get('name', '') or param.get('key', '')
+            param_value = param.get('value', '')
+            
+            # Дата регистрации
+            if param_name in ('上牌时间', '首次上牌', '首次上牌时间'):
+                normalized_date = normalize_first_registration_date(param_value)
+                if normalized_date:
+                    result['first_registration_time'] = normalized_date
+            
+            # Пробег (fallback если не нашли в important_text)
+            if not mileage_km and ('里程' in param_name or '公里' in param_name):
+                m = re.search(r'(\d+\.?\d*)', str(param_value))
+                if m:
+                    val = float(m.group(1))
+                    mileage_km = int(val * 10000) if val < 1000 else int(val)
+                    result['mileage'] = mileage_km
+                    result['car_mileage'] = str(mileage_km)
+            
+            # Другие параметры
+            if param_name == '过户次数':
+                try:
+                    result['owner_count'] = int(param_value.replace('次', '').strip())
+                except:
+                    pass
+            elif param_name == '内饰颜色':
+                result['interior_color'] = param_value
+            elif param_name == '车身颜色':
+                result['exterior_color'] = param_value
+        
+        # Основные поля из skuDetail
+        result['title'] = sku_detail.get('title', '')
+        result['sh_price'] = sku_detail.get('sh_price', '')
+        result['sku_id'] = str(sku_detail.get('sku_id', car_id))
+        result['description'] = sku_detail.get('sh_car_desc', '')
+        result['favorite_count'] = sku_detail.get('favored_count', 0)
+        
+        # car_info
+        car_info = sku_detail.get('car_info', {})
+        if car_info:
+            result['brand_name'] = car_info.get('brand_name', '')
+            result['series_name'] = car_info.get('series_name', '')
+            result['car_name'] = car_info.get('car_name', '')
+            result['car_year'] = car_info.get('year')
+            result['year'] = car_info.get('year')
+            result['city'] = car_info.get('city', '')
+            result['car_source_city_name'] = car_info.get('city', '')
+            result['brand_id'] = car_info.get('brand_id')
+            result['series_id'] = car_info.get('series_id')
+            result['color'] = car_info.get('color', '')
+            result['transmission'] = car_info.get('transmission', '')
+            result['fuel_type'] = car_info.get('fuel_type', '')
+            result['body_type'] = car_info.get('body_type', '')
+            result['drive_type'] = car_info.get('drive_type', '')
+            if car_info.get('car_id'):
+                result['car_id'] = str(car_info.get('car_id'))
+        
+        # shop_info
+        shop_info = sku_detail.get('shop_info', {})
+        if shop_info:
+            result['shop_id'] = shop_info.get('shop_id')
+            dealer_parts = []
+            if shop_info.get('shop_name'):
+                dealer_parts.append(f"Название: {shop_info['shop_name']}")
+            if shop_info.get('shop_address'):
+                dealer_parts.append(f"Адрес: {shop_info['shop_address']}")
+            if dealer_parts:
+                result['dealer_info'] = '; '.join(dealer_parts)
+        
+        # Теги/сертификация
+        tags = sku_detail.get('tags', [])
+        if tags and isinstance(tags, list):
+            cert_parts = [tag.get('text') for tag in tags if isinstance(tag, dict) and tag.get('text')]
+            if cert_parts:
+                result['certification'] = '; '.join(cert_parts)
+        
+        return result
     
     def _fetch_mobile_version(self, car_id: str) -> Optional[Dict[str, Any]]:
         """
-        Fallback метод: парсинг мобильной версии через requests (без браузера).
-        Используется когда Selenium заблокирован или не работает.
-        
-        Args:
-            car_id: ID машины
-            
-        Returns:
-            Словарь с данными (image_gallery, first_registration_time и др.) или None
+        Fallback: парсинг через requests (без браузера).
         """
-        import requests
+        import json
         from bs4 import BeautifulSoup
         
         url = f"https://m.dongchedi.com/usedcar/{car_id}"
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Referer": "https://www.dongchedi.com/",
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)",
+            "Accept": "text/html",
+            "Accept-Language": "zh-CN,zh;q=0.9",
         }
         
-        logger.info(f"fetch_car_detail: [MOBILE FALLBACK] Пробуем мобильную версию для car_id={car_id}")
-        
         try:
-            response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
-            
-            if response.status_code != 200:
-                logger.warning(f"fetch_car_detail: [MOBILE FALLBACK] Статус {response.status_code} для car_id={car_id}")
-                return None
-            
-            if '__NEXT_DATA__' not in response.text:
-                logger.warning(f"fetch_car_detail: [MOBILE FALLBACK] __NEXT_DATA__ не найден в мобильной версии для car_id={car_id}")
+            response = requests.get(url, headers=headers, timeout=15)
+            if response.status_code != 200 or '__NEXT_DATA__' not in response.text:
                 return None
             
             soup = BeautifulSoup(response.text, 'html.parser')
-            script_tags = soup.find_all('script')
+            script_tag = soup.find('script', {'id': '__NEXT_DATA__'})
             
-            for script in script_tags:
-                if script.string and '__NEXT_DATA__' in script.string:
-                    try:
-                        json_start = script.string.find('{')
-                        if json_start == -1:
-                            continue
-                        
-                        json_data = script.string[json_start:]
-                        brace_count = 0
-                        json_end = 0
-                        for i, char in enumerate(json_data):
-                            if char == '{':
-                                brace_count += 1
-                            elif char == '}':
-                                brace_count -= 1
-                                if brace_count == 0:
-                                    json_end = i + 1
-                                    break
-                        
-                        if json_end == 0:
-                            continue
-                        
-                        json_str = json_data[:json_end]
-                        data = json.loads(json_str)
-                        
-                        if 'props' in data and 'pageProps' in data['props']:
-                            page_props = data['props']['pageProps']
-                            if 'skuDetail' in page_props:
-                                sku_detail = page_props['skuDetail']
-                                
-                                result = {}
-                                
-                                # Извлекаем галерею изображений
-                                head_images = sku_detail.get('head_images', [])
-                                if head_images and isinstance(head_images, list) and len(head_images) > 0:
-                                    result['image'] = head_images[0] if len(head_images) > 0 else ''
-                                    result['image_gallery'] = ' '.join(head_images)
-                                    result['image_count'] = len(head_images)
-                                    logger.info(f"fetch_car_detail: [MOBILE FALLBACK] Найдена image_gallery для car_id={car_id}: {len(head_images)} изображений")
-                                
-                                # Извлекаем дату регистрации
-                                other_params = sku_detail.get('other_params', [])
-                                for param in other_params:
-                                    param_name = param.get('name', '')
-                                    param_value = param.get('value', '')
-                                    if param_name in ('上牌时间', '首次上牌', '首次上牌时间'):
-                                        normalized_date = normalize_first_registration_date(param_value)
-                                        if normalized_date:
-                                            result['first_registration_time'] = normalized_date
-                                            logger.info(f"fetch_car_detail: [MOBILE FALLBACK] Найдена first_registration_time для car_id={car_id}: {param_value} -> {normalized_date}")
-                                            break
-                                
-                                # Извлекаем другие данные, если есть
-                                if 'car_info' in sku_detail:
-                                    car_data = sku_detail['car_info']
-                                    if not result.get('image') and car_data.get('image'):
-                                        result['image'] = car_data['image']
-                                
-                                if result:
-                                    logger.info(f"fetch_car_detail: [MOBILE FALLBACK] Успешно извлечены данные для car_id={car_id}: {list(result.keys())}")
-                                    return result
-                                
-                                logger.warning(f"fetch_car_detail: [MOBILE FALLBACK] skuDetail найден, но данные не извлечены для car_id={car_id}")
-                                break
-                    except json.JSONDecodeError as e:
-                        logger.debug(f"fetch_car_detail: [MOBILE FALLBACK] Ошибка парсинга JSON для car_id={car_id}: {e}")
-                        continue
-                    except Exception as e:
-                        logger.debug(f"fetch_car_detail: [MOBILE FALLBACK] Ошибка для car_id={car_id}: {e}")
-                        continue
+            if not script_tag or not script_tag.string:
+                return None
             
-            logger.warning(f"fetch_car_detail: [MOBILE FALLBACK] Не удалось извлечь данные из мобильной версии для car_id={car_id}")
+            data = json.loads(script_tag.string)
+            sku_detail = data.get('props', {}).get('pageProps', {}).get('skuDetail', {})
+            
+            if sku_detail:
+                result = self._parse_sku_detail(sku_detail, car_id)
+                if result:
+                    logger.info(f"[MOBILE] Успешно: mileage={result.get('mileage')}")
+                    return result
+            
             return None
             
-        except requests.RequestException as e:
-            logger.warning(f"fetch_car_detail: [MOBILE FALLBACK] Ошибка запроса для car_id={car_id}: {e}")
+        except Exception as e:
+            logger.debug(f"[MOBILE] Ошибка для car_id={car_id}: {e}")
+            return None
+
+    def _fetch_with_playwright(self, car_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Получает данные о машине через Playwright (основной метод).
+        Работает стабильнее Selenium в Docker.
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+            import json
+            
+            url = f"https://www.dongchedi.com/usedcar/{car_id}"
+            logger.info(f"[PLAYWRIGHT] Загружаем {url}")
+            
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+                
+                try:
+                    page.goto(url, timeout=25000, wait_until="domcontentloaded")
+                    page.wait_for_timeout(2500)
+                    
+                    nd = page.query_selector("#__NEXT_DATA__")
+                    if not nd:
+                        logger.warning(f"[PLAYWRIGHT] __NEXT_DATA__ не найден для car_id={car_id}")
+                        browser.close()
+                        return None
+                    
+                    data = json.loads(nd.inner_text())
+                    sku_detail = data.get("props", {}).get("pageProps", {}).get("skuDetail", {})
+                    
+                    if not sku_detail:
+                        logger.warning(f"[PLAYWRIGHT] skuDetail пустой для car_id={car_id}")
+                        browser.close()
+                        return None
+                    
+                    # Используем общий метод парсинга
+                    result = self._parse_sku_detail(sku_detail, car_id)
+                    logger.info(f"[PLAYWRIGHT] Успешно: mileage={result.get('mileage')}, images={result.get('image_count')}")
+                    browser.close()
+                    return result
+                    
+                except Exception as e:
+                    logger.warning(f"[PLAYWRIGHT] Ошибка для car_id={car_id}: {e}")
+                    try:
+                        browser.close()
+                    except:
+                        pass
+                    return None
+                    
+        except ImportError:
+            logger.debug("[PLAYWRIGHT] playwright не установлен")
             return None
         except Exception as e:
-            logger.warning(f"fetch_car_detail: [MOBILE FALLBACK] Неожиданная ошибка для car_id={car_id}: {e}")
+            logger.warning(f"[PLAYWRIGHT] Ошибка для car_id={car_id}: {e}")
             return None
 
     def _build_url(self, page: int = 1) -> str:
@@ -345,7 +428,6 @@ class DongchediParser(BaseCarParser):
                 except:
                     # Если все еще не работает, пробуем другой подход
                     try:
-                        import re
                         # Находим начало и конец JSON объекта
                         match = re.search(r'(\{.*\})', response.text, re.DOTALL)
                         if match:
@@ -387,31 +469,15 @@ class DongchediParser(BaseCarParser):
                             filtered_car_data['year'] = filtered_car_data['car_year']
 
                         if 'car_mileage' in filtered_car_data and filtered_car_data['car_mileage'] is not None:
-                            # Преобразуем mileage в числовое значение, если возможно
-                            try:
-                                import re
-                                mileage_str = str(filtered_car_data['car_mileage']).strip()
-                                # Пропускаем пустые строки
-                                if not mileage_str or mileage_str == '':
-                                    pass
-                                else:
-                                    # Обрабатываем единицы измерения "万公里" (10,000 км)
-                                    if '万' in mileage_str or '万公里' in mileage_str:
-                                        # Извлекаем число перед "万"
-                                        match = re.search(r'(\d+\.?\d*)', mileage_str)
-                                        if match:
-                                            mileage_wan = float(match.group(1))
-                                            # 万公里 = 10,000 км
-                                            filtered_car_data['mileage'] = int(mileage_wan * 10000)
-                                    else:
-                                        # Обычные километры - извлекаем только цифры
-                                        mileage_numeric = re.sub(r'[^\d.]', '', mileage_str)
-                                        if mileage_numeric:
-                                            filtered_car_data['mileage'] = int(float(mileage_numeric))
-                            except Exception as e:
-                                # Логируем ошибку для отладки, но не прерываем обработку
-                                logger.debug(f"Ошибка парсинга mileage '{filtered_car_data.get('car_mileage')}': {e}")
-                                pass
+                            mileage_km, m_meta = normalize_mileage(
+                                filtered_car_data['car_mileage'],
+                                year_hint=filtered_car_data.get('car_year'),
+                                source="dongchedi:list",
+                            )
+                            if mileage_km is not None:
+                                filtered_car_data['mileage'] = mileage_km
+                            if m_meta.get('warnings'):
+                                logger.debug(f"mileage warnings(list) raw={filtered_car_data.get('car_mileage')} meta={m_meta}")
 
                         if 'car_source_city_name' in filtered_car_data and filtered_car_data['car_source_city_name'] is not None:
                             from converters import decode_dongchedi_detail
@@ -985,10 +1051,52 @@ class DongchediParser(BaseCarParser):
                             else:
                                 logger.debug(f"fetch_car_detail: image_gallery не заполнен для car_id={car_id}")
                             
+                            # Парсим пробег из разных источников
+                            mileage_km = None
+                            mileage_raw = sku_detail.get('car_info', {}).get('mileage', '')
+                            
+                            # Метод 1: из car_info.mileage
+                            if mileage_raw:
+                                m = re.search(r'(\d+\.?\d*)', str(mileage_raw))
+                                if m:
+                                    val = float(m.group(1))
+                                    if '万' in str(mileage_raw):
+                                        mileage_km = int(val * 10000)
+                                    elif val < 1000:  # вероятно в 万公里
+                                        mileage_km = int(val * 10000)
+                                    else:
+                                        mileage_km = int(val)
+                            
+                            # Метод 2: из important_text (формат: "2023年上牌 | 4万公里 | 郑州车源")
+                            if not mileage_km:
+                                important_text = sku_detail.get('important_text', '')
+                                if important_text:
+                                    m = re.search(r'(\d+\.?\d*)\s*万公里', important_text)
+                                    if m:
+                                        mileage_km = int(float(m.group(1)) * 10000)
+                                        logger.info(f"fetch_car_detail: Пробег из important_text для car_id={car_id}: {m.group(0)} -> {mileage_km}км")
+                            
+                            # Метод 3: из other_params
+                            if not mileage_km:
+                                for param in other_params:
+                                    param_name = param.get('name', '') or param.get('key', '')
+                                    param_value = param.get('value', '')
+                                    if '里程' in param_name or '公里' in param_name:
+                                        m = re.search(r'(\d+\.?\d*)', str(param_value))
+                                        if m:
+                                            val = float(m.group(1))
+                                            if '万' in str(param_value) or val < 1000:
+                                                mileage_km = int(val * 10000)
+                                            else:
+                                                mileage_km = int(val)
+                                            logger.info(f"fetch_car_detail: Пробег из other_params для car_id={car_id}: {param_value} -> {mileage_km}км")
+                                            break
+                            
                             car_info.update({
                                 'title': sku_detail.get('title', ''),
                                 'sh_price': sku_detail.get('sh_price', ''),
-                                'car_mileage': sku_detail.get('car_info', {}).get('mileage', ''),
+                                'car_mileage': str(mileage_km) if mileage_km else '',
+                                'mileage': mileage_km,  # int в км
                                 'car_year': sku_detail.get('car_info', {}).get('year', ''),
                                 'year': sku_detail.get('car_info', {}).get('year', ''),
                                 'brand_name': sku_detail.get('car_info', {}).get('brand_name', ''),
@@ -997,7 +1105,8 @@ class DongchediParser(BaseCarParser):
                                 'shop_id': shop_info.get('shop_id', ''),
                                 'brand_id': sku_detail.get('car_info', {}).get('brand_id', 0),
                                 'series_id': sku_detail.get('car_info', {}).get('series_id', 0),
-                                'car_id': str(sku_detail.get('car_info', {}).get('car_id', '')) if sku_detail.get('car_info', {}).get('car_id') else None,  # Сохраняем car_id для последующего использования
+                                'car_id': str(sku_detail.get('car_info', {}).get('car_id', '')) if sku_detail.get('car_info', {}).get('car_id') else None,
+                                'sku_id': str(sku_detail.get('sku_id', '')) if sku_detail.get('sku_id') else car_id,  # sku_id важен для URL
                                 'car_source_city_name': sku_detail.get('car_info', {}).get('city', ''),
                                 'city': sku_detail.get('car_info', {}).get('city', ''),
                                 'description': sku_detail.get('sh_car_desc', ''),
@@ -1107,7 +1216,6 @@ class DongchediParser(BaseCarParser):
                 page_text = soup.get_text()
                 
                 # Паттерны для поиска даты регистрации
-                import re
                 registration_patterns = [
                     r'上牌时间[：:]\s*(\d{4}[年\-/]\d{1,2}[月\-/]\d{1,2})',
                     r'首次上牌[：:]\s*(\d{4}[年\-/]\d{1,2}[月\-/]\d{1,2})',
@@ -1258,7 +1366,30 @@ class DongchediParser(BaseCarParser):
         
         # Проверяем, что soup был успешно создан и данные распарсены
         if car_info is None:
-            return None, {"is_available": False, "error": "Failed to load or parse page", "status": 500}
+            # Пробуем Playwright как последний fallback
+            logger.info(f"fetch_car_detail: Selenium не сработал, пробуем Playwright для car_id={car_id}")
+            playwright_data = self._fetch_with_playwright(car_id)
+            if playwright_data:
+                # Создаем базовый car_info и обновляем данными из Playwright
+                import datetime
+                import uuid
+                current_time = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                car_info = {
+                    "uuid": str(uuid.uuid4()),
+                    "link": f"https://www.dongchedi.com/usedcar/{car_id}",
+                    "car_id": car_id,
+                    "sku_id": car_id,
+                    "source": "dongchedi",
+                    "is_available": True,
+                    "created_at": current_time,
+                    "updated_at": current_time,
+                    "has_details": True,
+                    "is_banned": False,
+                }
+                car_info.update(playwright_data)
+                logger.info(f"fetch_car_detail: [PLAYWRIGHT] Успешно получены данные для car_id={car_id}")
+            else:
+                return None, {"is_available": False, "error": "Failed to load or parse page", "status": 500}
         
         try:
             # Применяем декодер к нужным полям
@@ -1293,28 +1424,15 @@ class DongchediParser(BaseCarParser):
 
             # Преобразуем car_mileage в mileage (числовое значение в км)
             if 'car_mileage' in car_info and car_info['car_mileage'] is not None:
-                try:
-                    import re
-                    mileage_str = str(car_info['car_mileage']).strip()
-                    # Пропускаем пустые строки
-                    if mileage_str and mileage_str != '':
-                        # Обрабатываем единицы измерения "万公里" (10,000 км)
-                        if '万' in mileage_str or '万公里' in mileage_str:
-                            # Извлекаем число перед "万"
-                            match = re.search(r'(\d+\.?\d*)', mileage_str)
-                            if match:
-                                mileage_wan = float(match.group(1))
-                                # 万公里 = 10,000 км
-                                car_info['mileage'] = int(mileage_wan * 10000)
-                        else:
-                            # Обычные километры - извлекаем только цифры
-                            mileage_numeric = re.sub(r'[^\d.]', '', mileage_str)
-                            if mileage_numeric:
-                                car_info['mileage'] = int(float(mileage_numeric))
-                except Exception as e:
-                    # Логируем ошибку для отладки, но не прерываем обработку
-                    logger.debug(f"Ошибка парсинга mileage в fetch_car_detail '{car_info.get('car_mileage')}': {e}")
-                    pass
+                mileage_km, m_meta = normalize_mileage(
+                    car_info['car_mileage'],
+                    year_hint=car_info.get('car_year'),
+                    source="dongchedi:detail",
+                )
+                if mileage_km is not None:
+                    car_info['mileage'] = mileage_km
+                if m_meta.get('warnings'):
+                    logger.debug(f"mileage warnings(detail) raw={car_info.get('car_mileage')} meta={m_meta}")
 
             car_obj = DongchediCar(**{k: v for k, v in car_info.items() if k in DongchediCar.__fields__})
         except Exception as e:
@@ -1865,10 +1983,14 @@ class DongchediParser(BaseCarParser):
             if getattr(detail_car, "link", None):
                 car_obj.link = detail_car.link
             # Копируем базовые поля
-            for field in ['description', 'color', 'transmission', 'fuel_type', 'body_type', 
-                         'drive_type', 'condition', 'engine_volume']:
+            for field in ['title', 'description', 'color', 'transmission', 'fuel_type', 'body_type', 
+                         'drive_type', 'condition', 'engine_volume', 'mileage', 'car_mileage',
+                         'brand_name', 'series_name', 'car_name', 'car_year', 'year', 'city',
+                         'car_source_city_name', 'brand_id', 'series_id', 'shop_id', 'sh_price']:
                 if hasattr(detail_car, field) and getattr(detail_car, field) is not None:
                     setattr(car_obj, field, getattr(detail_car, field))
+                    if field == 'mileage':
+                        logger.info(f"enhance_car_with_details: Копируем mileage для sku_id={sku_id}: {getattr(detail_car, field)}км")
             
             # Копируем engine_volume_ml отдельно, чтобы не перезаписать приоритетным значением из specs позже
             if hasattr(detail_car, 'engine_volume_ml'):

@@ -9,6 +9,7 @@ import requests
 from typing import Optional, Dict, Any, Union, Tuple
 from .models.detailed_car import Che168DetailedCar
 from api.date_utils import normalize_first_registration_date
+from api.mileage_utils import normalize_mileage
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -198,11 +199,104 @@ def _convert_circle_to_bool(value: Union[str, None]) -> Optional[bool]:
     return None
 
 
+def _extract_mileage_from_payload(data: Any, year_hint: Optional[int] = None) -> Tuple[Optional[str], Dict[str, Any]]:
+    """
+    Пытается извлечь пробег из произвольного JSON-объекта (__NEXT_DATA__/pageData).
+    Возвращает строку километров (для сохранения в extracted) и метаданные.
+    """
+    if isinstance(data, dict):
+        for key, val in data.items():
+            lowered = str(key).lower()
+            if lowered in ('mileage', 'car_mileage', 'displaymileage', 'display_mileage', 'mile', 'drivenmileage', 'drivemileage'):
+                km, meta = normalize_mileage(val, year_hint=year_hint, source="che168:payload")
+                if km is not None:
+                    return str(km), meta
+            if isinstance(val, (dict, list)):
+                mileage, meta = _extract_mileage_from_payload(val, year_hint=year_hint)
+                if mileage is not None:
+                    return mileage, meta
+    elif isinstance(data, list):
+        for item in data:
+            mileage, meta = _extract_mileage_from_payload(item, year_hint=year_hint)
+            if mileage is not None:
+                return mileage, meta
+    return None, {}
+
+
+def _extract_mileage_from_soup(soup, year_hint: Optional[int] = None) -> Tuple[Optional[str], Dict[str, Any]]:
+    """
+    Ищет пробег в DOM (input#car_mileage, текст '公里').
+    """
+    candidates = []
+    selectors = ["input#car_mileage", "input[name='car_mileage']", "input[id*='car_mileage']"]
+    for selector in selectors:
+        try:
+            el = soup.select_one(selector)
+            if el and el.get('value'):
+                candidates.append(el.get('value'))
+        except Exception:
+            continue
+
+    # Текстовая эвристика
+    try:
+        text = soup.get_text(" ", strip=True)
+        match = re.search(r'(\d+\.?\d*)\s*([万wW]?)(?:公里|km)', text)
+        if match:
+            val = match.group(1)
+            suffix = match.group(2)
+            candidates.insert(0, f"{val}{suffix}公里")
+    except Exception:
+        pass
+
+    for raw in candidates:
+        km, meta = normalize_mileage(raw, year_hint=year_hint, source="che168:html")
+        if km is not None:
+            return str(km), meta
+    return None, {}
+
+
 class Che168DetailedParserAPI:
     """
     API-based парсер детальной информации для che168.com
     Использует API endpoints напрямую без браузера - быстрее и надёжнее
     """
+    
+    @staticmethod
+    def _create_chrome_driver():
+        """Создает Chrome WebDriver с оптимальными настройками."""
+        import os
+        import tempfile
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
+        
+        chrome_options = Options()
+        chrome_options.add_argument("--headless=new")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
+        chrome_options.page_load_strategy = 'eager'
+        
+        temp_dir = tempfile.mkdtemp()
+        chrome_options.add_argument(f"--user-data-dir={temp_dir}")
+        
+        chrome_bin = os.environ.get("CHROME_BIN")
+        if chrome_bin:
+            chrome_options.binary_location = chrome_bin
+        
+        driver_path = os.environ.get("CHROMEDRIVER_PATH")
+        if driver_path:
+            driver = webdriver.Chrome(service=Service(driver_path), options=chrome_options)
+        else:
+            driver = webdriver.Chrome(options=chrome_options)
+        
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        return driver, temp_dir
     
     # Маппинг китайских названий параметров на поля модели
     API_FIELD_MAPPING = {
@@ -375,13 +469,17 @@ class Che168DetailedParserAPI:
             # Объединяем данные
             extracted = {'car_id': car_id}
             
-            # Сначала добавляем галерею из desktop (если есть)
+            # Сначала добавляем галерею и пробег из desktop (если есть)
             if desktop_images:
                 if desktop_images.get('image_gallery'):
                     extracted['image_gallery'] = desktop_images['image_gallery']
                     extracted['image_count'] = desktop_images.get('image_count', len(desktop_images['image_gallery'].split()))
                 if desktop_images.get('image'):
                     extracted['image'] = desktop_images['image']
+                # Добавляем пробег из desktop HTML, если есть
+                if desktop_images.get('mileage'):
+                    extracted['mileage'] = desktop_images['mileage']
+                    logger.info(f"[API] Пробег из desktop HTML: {extracted['mileage']} для car_id={car_id}")
             
             # Добавляем данные из getparamtypeitems (технические характеристики)
             if params_data:
@@ -690,13 +788,12 @@ class Che168DetailedParserAPI:
                         if normalized:
                             extracted[db_field] = normalized
                     elif db_field == 'mileage':
-                        # Преобразуем в км
-                        mileage_str = str(value)
-                        match = re.search(r'(\d+\.?\d*)万', mileage_str)
-                        if match:
-                            extracted[db_field] = str(int(float(match.group(1)) * 10000))
-                        else:
-                            extracted[db_field] = re.sub(r'[^\d]', '', mileage_str)
+                        year_hint = extracted.get('year')
+                        mileage_km, meta = normalize_mileage(value, year_hint=year_hint, source="che168:getcarinfo")
+                        if mileage_km is not None:
+                            extracted[db_field] = str(mileage_km)
+                        if meta.get('warnings'):
+                            logger.debug(f"[API] mileage warnings {meta['warnings']} raw={value} meta={meta}")
                     elif db_field == 'price':
                         # Цена - float
                         extracted[db_field] = _parse_float(value)
@@ -807,6 +904,9 @@ class Che168DetailedParserAPI:
                         logger.info(f"[API] Галерея получена через selenium desktop для car_id={car_id}: {extracted['image_count']} изображений")
                     if not extracted.get('image') and images_data.get('image'):
                         extracted['image'] = images_data['image']
+                    # Пробег из fallback, если API не дал
+                    if not extracted.get('mileage') and images_data.get('mileage'):
+                        extracted['mileage'] = images_data['mileage']
                 else:
                     # Если desktop не помог, пробуем мобильный fallback (head_images)
                     images_data = self._fetch_images_fallback(car_id)
@@ -817,6 +917,8 @@ class Che168DetailedParserAPI:
                             extracted['image_gallery'] = images_data['image_gallery']
                             extracted['image_count'] = images_data.get('image_count', len(images_data['image_gallery'].split()))
                             logger.info(f"[API] Галерея получена через мобильный fallback для car_id={car_id}: {extracted['image_count']} изображений")
+                        if not extracted.get('mileage') and images_data.get('mileage'):
+                            extracted['mileage'] = images_data['mileage']
             
             return extracted
             
@@ -877,46 +979,19 @@ class Che168DetailedParserAPI:
         """
         Fallback метод для получения изображений через selenium парсер
         когда API блокируется (403). Парсит head_images из JSON на странице.
-        
-        Args:
-            car_id: ID машины
-            
-        Returns:
-            Словарь с image, image_gallery, image_count или пустой словарь
         """
         try:
             import json
-            from selenium import webdriver
-            from selenium.webdriver.chrome.options import Options
-            from selenium.webdriver.chrome.service import Service
-            from bs4 import BeautifulSoup
-            import os
-            import tempfile
             import shutil
             import time
+            from bs4 import BeautifulSoup
             
-            # Формируем URL для детальной страницы
             car_url = f'https://m.che168.com/cardetail/index?infoid={car_id}'
-            
-            # Настройка Chrome
-            chrome_options = Options()
-            chrome_options.add_argument("--headless=new")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-            chrome_options.add_experimental_option('useAutomationExtension', False)
-            
-            temp_dir = tempfile.mkdtemp()
-            chrome_options.add_argument(f"--user-data-dir={temp_dir}")
-            
             driver = None
+            temp_dir = None
+            
             try:
-                driver_path = os.environ.get("CHROMEDRIVER_PATH")
-                if driver_path:
-                    driver = webdriver.Chrome(service=Service(driver_path), options=chrome_options)
-                else:
-                    driver = webdriver.Chrome(options=chrome_options)
+                driver, temp_dir = self._create_chrome_driver()
                 
                 driver.get(car_url)
                 
@@ -945,6 +1020,10 @@ class Che168DetailedParserAPI:
                         page_props = next_data_js.get('props', {}).get('pageProps', {})
                         if 'skuDetail' in page_props:
                             sku_detail = page_props['skuDetail']
+                            result_payload = {}
+                            mileage_val, m_meta = _extract_mileage_from_payload(sku_detail, year_hint=None)
+                            if mileage_val:
+                                result_payload['mileage'] = mileage_val
                             if 'head_images' in sku_detail and sku_detail['head_images']:
                                 head_images = sku_detail['head_images']
                                 if isinstance(head_images, list) and len(head_images) > 0:
@@ -953,19 +1032,21 @@ class Che168DetailedParserAPI:
                                     
                                     if valid_images:
                                         logger.info(f"[API] Fallback (JS): найдено {len(valid_images)} изображений через window.__NEXT_DATA__ для car_id={car_id} (из {len(head_images)} исходных)")
-                                        return {
+                                        result_payload.update({
                                             'image': valid_images[0],
                                             'image_gallery': ' '.join(valid_images),
                                             'image_count': len(valid_images)
-                                        }
+                                        })
                                     else:
                                         # Если фильтр слишком строгий — возвращаем сырые изображения
                                         logger.warning(f"[API] Fallback (JS): фильтр убрал все изображения для car_id={car_id}, возвращаем сырые {len(head_images)}")
-                                        return {
+                                        result_payload.update({
                                             'image': head_images[0] if head_images else None,
                                             'image_gallery': ' '.join(head_images) if head_images else None,
                                             'image_count': len(head_images)
-                                        }
+                                        })
+                            if result_payload:
+                                return result_payload
                 except Exception as e:
                     logger.debug(f"[API] Ошибка получения __NEXT_DATA__ через JS для car_id={car_id}: {e}")
                 
@@ -1005,21 +1086,27 @@ class Che168DetailedParserAPI:
                                                     # Фильтруем изображения (исключаем рекламу, логотипы и т.д.)
                                                     valid_images = _filter_car_images(head_images)
                                                     
+                                                    result_payload = {}
                                                     if valid_images:
                                                         logger.info(f"[API] Fallback (HTML): найдено {len(valid_images)} изображений через __NEXT_DATA__ в HTML для car_id={car_id} (из {len(head_images)} исходных)")
-                                                        return {
+                                                        result_payload.update({
                                                             'image': valid_images[0],
                                                             'image_gallery': ' '.join(valid_images),
                                                             'image_count': len(valid_images)
-                                                        }
+                                                        })
                                                     else:
                                                         # Если фильтр слишком строгий — возвращаем сырые изображения
                                                         logger.warning(f"[API] Fallback (HTML): фильтр убрал все изображения для car_id={car_id}, возвращаем сырые {len(head_images)}")
-                                                        return {
+                                                        result_payload.update({
                                                             'image': head_images[0] if head_images else None,
                                                             'image_gallery': ' '.join(head_images) if head_images else None,
                                                             'image_count': len(head_images)
-                                                        }
+                                                        })
+                                                    mileage_val, m_meta = _extract_mileage_from_payload(sku_detail, year_hint=None)
+                                                    if mileage_val:
+                                                        result_payload['mileage'] = mileage_val
+                                                    if result_payload:
+                                                        return result_payload
                         except Exception as e:
                             logger.debug(f"[API] Ошибка парсинга JSON в fallback для car_id={car_id}: {e}")
                             continue
@@ -1065,19 +1152,27 @@ class Che168DetailedParserAPI:
                     
                     if images_found:
                         logger.info(f"[API] Fallback: найдено {len(images_found)} изображений через CSS селекторы для car_id={car_id}")
-                        return {
+                        payload = {
                             'image': images_found[0],
                             'image_gallery': ' '.join(images_found),
                             'image_count': len(images_found)
                         }
+                        mileage_html, m_meta = _extract_mileage_from_soup(soup, year_hint=None)
+                        if mileage_html:
+                            payload['mileage'] = mileage_html
+                        return payload
                     else:
                         # Если фильтр слишком строгий — возвращаем сырые изображения
                         logger.warning(f"[API] Fallback: фильтр убрал все изображения для car_id={car_id}, возвращаем сырые {len(raw_images)}")
-                        return {
+                        payload = {
                             'image': raw_images[0] if raw_images else None,
                             'image_gallery': ' '.join(raw_images) if raw_images else None,
                             'image_count': len(raw_images)
                         }
+                        mileage_html, m_meta = _extract_mileage_from_soup(soup, year_hint=None)
+                        if mileage_html:
+                            payload['mileage'] = mileage_html
+                        return payload
                 
                 return {}
             finally:
@@ -1102,54 +1197,21 @@ class Che168DetailedParserAPI:
         """
         logger.info(f"[API] Desktop selenium начинаем для car_id={car_id}, shop_id={shop_id}")
         try:
-            from selenium import webdriver
-            from selenium.webdriver.chrome.options import Options
-            from selenium.webdriver.chrome.service import Service
             from selenium.webdriver.support.ui import WebDriverWait
             from selenium.webdriver.support import expected_conditions as EC
             from selenium.webdriver.common.by import By
             from bs4 import BeautifulSoup
-            import os
             import time
-            import tempfile
             import shutil
 
-            # Пробуем несколько URL: dealer (если есть shop_id), потом cardetail
-            urls_to_try = [
-                f'https://www.che168.com/cardetail/{car_id}.html',  # десктоп
-            ]
+            urls_to_try = [f'https://www.che168.com/cardetail/{car_id}.html']
             if shop_id:
                 urls_to_try.insert(0, f'https://www.che168.com/dealer/{shop_id}/{car_id}.html')
 
-            chrome_options = Options()
-            chrome_options.add_argument("--headless=new")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-            chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            chrome_options.add_argument("--window-size=1920,1080")
-            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-            # EAGER - не ждём полной загрузки, берём DOM как только готов
-            chrome_options.page_load_strategy = 'eager'
-
-            # Как в тесте: temp user-data-dir
-            temp_dir = tempfile.mkdtemp()
-            chrome_options.add_argument(f"--user-data-dir={temp_dir}")
-
             driver = None
+            temp_dir = None
             try:
-                driver_path = os.environ.get("CHROMEDRIVER_PATH")
-                if driver_path:
-                    driver = webdriver.Chrome(service=Service(driver_path), options=chrome_options)
-                else:
-                    driver = webdriver.Chrome(options=chrome_options)
-
-                # Снимаем webdriver флаг как в тесте
-                driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
-                    'source': 'Object.defineProperty(navigator, "webdriver", {get: () => undefined});'
-                })
-                
-                # Короткий таймаут - eager strategy не ждёт полной загрузки
+                driver, temp_dir = self._create_chrome_driver()
                 driver.set_page_load_timeout(45)
 
                 for url in urls_to_try:
@@ -1176,6 +1238,7 @@ class Che168DetailedParserAPI:
 
                         soup = BeautifulSoup(driver.page_source, 'html.parser')
                         images_found = []
+                        mileage_from_html, mileage_meta = _extract_mileage_from_soup(soup, year_hint=None)
 
                         # Метод 1: Пробуем через JavaScript window переменные
                         import json
@@ -1225,6 +1288,10 @@ class Che168DetailedParserAPI:
                                             if 'head_images' in sku_detail and sku_detail['head_images']:
                                                 images_found = sku_detail['head_images']
                                                 logger.info(f"[API] Desktop: найдено {len(images_found)} изображений в __NEXT_DATA__ (id)")
+                                            if not mileage_from_html:
+                                                mileage_payload, m_meta = _extract_mileage_from_payload(sku_detail, year_hint=None)
+                                                if mileage_payload:
+                                                    mileage_from_html = mileage_payload
                                 except Exception as e:
                                     logger.debug(f"[API] Desktop: ошибка парсинга __NEXT_DATA__ (id): {e}")
                         
@@ -1243,6 +1310,11 @@ class Che168DetailedParserAPI:
                                                     if 'head_images' in sku_detail and sku_detail['head_images']:
                                                         images_found = sku_detail['head_images']
                                                         logger.info(f"[API] Desktop: найдено {len(images_found)} изображений в __NEXT_DATA__ (text)")
+                                                    if not mileage_from_html:
+                                                        mileage_payload, m_meta = _extract_mileage_from_payload(sku_detail, year_hint=None)
+                                                        if mileage_payload:
+                                                            mileage_from_html = mileage_payload
+                                                    if images_found:
                                                         break
                                     except Exception as e:
                                         logger.debug(f"[API] Desktop: ошибка парсинга __NEXT_DATA__ (text): {e}")
@@ -1273,18 +1345,26 @@ class Che168DetailedParserAPI:
                             images_filtered = _filter_car_images(images_found)
                             if images_filtered:
                                 logger.info(f"[API] Desktop fallback: УСПЕХ {len(images_filtered)} изображений для car_id={car_id}")
-                                return {
+                                payload = {
                                     'image': images_filtered[0],
                                     'image_gallery': ' '.join(images_filtered),
                                     'image_count': len(images_filtered),
                                 }
-                            # Если фильтр слишком строгий — возвращаем сырые
-                            logger.info(f"[API] Desktop fallback: фильтр убрал все, возвращаем сырые {len(images_found)}")
-                            return {
-                                'image': images_found[0],
-                                'image_gallery': ' '.join(images_found),
-                                'image_count': len(images_found),
-                            }
+                            else:
+                                # Если фильтр слишком строгий — возвращаем сырые
+                                logger.info(f"[API] Desktop fallback: фильтр убрал все, возвращаем сырые {len(images_found)}")
+                                payload = {
+                                    'image': images_found[0],
+                                    'image_gallery': ' '.join(images_found),
+                                    'image_count': len(images_found),
+                                }
+                            if mileage_from_html:
+                                payload['mileage'] = mileage_from_html
+                            return payload
+                        # Если нет картинок, но нашли пробег — вернём его, чтобы не терять данные
+                        if mileage_from_html:
+                            logger.info(f"[API] Desktop fallback: найден mileage без изображений для car_id={car_id}: {mileage_from_html}")
+                            return {'mileage': mileage_from_html}
                     except Exception as url_err:
                         logger.warning(f"[API] Desktop selenium ошибка на URL {url}: {url_err}")
                         continue

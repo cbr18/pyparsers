@@ -48,3 +48,5 @@ RUN mkdir -p /app/test_results
 CMD ["python", "/app/test_che168_gallery_methods.py"]
 
 
+
+

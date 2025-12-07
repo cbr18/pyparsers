@@ -740,17 +740,26 @@ class Che168DetailedParserAPI:
                     extracted['image'] = imageurl.strip()
                     logger.info(f"[API] Использовано imageurl/carimage для car_id={car_id}: {imageurl[:50]}...")
 
-            # Если не нашли галерею через API, пробуем selenium desktop (основной способ)
-            if not extracted.get('image_gallery'):
+            # Если не нашли галерею или она слишком короткая (<=1 фото), пробуем selenium desktop (основной способ)
+            need_gallery = False
+            gallery = extracted.get('image_gallery')
+            if not gallery:
+                need_gallery = True
+            else:
+                gallery_count = len(gallery.split())
+                if gallery_count <= 1:
+                    need_gallery = True
+
+            if need_gallery:
                 images_data = self._fetch_images_desktop(car_id)
                 if images_data:
-                    # Не перетираем image, если уже есть; обновляем только галерею/счетчик
-                    if not extracted.get('image') and images_data.get('image'):
-                        extracted['image'] = images_data['image']
+                    # Не перетираем image, если уже есть; обновляем галерею/счетчик
                     if images_data.get('image_gallery'):
                         extracted['image_gallery'] = images_data['image_gallery']
                         extracted['image_count'] = images_data.get('image_count', len(images_data['image_gallery'].split()))
                         logger.info(f"[API] Галерея получена через selenium desktop для car_id={car_id}: {extracted['image_count']} изображений")
+                    if not extracted.get('image') and images_data.get('image'):
+                        extracted['image'] = images_data['image']
                 else:
                     # Если desktop не помог, пробуем мобильный fallback (head_images)
                     images_data = self._fetch_images_fallback(car_id)

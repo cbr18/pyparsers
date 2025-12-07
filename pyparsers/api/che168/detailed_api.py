@@ -312,18 +312,19 @@ def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict
     return domain_car
 
 
-async def _parse_car_details_async(car_id: int) -> tuple[Optional[Che168DetailedCar], bool]:
+async def _parse_car_details_async(car_id: int, shop_id: Optional[int] = None) -> tuple[Optional[Che168DetailedCar], bool]:
     loop = asyncio.get_running_loop()
 
     def _work() -> tuple[Optional[Che168DetailedCar], bool]:
         # API парсер не требует headless параметра
         parser = Che168DetailedParser()
-        return parser.parse_car_details(car_id)
+        return parser.parse_car_details(car_id, shop_id=shop_id)
 
     return await loop.run_in_executor(None, _work)
 
 class CarDetailRequest(BaseModel):
     car_id: int
+    shop_id: Optional[int] = None  # ID дилера для получения галереи
     force_update: bool = False
 
 class CarDetailResponse(BaseModel):
@@ -356,9 +357,9 @@ async def parse_car_details(request: CarDetailRequest):
         CarDetailResponse с результатом парсинга
     """
     try:
-        logger.info(f"Начало парсинга детальной информации для car_id: {request.car_id}")
+        logger.info(f"Начало парсинга детальной информации для car_id: {request.car_id}, shop_id: {request.shop_id}")
         
-        car_data, is_banned = await _parse_car_details_async(request.car_id)
+        car_data, is_banned = await _parse_car_details_async(request.car_id, shop_id=request.shop_id)
         
         if car_data:
             logger.info(f"Успешно получена детальная информация для car_id: {request.car_id}")

@@ -26,7 +26,6 @@ services:
     tmpfs:
       - /tmp
     mem_limit: 4g
-    init: true
 
 networks:
   default:

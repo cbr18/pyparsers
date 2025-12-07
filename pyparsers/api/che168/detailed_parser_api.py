@@ -65,6 +65,11 @@ def _filter_car_images(image_urls: list) -> list:
         r'watermark',  # watermark
         r'qr[_-]?code',  # qr_code, qr-code
         r'qrcode',  # qrcode
+        r'404-',  # 404 страница
+        r'code\.png',  # QR код
+        r'police\.png',  # полиция
+        r'nvbar',  # navbar изображения
+        r'sdcard_images',  # служебные изображения
     ]
     
     # Домены, которые обычно содержат рекламу/служебные изображения
@@ -335,19 +340,30 @@ class Che168DetailedParserAPI:
             "Referer": "https://m.che168.com/",
         })
     
-    def parse_car_details(self, car_id: int) -> tuple[Optional[Che168DetailedCar], bool]:
+    def parse_car_details(self, car_id: int, shop_id: Optional[int] = None) -> tuple[Optional[Che168DetailedCar], bool]:
         """
         Парсит детальную информацию через API
         
         Args:
             car_id: ID машины
+            shop_id: ID дилера (опционально, для получения галереи с dealer URL)
             
         Returns:
             Tuple[Che168DetailedCar или None, is_banned: bool]
         """
-        logger.info(f"[API] Парсинг car_id: {car_id}")
+        logger.info(f"[API] Парсинг car_id: {car_id}, shop_id: {shop_id}")
         # Флаг блокировки должен сохраняться даже при исключениях
         is_banned: bool = False
+        
+        # СНАЧАЛА получаем галерею через desktop selenium (основной метод, работает стабильно)
+        # Если передан shop_id, используем dealer URL для получения полной галереи
+        desktop_images: Dict[str, Any] = {}
+        try:
+            desktop_images = self._fetch_images_desktop(car_id, shop_id=shop_id)
+            if desktop_images and desktop_images.get('image_gallery'):
+                logger.info(f"[API] Desktop Selenium: получено {desktop_images.get('image_count', 0)} изображений для car_id={car_id}")
+        except Exception as e:
+            logger.warning(f"[API] Desktop Selenium ошибка для car_id={car_id}: {e}")
         
         try:
             # Получаем данные из обоих API
@@ -357,9 +373,19 @@ class Che168DetailedParserAPI:
             # Объединяем данные
             extracted = {'car_id': car_id}
             
-            # Сначала добавляем данные из getparamtypeitems (технические характеристики)
+            # Сначала добавляем галерею из desktop (если есть)
+            if desktop_images:
+                if desktop_images.get('image_gallery'):
+                    extracted['image_gallery'] = desktop_images['image_gallery']
+                    extracted['image_count'] = desktop_images.get('image_count', len(desktop_images['image_gallery'].split()))
+                if desktop_images.get('image'):
+                    extracted['image'] = desktop_images['image']
+            
+            # Добавляем данные из getparamtypeitems (технические характеристики)
             if params_data:
-                extracted.update(params_data)
+                for key, value in params_data.items():
+                    if key not in extracted or not extracted.get(key):
+                        extracted[key] = value
                 # Проверяем флаг блокировки из params_data
                 if params_data.get('is_banned'):
                     is_banned = True
@@ -369,7 +395,7 @@ class Che168DetailedParserAPI:
             
             # Добавляем данные из getcarinfo (базовая информация)
             if carinfo_data:
-                # Не перезаписываем уже заполненные поля
+                # Не перезаписываем уже заполненные поля (в т.ч. галерею!)
                 for key, value in carinfo_data.items():
                     if key not in extracted or not extracted.get(key):
                         extracted[key] = value
@@ -377,7 +403,7 @@ class Che168DetailedParserAPI:
                 if carinfo_data.get('is_banned'):
                     is_banned = True
                 logger.info(f"[API] Получено {len(carinfo_data)} полей из getcarinfo")
-            
+
             # Определяем, заблокирован ли источник
             # Если API был заблокирован (403/514) и не удалось получить критичные поля через fallback, устанавливаем is_banned
             if is_banned:
@@ -406,8 +432,12 @@ class Che168DetailedParserAPI:
                         logger.info(f"[API] Извлечено power из engine_info: {extracted['power']}")
             
             # Проверяем валидность данных
-            significant_fields = ['power', 'transmission', 'drive_type', 'fuel_type', 
-                                'engine_volume', 'emission_standard']
+            # Считаем значимыми поля силовой установки и наличие галереи/даты, чтобы не отбрасывать fallback
+            significant_fields = [
+                'power', 'transmission', 'drive_type', 'fuel_type',
+                'engine_volume', 'emission_standard',
+                'image_gallery', 'first_registration_time'
+            ]
             has_significant = any(extracted.get(f) for f in significant_fields)
             
             if not has_significant:
@@ -596,7 +626,7 @@ class Che168DetailedParserAPI:
                 logger.warning(f"[API] getcarinfo вернул {response.status_code} для car_id={car_id} - API заблокирован")
                 extracted['is_banned'] = True  # Устанавливаем флаг блокировки
                 # Пробуем получить изображения через selenium desktop (основной fallback)
-                images_data = self._fetch_images_desktop(car_id)
+                images_data = self._fetch_images_desktop(car_id, extracted.get('shop_id'))
                 if images_data:
                     extracted.update(images_data)
                     logger.info(f"[API] Получены изображения через selenium desktop для car_id={car_id}")
@@ -751,7 +781,7 @@ class Che168DetailedParserAPI:
                     need_gallery = True
 
             if need_gallery:
-                images_data = self._fetch_images_desktop(car_id)
+                images_data = self._fetch_images_desktop(car_id, extracted.get('shop_id'))
                 if images_data:
                     # Не перетираем image, если уже есть; обновляем галерею/счетчик
                     if images_data.get('image_gallery'):
@@ -775,13 +805,12 @@ class Che168DetailedParserAPI:
             
         except requests.RequestException as e:
             logger.error(f"[API] Ошибка запроса getcarinfo: {e}")
-            # При 403/514 ошибке пробуем fallback для изображений
-            if "403" in str(e) or "Forbidden" in str(e) or "514" in str(e) or "Frequency" in str(e):
-                extracted['is_banned'] = True  # Устанавливаем флаг блокировки
-                images_data = self._fetch_images_desktop(car_id) or self._fetch_images_fallback(car_id)
-                if images_data:
-                    extracted.update(images_data)
-                    logger.info(f"[API] Получены изображения через selenium после блокировки для car_id={car_id}")
+            # При любой сетевой ошибке пробуем fallbacks, считаем источник заблокированным/недоступным
+            extracted['is_banned'] = True
+            images_data = self._fetch_images_desktop(car_id, extracted.get('shop_id')) or self._fetch_images_fallback(car_id)
+            if images_data:
+                extracted.update(images_data)
+                logger.info(f"[API] Получены изображения через selenium после ошибки API для car_id={car_id}")
             return extracted
         except Exception as e:
             logger.error(f"[API] Ошибка парсинга getcarinfo: {e}")
@@ -984,31 +1013,204 @@ class Che168DetailedParserAPI:
             logger.debug(f"[API] Fallback для изображений не удался для car_id={car_id}: {e}")
             return {}
 
-    def _fetch_images_desktop(self, car_id: int) -> Dict[str, Any]:
+    def _fetch_images_desktop(self, car_id: int, shop_id: Optional[int] = None) -> Dict[str, Any]:
         """
-        Основной Selenium-fallback: парсит галерею с десктопной страницы,
-        т.к. она стабильно отдаёт полный список изображений.
+        Основной Selenium-fallback: парсит галерею с десктопной страницы.
+        Код один-в-один как в test_selenium_desktop (который возвращает 84/75 фото).
         """
+        logger.info(f"[API] Desktop selenium начинаем для car_id={car_id}, shop_id={shop_id}")
         try:
-            # Импортируем тут, чтобы не тащить selenium при импорте модуля
-            from api.che168.parser import Che168Parser
+            from selenium import webdriver
+            from selenium.webdriver.chrome.options import Options
+            from selenium.webdriver.chrome.service import Service
+            from selenium.webdriver.support.ui import WebDriverWait
+            from selenium.webdriver.support import expected_conditions as EC
+            from selenium.webdriver.common.by import By
+            from bs4 import BeautifulSoup
+            import os
+            import time
+            import tempfile
+            import shutil
 
-            car_url = f'https://www.che168.com/cardetail/{car_id}.html'
-            parser = Che168Parser(headless=True)
-            car_obj, _ = parser.fetch_car_detail(car_url)
+            # Пробуем несколько URL: десктопный cardetail (основной), dealer, мобильный
+            urls_to_try = [
+                f'https://www.che168.com/cardetail/{car_id}.html',  # десктоп
+            ]
+            if shop_id:
+                urls_to_try.insert(0, f'https://www.che168.com/dealer/{shop_id}/{car_id}.html')
 
-            if car_obj:
-                gallery = getattr(car_obj, 'image_gallery', None)
-                if gallery:
-                    images = gallery.split()
-                    logger.info(f"[API] Desktop fallback: найдено {len(images)} изображений для car_id={car_id}")
-                    return {
-                        'image': getattr(car_obj, 'image', None) or (images[0] if images else None),
-                        'image_gallery': gallery,
-                        'image_count': len(images),
-                    }
+            chrome_options = Options()
+            chrome_options.add_argument("--headless=new")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            chrome_options.add_argument("--window-size=1920,1080")
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+
+            # Как в тесте: temp user-data-dir
+            temp_dir = tempfile.mkdtemp()
+            chrome_options.add_argument(f"--user-data-dir={temp_dir}")
+
+            driver = None
+            try:
+                driver_path = os.environ.get("CHROMEDRIVER_PATH")
+                if driver_path:
+                    driver = webdriver.Chrome(service=Service(driver_path), options=chrome_options)
+                else:
+                    driver = webdriver.Chrome(options=chrome_options)
+
+                # Снимаем webdriver флаг как в тесте
+                driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+                    'source': 'Object.defineProperty(navigator, "webdriver", {get: () => undefined});'
+                })
+
+                for url in urls_to_try:
+                    logger.info(f"[API] Desktop selenium пробуем URL: {url}")
+                    try:
+                        driver.get(url)
+
+                        try:
+                            WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                        except:
+                            pass
+
+                        # Прокрутка для загрузки динамического контента
+                        time.sleep(2)
+                        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                        time.sleep(2)
+                        driver.execute_script("window.scrollTo(0, 0);")
+                        time.sleep(2)
+
+                        soup = BeautifulSoup(driver.page_source, 'html.parser')
+                        images_found = []
+
+                        # Метод 1: Пробуем через JavaScript window переменные
+                        import json
+                        try:
+                            # Ищем piclist или images в window объектах
+                            js_images = driver.execute_script("""
+                                var images = [];
+                                // Ищем в window.__INITIAL_STATE__
+                                if (window.__INITIAL_STATE__ && window.__INITIAL_STATE__.carDetail) {
+                                    var detail = window.__INITIAL_STATE__.carDetail;
+                                    if (detail.piclist) images = images.concat(detail.piclist);
+                                    if (detail.images) images = images.concat(detail.images);
+                                    if (detail.head_images) images = images.concat(detail.head_images);
+                                }
+                                // Ищем в window.pageData
+                                if (window.pageData && window.pageData.carInfo) {
+                                    var info = window.pageData.carInfo;
+                                    if (info.piclist) images = images.concat(info.piclist);
+                                    if (info.images) images = images.concat(info.images);
+                                }
+                                // Ищем в window.__NUXT__
+                                if (window.__NUXT__ && window.__NUXT__.data) {
+                                    var data = window.__NUXT__.data;
+                                    for (var key in data) {
+                                        if (data[key] && data[key].piclist) images = images.concat(data[key].piclist);
+                                        if (data[key] && data[key].images) images = images.concat(data[key].images);
+                                    }
+                                }
+                                return images;
+                            """)
+                            if js_images and len(js_images) > 0:
+                                images_found = [img for img in js_images if isinstance(img, str)]
+                                logger.info(f"[API] Desktop: найдено {len(images_found)} изображений через JS")
+                        except Exception as e:
+                            logger.debug(f"[API] Desktop: ошибка получения JS данных: {e}")
+
+                        # Метод 2: ищем script с id="__NEXT_DATA__"
+                        if not images_found:
+                            script_tag = soup.find('script', {'id': '__NEXT_DATA__'})
+                            if script_tag and script_tag.string:
+                                try:
+                                    data = json.loads(script_tag.string)
+                                    if 'props' in data:
+                                        page_props = data.get('props', {}).get('pageProps', {})
+                                        if 'skuDetail' in page_props:
+                                            sku_detail = page_props['skuDetail']
+                                            if 'head_images' in sku_detail and sku_detail['head_images']:
+                                                images_found = sku_detail['head_images']
+                                                logger.info(f"[API] Desktop: найдено {len(images_found)} изображений в __NEXT_DATA__ (id)")
+                                except Exception as e:
+                                    logger.debug(f"[API] Desktop: ошибка парсинга __NEXT_DATA__ (id): {e}")
+                        
+                        # Метод 3: ищем по содержимому (на случай если нет id)
+                        if not images_found:
+                            for script in soup.find_all('script'):
+                                if script.string and '__NEXT_DATA__' in script.string:
+                                    try:
+                                        json_match = re.search(r'\{.*\}', script.string, re.DOTALL)
+                                        if json_match:
+                                            data = json.loads(json_match.group())
+                                            if 'props' in data:
+                                                page_props = data.get('props', {}).get('pageProps', {})
+                                                if 'skuDetail' in page_props:
+                                                    sku_detail = page_props['skuDetail']
+                                                    if 'head_images' in sku_detail and sku_detail['head_images']:
+                                                        images_found = sku_detail['head_images']
+                                                        logger.info(f"[API] Desktop: найдено {len(images_found)} изображений в __NEXT_DATA__ (text)")
+                                                        break
+                                    except Exception as e:
+                                        logger.debug(f"[API] Desktop: ошибка парсинга __NEXT_DATA__ (text): {e}")
+
+                        # Если не нашли в __NEXT_DATA__, пробуем CSS селекторы
+                        if not images_found:
+                            image_selectors = [
+                                '.car-thumb img', '.car-pic img', '.pic-list img',
+                                '.gallery img', '.photo-list img', '.slider img',
+                                'img[src*="autoimg"]', 'img[src*="che168"]',
+                                'img[src*="2sc"]', 'img[src*="escimg"]',
+                                '[class*="swiper"] img', '[class*="carousel"] img',
+                                '.detail-pic img', '.car-detail img',
+                            ]
+
+                            for selector in image_selectors:
+                                try:
+                                    elements = soup.select(selector)
+                                    for img in elements:
+                                        src = img.get('src') or img.get('data-src') or img.get('data-original')
+                                        if src:
+                                            if src.startswith('//'):
+                                                src = 'https:' + src
+                                            if 'http' in src and src not in images_found:
+                                                images_found.append(src)
+                                except:
+                                    continue
+
+                        logger.info(f"[API] Desktop fallback: сырых {len(images_found)} изображений для car_id={car_id} (url={url})")
+
+                        if images_found:
+                            # Фильтруем
+                            images_filtered = _filter_car_images(images_found)
+                            if images_filtered:
+                                logger.info(f"[API] Desktop fallback: УСПЕХ {len(images_filtered)} изображений для car_id={car_id}")
+                                return {
+                                    'image': images_filtered[0],
+                                    'image_gallery': ' '.join(images_filtered),
+                                    'image_count': len(images_filtered),
+                                }
+                            # Если фильтр слишком строгий — возвращаем сырые
+                            logger.info(f"[API] Desktop fallback: фильтр убрал все, возвращаем сырые {len(images_found)}")
+                            return {
+                                'image': images_found[0],
+                                'image_gallery': ' '.join(images_found),
+                                'image_count': len(images_found),
+                            }
+                    except Exception as url_err:
+                        logger.warning(f"[API] Desktop selenium ошибка на URL {url}: {url_err}")
+                        continue
+
+                logger.warning(f"[API] Desktop fallback: ни один URL не дал изображений для car_id={car_id}")
+
+            finally:
+                if driver:
+                    driver.quit()
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
         except Exception as e:
-            logger.debug(f"[API] Desktop fallback для изображений не удался для car_id={car_id}: {e}")
+            logger.warning(f"[API] Desktop fallback ошибка для car_id={car_id}: {e}")
         return {}
     
     def close(self):

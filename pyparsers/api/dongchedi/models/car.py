@@ -159,3 +159,6 @@ class DongchediCar(BaseModel):
     # Таможенные и утилизационные сборы
     recycling_fee: Optional[int] = None  # Утильсбор в рублях - INTEGER
     customs_duty: Optional[int] = None  # Таможенная пошлина в рублях - INTEGER
+    
+    # Флаг блокировки
+    is_banned: Optional[bool] = False  # True если источник заблокирован и не удалось получить image_gallery/first_registration_time

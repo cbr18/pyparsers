@@ -1,0 +1,52 @@
+[
+  {
+    "method": "api_direct",
+    "success": false,
+    "gallery": null,
+    "count": 0,
+    "error": null,
+    "status_code": 514,
+    "test_name": "1. API Direct (getcarinfo)"
+  },
+  {
+    "method": "selenium_mobile",
+    "success": false,
+    "gallery": null,
+    "count": 0,
+    "error": "__NEXT_DATA__ не найден, CSS селекторы не нашли изображений",
+    "test_name": "2. Selenium Mobile (__NEXT_DATA__)"
+  },
+  {
+    "method": "selenium_desktop",
+    "success": true,
+    "gallery": "http://www.autoimg.cn/che168_2sc/images/201207/logo_small.png http://www.autoimg.cn/che168_2sc/images/201207/weibo_ic.jpg https://www.autoimg.cn/2scimg/web/website/20160308/police.png",
+    "count": 3,
+    "error": null,
+    "test_name": "3. Selenium Desktop"
+  },
+  {
+    "method": "requests_mobile",
+    "success": false,
+    "gallery": null,
+    "count": 0,
+    "error": "HTTP 514",
+    "status_code": 514,
+    "test_name": "4. Requests Mobile (без Selenium)"
+  },
+  {
+    "method": "api_alternative",
+    "success": false,
+    "gallery": null,
+    "count": 0,
+    "error": "Все альтернативные API не вернули изображения",
+    "test_name": "5. API Alternative endpoints"
+  },
+  {
+    "method": "existing_parser",
+    "success": false,
+    "gallery": null,
+    "count": 0,
+    "error": "No module named 'pydantic'",
+    "test_name": "6. Existing Parser (che168/parser.py)"
+  }
+]

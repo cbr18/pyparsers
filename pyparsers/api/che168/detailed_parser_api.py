@@ -6,7 +6,7 @@ API-based парсер детальной информации с che168.com
 import re
 import logging
 import requests
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, Union, Tuple
 from .models.detailed_car import Che168DetailedCar
 from api.date_utils import normalize_first_registration_date
 
@@ -30,6 +30,128 @@ def _parse_int(value: Union[str, int, float, None]) -> Optional[int]:
     except (ValueError, TypeError):
         pass
     return None
+
+
+def _filter_car_images(image_urls: list) -> list:
+    """
+    Фильтрует изображения, исключая рекламу, логотипы и служебные изображения.
+    
+    Args:
+        image_urls: Список URL изображений (может быть список строк или список словарей)
+        
+    Returns:
+        Отфильтрованный список валидных изображений машин
+    """
+    if not image_urls:
+        return []
+    
+    # Паттерны для исключения (реклама, логотипы, служебные изображения)
+    exclude_patterns = [
+        r'ad[s]?[_-]?',  # ad, ads, ad_, ad-
+        r'banner',  # banner
+        r'logo',  # logo
+        r'brand',  # brand
+        r'placeholder',  # placeholder
+        r'default[_-]?image',  # default_image, default-image
+        r'error',  # error
+        r'loading',  # loading
+        r'spinner',  # spinner
+        r'icon',  # icon
+        r'avatar',  # avatar
+        r'head[_-]?portrait',  # head_portrait, head-portrait
+        r'user[_-]?pic',  # user_pic, user-pic
+        r'dealer[_-]?logo',  # dealer_logo, dealer-logo
+        r'shop[_-]?logo',  # shop_logo, shop-logo
+        r'watermark',  # watermark
+        r'qr[_-]?code',  # qr_code, qr-code
+        r'qrcode',  # qrcode
+    ]
+    
+    # Домены, которые обычно содержат рекламу/служебные изображения
+    exclude_domains = [
+        'ad.',  # рекламные домены
+        'ads.',  # рекламные домены
+        'advertising.',  # рекламные домены
+        'tracking.',  # трекинг
+        'analytics.',  # аналитика
+    ]
+    
+    valid_images = []
+    for img in image_urls:
+        img_url = None
+        
+        # Если изображение - строка
+        if isinstance(img, str) and img.strip():
+            img_url = img.strip()
+        # Если изображение - словарь/объект, пробуем извлечь URL из разных полей
+        elif isinstance(img, dict):
+            img_url = (img.get('url') or img.get('src') or img.get('image') or 
+                     img.get('picurl') or img.get('link') or 
+                     list(img.values())[0] if img else None)
+            if img_url and not isinstance(img_url, str):
+                img_url = str(img_url) if img_url else None
+        
+        if not img_url or not isinstance(img_url, str):
+            continue
+        
+        url_lower = img_url.lower().strip()
+        
+        # Пропускаем пустые URL
+        if not url_lower:
+            continue
+        
+        # Пропускаем относительные пути
+        if url_lower.startswith('/') and not url_lower.startswith('//'):
+            continue
+        
+        # Нормализуем URL (добавляем https: если начинается с //)
+        if url_lower.startswith('//'):
+            img_url = 'https:' + img_url
+            url_lower = img_url.lower()
+        
+        # Проверяем, что URL начинается с http
+        if not url_lower.startswith('http'):
+            continue
+        
+        # Проверяем паттерны исключения
+        should_exclude = False
+        for pattern in exclude_patterns:
+            if re.search(pattern, url_lower, re.IGNORECASE):
+                logger.debug(f"[API] Изображение исключено (паттерн {pattern}): {img_url[:80]}")
+                should_exclude = True
+                break
+        
+        if should_exclude:
+            continue
+        
+        # Проверяем домены исключения
+        for domain in exclude_domains:
+            if domain in url_lower:
+                logger.debug(f"[API] Изображение исключено (домен {domain}): {img_url[:80]}")
+                should_exclude = True
+                break
+        
+        if should_exclude:
+            continue
+        
+        # Проверяем, что это изображение машины (обычно содержат car, vehicle, auto, che168 и т.д.)
+        # Но не исключаем, если паттернов нет - просто логируем
+        car_keywords = ['car', 'vehicle', 'auto', 'che168', 'autoimg', '2sc', 'sku', 'detail']
+        has_car_keyword = any(keyword in url_lower for keyword in car_keywords)
+        
+        if not has_car_keyword:
+            # Если нет ключевых слов, но URL выглядит как изображение машины (содержит цифры, похоже на ID)
+            # Проверяем, что это не явно реклама
+            if 'cardetail_load_error' in url_lower or 'error.png' in url_lower:
+                logger.debug(f"[API] Изображение исключено (ошибка загрузки): {img_url[:80]}")
+                continue
+        
+        valid_images.append(img_url.strip())
+    
+    if len(valid_images) < len(image_urls):
+        logger.info(f"[API] Отфильтровано изображений: {len(image_urls)} -> {len(valid_images)} (исключено {len(image_urls) - len(valid_images)})")
+    
+    return valid_images
 
 
 def _parse_float(value: Union[str, int, float, None]) -> Optional[float]:
@@ -213,7 +335,7 @@ class Che168DetailedParserAPI:
             "Referer": "https://m.che168.com/",
         })
     
-    def parse_car_details(self, car_id: int) -> Optional[Che168DetailedCar]:
+    def parse_car_details(self, car_id: int) -> tuple[Optional[Che168DetailedCar], bool]:
         """
         Парсит детальную информацию через API
         
@@ -221,9 +343,11 @@ class Che168DetailedParserAPI:
             car_id: ID машины
             
         Returns:
-            Che168DetailedCar или None
+            Tuple[Che168DetailedCar или None, is_banned: bool]
         """
         logger.info(f"[API] Парсинг car_id: {car_id}")
+        # Флаг блокировки должен сохраняться даже при исключениях
+        is_banned: bool = False
         
         try:
             # Получаем данные из обоих API
@@ -236,6 +360,9 @@ class Che168DetailedParserAPI:
             # Сначала добавляем данные из getparamtypeitems (технические характеристики)
             if params_data:
                 extracted.update(params_data)
+                # Проверяем флаг блокировки из params_data
+                if params_data.get('is_banned'):
+                    is_banned = True
                 logger.info(f"[API] Получено {len(params_data)} полей из getparamtypeitems")
             else:
                 logger.warning(f"[API] getparamtypeitems вернул пустой результат для car_id={car_id}")
@@ -246,7 +373,26 @@ class Che168DetailedParserAPI:
                 for key, value in carinfo_data.items():
                     if key not in extracted or not extracted.get(key):
                         extracted[key] = value
+                # Проверяем флаг блокировки из carinfo_data
+                if carinfo_data.get('is_banned'):
+                    is_banned = True
                 logger.info(f"[API] Получено {len(carinfo_data)} полей из getcarinfo")
+            
+            # Определяем, заблокирован ли источник
+            # Если API был заблокирован (403/514) и не удалось получить критичные поля через fallback, устанавливаем is_banned
+            if is_banned:
+                # Проверяем, получили ли мы критичные данные (image_gallery или first_registration_time) через fallback
+                has_critical_data = extracted.get('image_gallery') or extracted.get('first_registration_time')
+                if not has_critical_data:
+                    # Блокировка и критичные данные не получены - устанавливаем is_banned
+                    extracted['is_banned'] = True
+                    logger.warning(f"[API] Источник заблокирован для car_id={car_id}: не удалось получить image_gallery или first_registration_time")
+                else:
+                    # Fallback сработал - критичные данные получены, блокировка не помешала
+                    extracted['is_banned'] = False
+                    logger.info(f"[API] Источник заблокирован для car_id={car_id}, но fallback успешно получил критичные данные")
+            else:
+                extracted['is_banned'] = False
             
             # Проверяем наличие обязательных полей
             if not extracted.get('power'):
@@ -265,8 +411,13 @@ class Che168DetailedParserAPI:
             has_significant = any(extracted.get(f) for f in significant_fields)
             
             if not has_significant:
-                logger.warning(f"[API] Нет значимых полей для car_id={car_id}")
-                return None
+                # Сохраняем is_banned даже если нет significant полей
+                final_is_banned = extracted.get('is_banned', False)
+                if final_is_banned:
+                    logger.warning(f"[API] Нет значимых полей для car_id={car_id}, но is_banned=True - возвращаем is_banned в ответе")
+                else:
+                    logger.warning(f"[API] Нет значимых полей для car_id={car_id}")
+                return None, final_is_banned
             
             logger.info(f"[API] Успешно извлечено {len([v for v in extracted.values() if v])} полей")
             
@@ -275,11 +426,13 @@ class Che168DetailedParserAPI:
                 if extracted.get(key):
                     logger.info(f"[API]   {key}: {extracted[key]}")
             
-            return Che168DetailedCar(**extracted)
+            final_is_banned = extracted.get('is_banned', False)
+            return Che168DetailedCar(**extracted), final_is_banned
             
         except Exception as e:
             logger.error(f"[API] Ошибка парсинга car_id={car_id}: {e}", exc_info=True)
-            return None
+            # При ошибке возвращаем актуальный флаг блокировки (если успели его выставить)
+            return None, is_banned
     
     def _fetch_params_api(self, car_id: int) -> Dict[str, Any]:
         """
@@ -302,6 +455,13 @@ class Che168DetailedParserAPI:
         
         try:
             response = self.session.get(url, params=params, timeout=self.timeout)
+            
+            # Обрабатываем 403/514 - блокировка API
+            if response.status_code in [403, 514]:
+                logger.warning(f"[API] getparamtypeitems вернул {response.status_code} для car_id={car_id} - API заблокирован")
+                extracted['is_banned'] = True
+                return extracted
+            
             response.raise_for_status()
             data = response.json()
             
@@ -430,6 +590,18 @@ class Che168DetailedParserAPI:
         
         try:
             response = self.session.get(url, params=params, timeout=self.timeout)
+            
+            # Обрабатываем 403 Forbidden и 514 Frequency Capped - это блокировка API
+            if response.status_code in [403, 514]:
+                logger.warning(f"[API] getcarinfo вернул {response.status_code} для car_id={car_id} - API заблокирован")
+                extracted['is_banned'] = True  # Устанавливаем флаг блокировки
+                # Пробуем получить изображения через selenium fallback
+                images_data = self._fetch_images_fallback(car_id)
+                if images_data:
+                    extracted.update(images_data)
+                    logger.info(f"[API] Получены изображения через fallback для car_id={car_id}")
+                return extracted
+            
             response.raise_for_status()
             data = response.json()
             
@@ -537,27 +709,8 @@ class Che168DetailedParserAPI:
             
             # Сохраняем галерею, если нашли изображения
             if images:
-                # Фильтруем пустые строки и нормализуем URLs
-                valid_images = []
-                for img in images:
-                    img_url = None
-                    
-                    # Если изображение - строка
-                    if isinstance(img, str) and img.strip():
-                        img_url = img.strip()
-                    # Если изображение - словарь/объект, пробуем извлечь URL из разных полей
-                    elif isinstance(img, dict):
-                        img_url = (img.get('url') or img.get('src') or img.get('image') or 
-                                 img.get('picurl') or img.get('link') or 
-                                 list(img.values())[0] if img else None)
-                        if img_url and not isinstance(img_url, str):
-                            img_url = str(img_url) if img_url else None
-                    
-                    if img_url and img_url.strip():
-                        # Нормализуем URL (добавляем https: если начинается с //)
-                        if img_url.startswith('//'):
-                            img_url = 'https:' + img_url
-                        valid_images.append(img_url.strip())
+                # Фильтруем изображения (исключаем рекламу, логотипы и т.д.)
+                valid_images = _filter_car_images(images)
                 
                 if valid_images:
                     extracted['image'] = valid_images[0]
@@ -585,10 +738,214 @@ class Che168DetailedParserAPI:
             
         except requests.RequestException as e:
             logger.error(f"[API] Ошибка запроса getcarinfo: {e}")
+            # При 403/514 ошибке пробуем fallback для изображений
+            if "403" in str(e) or "Forbidden" in str(e) or "514" in str(e) or "Frequency" in str(e):
+                extracted['is_banned'] = True  # Устанавливаем флаг блокировки
+                images_data = self._fetch_images_fallback(car_id)
+                if images_data:
+                    extracted.update(images_data)
+                    logger.info(f"[API] Получены изображения через fallback после блокировки для car_id={car_id}")
             return extracted
         except Exception as e:
             logger.error(f"[API] Ошибка парсинга getcarinfo: {e}")
             return extracted
+    
+    def _fetch_images_fallback(self, car_id: int) -> Dict[str, Any]:
+        """
+        Fallback метод для получения изображений через selenium парсер
+        когда API блокируется (403). Парсит head_images из JSON на странице.
+        
+        Args:
+            car_id: ID машины
+            
+        Returns:
+            Словарь с image, image_gallery, image_count или пустой словарь
+        """
+        try:
+            import json
+            from selenium import webdriver
+            from selenium.webdriver.chrome.options import Options
+            from selenium.webdriver.chrome.service import Service
+            from bs4 import BeautifulSoup
+            import os
+            import tempfile
+            import shutil
+            import time
+            
+            # Формируем URL для детальной страницы
+            car_url = f'https://m.che168.com/cardetail/index?infoid={car_id}'
+            
+            # Настройка Chrome
+            chrome_options = Options()
+            chrome_options.add_argument("--headless=new")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            chrome_options.add_experimental_option('useAutomationExtension', False)
+            
+            temp_dir = tempfile.mkdtemp()
+            chrome_options.add_argument(f"--user-data-dir={temp_dir}")
+            
+            driver = None
+            try:
+                driver_path = os.environ.get("CHROMEDRIVER_PATH")
+                if driver_path:
+                    driver = webdriver.Chrome(service=Service(driver_path), options=chrome_options)
+                else:
+                    driver = webdriver.Chrome(options=chrome_options)
+                
+                driver.get(car_url)
+                
+                # Ждем загрузки страницы (как в parser.py)
+                from selenium.webdriver.support.ui import WebDriverWait
+                from selenium.webdriver.support import expected_conditions as EC
+                from selenium.webdriver.common.by import By
+                try:
+                    WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                except:
+                    pass
+                
+                # Увеличиваем время ожидания для загрузки __NEXT_DATA__
+                time.sleep(5)
+                
+                # Прокручиваем страницу для загрузки контента
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(3)
+                driver.execute_script("window.scrollTo(0, 0);")
+                time.sleep(2)
+                
+                # Пробуем получить __NEXT_DATA__ через JavaScript (может быть доступен в window)
+                try:
+                    next_data_js = driver.execute_script("return typeof window.__NEXT_DATA__ !== 'undefined' ? window.__NEXT_DATA__ : null;")
+                    if next_data_js and 'props' in next_data_js:
+                        page_props = next_data_js.get('props', {}).get('pageProps', {})
+                        if 'skuDetail' in page_props:
+                            sku_detail = page_props['skuDetail']
+                            if 'head_images' in sku_detail and sku_detail['head_images']:
+                                head_images = sku_detail['head_images']
+                                if isinstance(head_images, list) and len(head_images) > 0:
+                                    # Фильтруем изображения (исключаем рекламу, логотипы и т.д.)
+                                    valid_images = _filter_car_images(head_images)
+                                    
+                                    if valid_images:
+                                        logger.info(f"[API] Fallback (JS): найдено {len(valid_images)} изображений через window.__NEXT_DATA__ для car_id={car_id} (из {len(head_images)} исходных)")
+                                        return {
+                                            'image': valid_images[0],
+                                            'image_gallery': ' '.join(valid_images),
+                                            'image_count': len(valid_images)
+                                        }
+                except Exception as e:
+                    logger.debug(f"[API] Ошибка получения __NEXT_DATA__ через JS для car_id={car_id}: {e}")
+                
+                # Получаем HTML и парсим JSON (используем тот же подход, что в parser.py)
+                page_source = driver.page_source
+                soup = BeautifulSoup(page_source, 'html.parser')
+                
+                # Ищем __NEXT_DATA__ в script тегах (как в parser.py строка 757)
+                script_tags = soup.find_all('script')
+                for script in script_tags:
+                    if script.string and '__NEXT_DATA__' in script.string:
+                        try:
+                            json_start = script.string.find('{')
+                            if json_start != -1:
+                                json_data = script.string[json_start:]
+                                brace_count = 0
+                                json_end = 0
+                                for i, char in enumerate(json_data):
+                                    if char == '{':
+                                        brace_count += 1
+                                    elif char == '}':
+                                        brace_count -= 1
+                                        if brace_count == 0:
+                                            json_end = i + 1
+                                            break
+                                if json_end > 0:
+                                    json_str = json_data[:json_end]
+                                    data = json.loads(json_str)
+                                    if 'props' in data and 'pageProps' in data['props']:
+                                        page_props = data['props']['pageProps']
+                                        if 'skuDetail' in page_props:
+                                            sku_detail = page_props['skuDetail']
+                                            # Парсим галерею изображений (как в parser.py строка 855)
+                                            if 'head_images' in sku_detail and sku_detail['head_images']:
+                                                head_images = sku_detail['head_images']
+                                                if isinstance(head_images, list) and len(head_images) > 0:
+                                                    # Фильтруем изображения (исключаем рекламу, логотипы и т.д.)
+                                                    valid_images = _filter_car_images(head_images)
+                                                    
+                                                    if valid_images:
+                                                        logger.info(f"[API] Fallback (HTML): найдено {len(valid_images)} изображений через __NEXT_DATA__ в HTML для car_id={car_id} (из {len(head_images)} исходных)")
+                                                        return {
+                                                            'image': valid_images[0],
+                                                            'image_gallery': ' '.join(valid_images),
+                                                            'image_count': len(valid_images)
+                                                        }
+                        except Exception as e:
+                            logger.debug(f"[API] Ошибка парсинга JSON в fallback для car_id={car_id}: {e}")
+                            continue
+                
+                # Если не нашли через JSON, пробуем найти изображения через CSS селекторы (как в dongchedi)
+                image_selectors = [
+                    'img[src*="car"]',
+                    'img[src*="auto"]',
+                    'img[src*="2sc"]',
+                    'img[src*="che168"]',
+                    'img[data-src*="car"]',
+                    'img[data-src*="auto"]',
+                    '.car-image img',
+                    '.image-gallery img',
+                    '[class*="gallery"] img',
+                    '[class*="photo"] img',
+                    '[class*="image"] img',
+                ]
+                
+                images_found = []
+                for selector in image_selectors:
+                    try:
+                        img_elements = soup.select(selector)
+                        for img in img_elements:
+                            src = img.get('src') or img.get('data-src') or img.get('data-lazy-src') or img.get('data-original')
+                            if src and isinstance(src, str) and src.strip():
+                                # Пропускаем ошибки и иконки
+                                # Нормализуем URL
+                                if src.startswith('//'):
+                                    src = 'https:' + src
+                                elif src.startswith('/'):
+                                    src = 'https://m.che168.com' + src
+                                
+                                if src.startswith('http') and src not in images_found:
+                                    images_found.append(src)
+                    except Exception:
+                        continue
+                
+                # Фильтруем найденные изображения (исключаем рекламу, логотипы и т.д.)
+                if images_found:
+                    images_found = _filter_car_images(images_found)
+                
+                if images_found:
+                    logger.info(f"[API] Fallback: найдено {len(images_found)} изображений через CSS селекторы для car_id={car_id}")
+                    return {
+                        'image': images_found[0],
+                        'image_gallery': ' '.join(images_found),
+                        'image_count': len(images_found)
+                    }
+                
+                return {}
+            finally:
+                if driver:
+                    try:
+                        driver.quit()
+                    except:
+                        pass
+                if os.path.exists(temp_dir):
+                    try:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                    except:
+                        pass
+        except Exception as e:
+            logger.debug(f"[API] Fallback для изображений не удался для car_id={car_id}: {e}")
+            return {}
     
     def close(self):
         """Закрывает сессию"""

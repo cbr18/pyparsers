@@ -1,7 +1,7 @@
 import re
 import logging
 import requests
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, Dict, Any
 from .models.response import DongchediApiResponse, DongchediData
 from .models.car import DongchediCar
 from ..base_parser import BaseCarParser
@@ -149,6 +149,125 @@ class DongchediParser(BaseCarParser):
             "Referer": "https://www.dongchedi.com/",
             "Connection": "keep-alive"
         }
+    
+    def _fetch_mobile_version(self, car_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Fallback метод: парсинг мобильной версии через requests (без браузера).
+        Используется когда Selenium заблокирован или не работает.
+        
+        Args:
+            car_id: ID машины
+            
+        Returns:
+            Словарь с данными (image_gallery, first_registration_time и др.) или None
+        """
+        import requests
+        from bs4 import BeautifulSoup
+        
+        url = f"https://m.dongchedi.com/usedcar/{car_id}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Referer": "https://www.dongchedi.com/",
+        }
+        
+        logger.info(f"fetch_car_detail: [MOBILE FALLBACK] Пробуем мобильную версию для car_id={car_id}")
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+            
+            if response.status_code != 200:
+                logger.warning(f"fetch_car_detail: [MOBILE FALLBACK] Статус {response.status_code} для car_id={car_id}")
+                return None
+            
+            if '__NEXT_DATA__' not in response.text:
+                logger.warning(f"fetch_car_detail: [MOBILE FALLBACK] __NEXT_DATA__ не найден в мобильной версии для car_id={car_id}")
+                return None
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            script_tags = soup.find_all('script')
+            
+            for script in script_tags:
+                if script.string and '__NEXT_DATA__' in script.string:
+                    try:
+                        json_start = script.string.find('{')
+                        if json_start == -1:
+                            continue
+                        
+                        json_data = script.string[json_start:]
+                        brace_count = 0
+                        json_end = 0
+                        for i, char in enumerate(json_data):
+                            if char == '{':
+                                brace_count += 1
+                            elif char == '}':
+                                brace_count -= 1
+                                if brace_count == 0:
+                                    json_end = i + 1
+                                    break
+                        
+                        if json_end == 0:
+                            continue
+                        
+                        json_str = json_data[:json_end]
+                        data = json.loads(json_str)
+                        
+                        if 'props' in data and 'pageProps' in data['props']:
+                            page_props = data['props']['pageProps']
+                            if 'skuDetail' in page_props:
+                                sku_detail = page_props['skuDetail']
+                                
+                                result = {}
+                                
+                                # Извлекаем галерею изображений
+                                head_images = sku_detail.get('head_images', [])
+                                if head_images and isinstance(head_images, list) and len(head_images) > 0:
+                                    result['image'] = head_images[0] if len(head_images) > 0 else ''
+                                    result['image_gallery'] = ' '.join(head_images)
+                                    result['image_count'] = len(head_images)
+                                    logger.info(f"fetch_car_detail: [MOBILE FALLBACK] Найдена image_gallery для car_id={car_id}: {len(head_images)} изображений")
+                                
+                                # Извлекаем дату регистрации
+                                other_params = sku_detail.get('other_params', [])
+                                for param in other_params:
+                                    param_name = param.get('name', '')
+                                    param_value = param.get('value', '')
+                                    if param_name in ('上牌时间', '首次上牌', '首次上牌时间'):
+                                        normalized_date = normalize_first_registration_date(param_value)
+                                        if normalized_date:
+                                            result['first_registration_time'] = normalized_date
+                                            logger.info(f"fetch_car_detail: [MOBILE FALLBACK] Найдена first_registration_time для car_id={car_id}: {param_value} -> {normalized_date}")
+                                            break
+                                
+                                # Извлекаем другие данные, если есть
+                                if 'car_info' in sku_detail:
+                                    car_data = sku_detail['car_info']
+                                    if not result.get('image') and car_data.get('image'):
+                                        result['image'] = car_data['image']
+                                
+                                if result:
+                                    logger.info(f"fetch_car_detail: [MOBILE FALLBACK] Успешно извлечены данные для car_id={car_id}: {list(result.keys())}")
+                                    return result
+                                
+                                logger.warning(f"fetch_car_detail: [MOBILE FALLBACK] skuDetail найден, но данные не извлечены для car_id={car_id}")
+                                break
+                    except json.JSONDecodeError as e:
+                        logger.debug(f"fetch_car_detail: [MOBILE FALLBACK] Ошибка парсинга JSON для car_id={car_id}: {e}")
+                        continue
+                    except Exception as e:
+                        logger.debug(f"fetch_car_detail: [MOBILE FALLBACK] Ошибка для car_id={car_id}: {e}")
+                        continue
+            
+            logger.warning(f"fetch_car_detail: [MOBILE FALLBACK] Не удалось извлечь данные из мобильной версии для car_id={car_id}")
+            return None
+            
+        except requests.RequestException as e:
+            logger.warning(f"fetch_car_detail: [MOBILE FALLBACK] Ошибка запроса для car_id={car_id}: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"fetch_car_detail: [MOBILE FALLBACK] Неожиданная ошибка для car_id={car_id}: {e}")
+            return None
 
     def _build_url(self, page: int = 1) -> str:
         print(page)
@@ -606,11 +725,43 @@ class DongchediParser(BaseCarParser):
                 "seat_count": None,
                 "door_count": None,
                 "trunk_volume": None,
-                "fuel_tank_volume": None
+                "fuel_tank_volume": None,
+                # Флаг блокировки
+                "is_banned": False  # True если источник заблокирован и не удалось получить image_gallery/first_registration_time
             }
+            
+            # Проверяем, не заблокирована ли страница (после создания car_info)
+            page_blocked = False
+            if page_source and ('验证' in page_source or 'captcha' in page_source.lower() or 'blocked' in page_source.lower() or 'access denied' in page_source.lower()):
+                logger.warning(f"fetch_car_detail: Страница может быть заблокирована для car_id={car_id}, пробуем мобильную версию")
+                page_blocked = True
+                # Пробуем мобильную версию как fallback
+                mobile_data = self._fetch_mobile_version(car_id)
+                if mobile_data:
+                    # Обновляем car_info данными из мобильной версии
+                    if 'image' in mobile_data:
+                        car_info['image'] = mobile_data['image']
+                    if 'image_gallery' in mobile_data:
+                        car_info['image_gallery'] = mobile_data['image_gallery']
+                        car_info['image_count'] = mobile_data.get('image_count', 0)
+                    if 'first_registration_time' in mobile_data:
+                        car_info['first_registration_time'] = mobile_data['first_registration_time']
+                    
+                    logger.info(f"fetch_car_detail: [MOBILE FALLBACK] Обновлен car_info из мобильной версии (страница заблокирована) для car_id={car_id}")
+                else:
+                    logger.warning(f"fetch_car_detail: [MOBILE FALLBACK] Не удалось получить данные из мобильной версии для car_id={car_id}")
+                    # Если мобильная версия не работает, устанавливаем is_banned
+                    car_info['is_banned'] = True
+            
             # Ищем скрипт с __NEXT_DATA__ по id
             script_tag = soup.find('script', {'id': '__NEXT_DATA__'})
             json_data_found = False
+            
+            # Если страница была заблокирована и мы получили данные из мобильной версии, пропускаем парсинг JSON
+            if page_blocked and (car_info.get('image_gallery') or car_info.get('first_registration_time')):
+                logger.info(f"fetch_car_detail: Пропускаем парсинг JSON, так как данные уже получены из мобильной версии для car_id={car_id}")
+                json_data_found = True  # Помечаем, что данные получены
+            
             logger.info(f"fetch_car_detail: script_tag найден для car_id={car_id}: {script_tag is not None}")
             
             # Альтернативный поиск по содержимому, если не нашли по id
@@ -864,7 +1015,35 @@ class DongchediParser(BaseCarParser):
                     logger.warning(f"fetch_car_detail: Ошибка при парсинге JSON для car_id={car_id}: {type(e).__name__}: {e}")
                     pass
             if not json_data_found:
-                logger.warning(f"fetch_car_detail: json_data_found=False для car_id={car_id}, используем fallback парсинг HTML")
+                logger.warning(f"fetch_car_detail: json_data_found=False для car_id={car_id}, пробуем мобильную версию как fallback")
+                
+                # FALLBACK 1: Пробуем мобильную версию через requests
+                mobile_data = self._fetch_mobile_version(car_id)
+                if mobile_data:
+                    # Обновляем car_info данными из мобильной версии
+                    if 'image_gallery' in mobile_data and not car_info.get('image_gallery'):
+                        car_info['image'] = mobile_data.get('image', car_info.get('image'))
+                        car_info['image_gallery'] = mobile_data.get('image_gallery')
+                        car_info['image_count'] = mobile_data.get('image_count', 0)
+                        logger.info(f"fetch_car_detail: [MOBILE FALLBACK] Обновлена image_gallery для car_id={car_id}")
+                    
+                    if 'first_registration_time' in mobile_data and not car_info.get('first_registration_time'):
+                        car_info['first_registration_time'] = mobile_data['first_registration_time']
+                        logger.info(f"fetch_car_detail: [MOBILE FALLBACK] Обновлена first_registration_time для car_id={car_id}")
+                    
+                    # Если получили данные из мобильной версии, можно пропустить HTML fallback для этих полей
+                    if mobile_data.get('image_gallery') or mobile_data.get('first_registration_time'):
+                        logger.info(f"fetch_car_detail: [MOBILE FALLBACK] Данные получены, но продолжаем HTML fallback для других полей для car_id={car_id}")
+                    else:
+                        logger.warning(f"fetch_car_detail: [MOBILE FALLBACK] Данные не получены, используем HTML fallback для car_id={car_id}")
+                else:
+                    logger.warning(f"fetch_car_detail: [MOBILE FALLBACK] Не удалось получить данные, используем HTML fallback для car_id={car_id}")
+                    # Если мобильная версия не работает, помечаем как заблокированную
+                    if not car_info.get('image_gallery') and not car_info.get('first_registration_time'):
+                        car_info['is_banned'] = True
+                
+                # FALLBACK 2: Парсинг из HTML (если мобильная версия не помогла или для других полей)
+                logger.warning(f"fetch_car_detail: Используем fallback парсинг HTML для car_id={car_id}")
                 title_tag = soup.find('title')
                 if title_tag:
                     car_info['title'] = title_tag.get_text().strip()
@@ -991,13 +1170,72 @@ class DongchediParser(BaseCarParser):
                     logger.debug(f"dongchedi car_id={car_id}: найден индикатор недоступности '{indicator}'")
                     break
             car_info['is_available'] = is_available
+            
+            # Устанавливаем is_banned, если страница была заблокирована и не удалось получить критичные данные
+            if page_blocked:
+                # Проверяем, получили ли мы критичные данные (image_gallery или first_registration_time)
+                has_critical_data = car_info.get('image_gallery') or car_info.get('first_registration_time')
+                if not has_critical_data:
+                    car_info['is_banned'] = True
+                    logger.warning(f"fetch_car_detail: Источник заблокирован для car_id={car_id}: не удалось получить image_gallery или first_registration_time")
+                else:
+                    # Fallback сработал - критичные данные получены, блокировка не помешала
+                    car_info['is_banned'] = False
+                    logger.info(f"fetch_car_detail: Источник заблокирован для car_id={car_id}, но fallback успешно получил критичные данные")
+            
+            # Если __NEXT_DATA__ не найден и мобильная версия не помогла, и нет критичных данных
+            if not json_data_found and not car_info.get('image_gallery') and not car_info.get('first_registration_time'):
+                car_info['is_banned'] = True
+                logger.warning(f"fetch_car_detail: Источник заблокирован для car_id={car_id}: __NEXT_DATA__ не найден и критичные данные не получены")
+            
+            # Инициализируем is_banned если не установлен
+            if 'is_banned' not in car_info:
+                car_info['is_banned'] = False
         except Exception as e:
-            # В случае ошибки при парсинге возвращаем None
-            # Гарантируем, что soup инициализирован
-            if 'soup' not in locals() or soup is None:
-                soup = None
-            car_info = None
+            # В случае ошибки при парсинге пробуем мобильную версию как fallback
             logger.error(f"Ошибка при парсинге страницы dongchedi car_id={car_id}: {e}")
+            
+            # FALLBACK: Пробуем мобильную версию через requests
+            try:
+                mobile_data = self._fetch_mobile_version(car_id)
+                if mobile_data:
+                    # Создаем минимальный car_info из мобильных данных
+                    import datetime
+                    import uuid
+                    current_time = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    
+                    car_info = {
+                        "uuid": str(uuid.uuid4()),
+                        "car_id": car_id,
+                        "sku_id": car_id,
+                        "source": "dongchedi",
+                        "is_available": True,
+                        "created_at": current_time,
+                        "updated_at": current_time,
+                        "link": f"https://m.dongchedi.com/usedcar/{car_id}",
+                    }
+                    
+                    # Добавляем данные из мобильной версии
+                    if 'image' in mobile_data:
+                        car_info['image'] = mobile_data['image']
+                    if 'image_gallery' in mobile_data:
+                        car_info['image_gallery'] = mobile_data['image_gallery']
+                        car_info['image_count'] = mobile_data.get('image_count', 0)
+                    if 'first_registration_time' in mobile_data:
+                        car_info['first_registration_time'] = mobile_data['first_registration_time']
+                    
+                    logger.info(f"fetch_car_detail: [MOBILE FALLBACK] Создан car_info из мобильной версии для car_id={car_id}")
+                else:
+                    # Если мобильная версия тоже не помогла, возвращаем None
+                    if 'soup' not in locals() or soup is None:
+                        soup = None
+                    car_info = None
+            except Exception as fallback_error:
+                logger.error(f"Ошибка в мобильном fallback для car_id={car_id}: {fallback_error}")
+                # Гарантируем, что soup инициализирован
+                if 'soup' not in locals() or soup is None:
+                    soup = None
+                car_info = None
         finally:
             # Гарантируем закрытие драйвера
             if driver:

@@ -140,6 +140,9 @@ class Che168DetailedCar(BaseModel):
     
     # Описание
     description: Optional[str] = None
+    
+    # Флаг блокировки
+    is_banned: Optional[bool] = False  # True если источник заблокирован и не удалось получить image_gallery/first_registration_time
 
 
 

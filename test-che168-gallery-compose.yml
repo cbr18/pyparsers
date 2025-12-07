@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  test-che168-gallery:
+    build:
+      context: .
+      dockerfile: test-che168-gallery-dockerfile
+    container_name: test-che168-gallery
+    volumes:
+      - ./test_results:/app/test_results
+    environment:
+      - CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
+    shm_size: '2gb'
+

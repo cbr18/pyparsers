@@ -14,6 +14,52 @@ from ..dongchedi.parser import normalize_power_value, parse_int_value, parse_flo
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def _normalize_mileage(mileage_str: Optional[str]) -> Optional[str]:
+    """
+    Нормализует пробег из китайского формата в километры (строка).
+    
+    Примеры:
+        "0.4万公里" -> "4000"
+        "1.5万公里" -> "15000"
+        "10万公里" -> "100000"
+        "50000公里" -> "50000"
+        "0.4万" -> "4000"
+        "5000" -> "5000"
+    
+    Args:
+        mileage_str: Строка с пробегом в любом формате
+        
+    Returns:
+        Строка с пробегом в километрах или None
+    """
+    if not mileage_str:
+        return None
+    
+    mileage_str = str(mileage_str).strip()
+    if not mileage_str:
+        return None
+    
+    # Ищем число (может быть с точкой)
+    match = re.search(r'(\d+\.?\d*)', mileage_str)
+    if not match:
+        return None
+    
+    try:
+        num = float(match.group(1))
+        
+        # Если есть "万" (10,000), умножаем на 10000
+        if '万' in mileage_str:
+            mileage_km = int(num * 10000)
+        else:
+            # Иначе берем число как есть (уже в километрах)
+            mileage_km = int(num)
+        
+        return str(mileage_km)
+    except (ValueError, TypeError):
+        return None
+
+
 try:
     from selenium import webdriver
     from selenium.webdriver.common.by import By
@@ -474,8 +520,9 @@ class Che168Parser(BaseCarParser):
                         break
             
             if parts and len(parts) >= 2:
-                # Первая часть - пробег
-                milage = parts[0].replace('万公里', '').replace('公里', '').strip()
+                # Первая часть - пробег (нормализуем из китайского формата)
+                milage_raw = parts[0].strip()
+                milage = _normalize_mileage(milage_raw)
                 # Вторая часть - дата регистрации
                 regdate = parts[1].strip()
                 # Третья часть (если есть) - город
@@ -645,7 +692,9 @@ class Che168Parser(BaseCarParser):
         from selenium.webdriver.chrome.options import Options
         from selenium.common.exceptions import TimeoutException, WebDriverException
         from bs4 import BeautifulSoup
-        clean_url = car_url.split('?')[0].split('#')[0]
+        # НЕ удаляем query параметры - они нужны для загрузки правильной страницы!
+        # clean_url = car_url.split('?')[0].split('#')[0]  # УДАЛЕНО - это удаляло infoid!
+        clean_url = car_url.split('#')[0]  # Удаляем только якорь, но сохраняем query параметры
         chrome_options = Options()
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
@@ -793,7 +842,8 @@ class Che168Parser(BaseCarParser):
                                                     except (ValueError, TypeError):
                                                         pass
                                             if 'mileage' in car_data:
-                                                car_info['car_mileage'] = car_data['mileage']
+                                                # Нормализуем пробег из китайского формата
+                                                car_info['car_mileage'] = _normalize_mileage(car_data['mileage'])
                                             # Ищем дату регистрации в различных полях
                                             if 'first_registration_time' in car_data:
                                                 car_info['first_registration_time'] = normalize_first_registration_date(car_data['first_registration_time'])
@@ -852,8 +902,28 @@ class Che168Parser(BaseCarParser):
                                                 car_info['shop_id'] = parse_int_value(shop_data['shop_id'])
                                             if 'shop_address' in shop_data:
                                                 car_info['car_source_city_name'] = shop_data['shop_address']
+                                        # Парсим галерею изображений (как в dongchedi)
                                         if 'head_images' in sku_detail and sku_detail['head_images']:
-                                            car_info['image'] = sku_detail['head_images'][0]
+                                            head_images = sku_detail['head_images']
+                                            if isinstance(head_images, list) and len(head_images) > 0:
+                                                # Фильтруем изображения (исключаем рекламу, логотипы и т.д.)
+                                                filtered_images = _filter_car_images(head_images)
+                                                
+                                                if filtered_images:
+                                                    # Сохраняем первую картинку в image
+                                                    car_info['image'] = filtered_images[0]
+                                                    # Сохраняем все картинки через пробел в image_gallery
+                                                    car_info['image_gallery'] = ' '.join(filtered_images)
+                                                    car_info['image_count'] = len(filtered_images)
+                                                    logger.info(f"che168: Найдена image_gallery для car_id={car_info.get('car_id')}: {len(filtered_images)} изображений (из {len(head_images)} исходных)")
+                                                else:
+                                                    # Если все изображения отфильтрованы, используем первое (на случай, если фильтр слишком строгий)
+                                                    logger.warning(f"che168: Все изображения отфильтрованы для car_id={car_info.get('car_id')}, используем первое исходное")
+                                                    car_info['image'] = head_images[0] if head_images else None
+                                                    car_info['image_gallery'] = ' '.join(head_images) if head_images else None
+                                                    car_info['image_count'] = len(head_images) if head_images else 0
+                                            else:
+                                                car_info['image'] = head_images[0] if head_images else None
                                         if 'sku_id' in sku_detail:
                                             car_info['car_id'] = sku_detail['sku_id']
                                             car_info['sku_id'] = sku_detail['sku_id']
@@ -946,7 +1016,13 @@ class Che168Parser(BaseCarParser):
             if mileage_input and mileage_input.get('value'):
                 try:
                     mileage_value = mileage_input.get('value')
-                    car_info['car_mileage'] = f"{mileage_value}万公里"
+                    # Нормализуем пробег (значение уже может быть в формате "0.4" или "0.4万")
+                    # Если просто число, добавляем "万" для конвертации
+                    if mileage_value and not '万' in str(mileage_value):
+                        mileage_str = f"{mileage_value}万"
+                    else:
+                        mileage_str = str(mileage_value)
+                    car_info['car_mileage'] = _normalize_mileage(mileage_str)
                 except (ValueError, TypeError):
                     pass
             brand_input = soup.find('input', {'id': 'car_brandid'})

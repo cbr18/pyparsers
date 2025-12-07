@@ -285,6 +285,8 @@ def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict
         "door_count": detailed_car.door_count,  # int - количество дверей
         "trunk_volume": detailed_car.trunk_volume or "",
         "fuel_tank_volume": detailed_car.fuel_tank_volume or "",
+        # Флаг блокировки
+        "is_banned": detailed_car.is_banned if detailed_car.is_banned is not None else False,
     }
     
     # Проверяем валидность power - должен быть int > 0
@@ -310,10 +312,10 @@ def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict
     return domain_car
 
 
-async def _parse_car_details_async(car_id: int) -> Optional[Che168DetailedCar]:
+async def _parse_car_details_async(car_id: int) -> tuple[Optional[Che168DetailedCar], bool]:
     loop = asyncio.get_running_loop()
 
-    def _work() -> Optional[Che168DetailedCar]:
+    def _work() -> tuple[Optional[Che168DetailedCar], bool]:
         # API парсер не требует headless параметра
         parser = Che168DetailedParser()
         return parser.parse_car_details(car_id)
@@ -329,6 +331,7 @@ class CarDetailResponse(BaseModel):
     car_id: int
     data: Optional[dict] = None  # Изменено на dict для совместимости с Go domain.Car
     error: Optional[str] = None
+    is_banned: bool = False  # Флаг блокировки источника (доступен даже при data=null)
 
 class BatchDetailRequest(BaseModel):
     car_ids: List[int]
@@ -355,7 +358,7 @@ async def parse_car_details(request: CarDetailRequest):
     try:
         logger.info(f"Начало парсинга детальной информации для car_id: {request.car_id}")
         
-        car_data = await _parse_car_details_async(request.car_id)
+        car_data, is_banned = await _parse_car_details_async(request.car_id)
         
         if car_data:
             logger.info(f"Успешно получена детальная информация для car_id: {request.car_id}")
@@ -378,14 +381,16 @@ async def parse_car_details(request: CarDetailRequest):
             return CarDetailResponse(
                 success=True,
                 car_id=request.car_id,
-                data=domain_car_dict  # Теперь это dict в формате domain.Car
+                data=domain_car_dict,  # Теперь это dict в формате domain.Car
+                is_banned=is_banned
             )
         else:
-            logger.warning(f"Не удалось получить детальную информацию для car_id: {request.car_id}")
+            logger.warning(f"Не удалось получить детальную информацию для car_id: {request.car_id}, is_banned={is_banned}")
             return CarDetailResponse(
                 success=False,
                 car_id=request.car_id,
-                error="Не удалось получить детальную информацию"
+                error="Не удалось получить детальную информацию",
+                is_banned=is_banned  # Возвращаем is_banned даже при data=null
             )
             
     except Exception as e:
@@ -393,7 +398,8 @@ async def parse_car_details(request: CarDetailRequest):
         return CarDetailResponse(
             success=False,
             car_id=request.car_id,
-            error=str(e)
+            error=str(e),
+            is_banned=False  # При исключении не знаем о блокировке
         )
 
 @router.post("/parse-batch", response_model=BatchDetailResponse)
@@ -415,16 +421,16 @@ async def parse_cars_details_batch(request: BatchDetailRequest):
         async def process_car(car_id: int) -> CarDetailResponse:
             async with semaphore:
                 try:
-                    car_data = await _parse_car_details_async(car_id)
+                    car_data, is_banned = await _parse_car_details_async(car_id)
                     if car_data:
                         # Преобразуем в формат domain.Car для Go API
                         domain_car_dict = _convert_to_domain_car(car_data, car_id)
-                        return CarDetailResponse(success=True, car_id=car_id, data=domain_car_dict)
-                    logger.warning(f"Не удалось получить детальную информацию для car_id: {car_id}")
-                    return CarDetailResponse(success=False, car_id=car_id, error="Не удалось получить детальную информацию")
+                        return CarDetailResponse(success=True, car_id=car_id, data=domain_car_dict, is_banned=is_banned)
+                    logger.warning(f"Не удалось получить детальную информацию для car_id: {car_id}, is_banned={is_banned}")
+                    return CarDetailResponse(success=False, car_id=car_id, error="Не удалось получить детальную информацию", is_banned=is_banned)
                 except Exception as exc:
                     logger.error(f"Ошибка парсинга car_id {car_id}: {exc}")
-                    return CarDetailResponse(success=False, car_id=car_id, error=str(exc))
+                    return CarDetailResponse(success=False, car_id=car_id, error=str(exc), is_banned=False)
 
         tasks = [asyncio.create_task(process_car(car_id)) for car_id in request.car_ids]
         results = await asyncio.gather(*tasks)

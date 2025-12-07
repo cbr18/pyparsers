@@ -595,11 +595,17 @@ class Che168DetailedParserAPI:
             if response.status_code in [403, 514]:
                 logger.warning(f"[API] getcarinfo вернул {response.status_code} для car_id={car_id} - API заблокирован")
                 extracted['is_banned'] = True  # Устанавливаем флаг блокировки
-                # Пробуем получить изображения через selenium fallback
-                images_data = self._fetch_images_fallback(car_id)
+                # Пробуем получить изображения через selenium desktop (основной fallback)
+                images_data = self._fetch_images_desktop(car_id)
                 if images_data:
                     extracted.update(images_data)
-                    logger.info(f"[API] Получены изображения через fallback для car_id={car_id}")
+                    logger.info(f"[API] Получены изображения через selenium desktop для car_id={car_id}")
+                else:
+                    # Если desktop не сработал, пробуем мобильный fallback
+                    images_data = self._fetch_images_fallback(car_id)
+                    if images_data:
+                        extracted.update(images_data)
+                        logger.info(f"[API] Получены изображения через мобильный fallback для car_id={car_id}")
                 return extracted
             
             response.raise_for_status()
@@ -733,6 +739,28 @@ class Che168DetailedParserAPI:
                         imageurl = 'https:' + imageurl
                     extracted['image'] = imageurl.strip()
                     logger.info(f"[API] Использовано imageurl/carimage для car_id={car_id}: {imageurl[:50]}...")
+
+            # Если не нашли галерею через API, пробуем selenium desktop (основной способ)
+            if not extracted.get('image_gallery'):
+                images_data = self._fetch_images_desktop(car_id)
+                if images_data:
+                    # Не перетираем image, если уже есть; обновляем только галерею/счетчик
+                    if not extracted.get('image') and images_data.get('image'):
+                        extracted['image'] = images_data['image']
+                    if images_data.get('image_gallery'):
+                        extracted['image_gallery'] = images_data['image_gallery']
+                        extracted['image_count'] = images_data.get('image_count', len(images_data['image_gallery'].split()))
+                        logger.info(f"[API] Галерея получена через selenium desktop для car_id={car_id}: {extracted['image_count']} изображений")
+                else:
+                    # Если desktop не помог, пробуем мобильный fallback (head_images)
+                    images_data = self._fetch_images_fallback(car_id)
+                    if images_data:
+                        if not extracted.get('image') and images_data.get('image'):
+                            extracted['image'] = images_data['image']
+                        if images_data.get('image_gallery'):
+                            extracted['image_gallery'] = images_data['image_gallery']
+                            extracted['image_count'] = images_data.get('image_count', len(images_data['image_gallery'].split()))
+                            logger.info(f"[API] Галерея получена через мобильный fallback для car_id={car_id}: {extracted['image_count']} изображений")
             
             return extracted
             
@@ -741,10 +769,10 @@ class Che168DetailedParserAPI:
             # При 403/514 ошибке пробуем fallback для изображений
             if "403" in str(e) or "Forbidden" in str(e) or "514" in str(e) or "Frequency" in str(e):
                 extracted['is_banned'] = True  # Устанавливаем флаг блокировки
-                images_data = self._fetch_images_fallback(car_id)
+                images_data = self._fetch_images_desktop(car_id) or self._fetch_images_fallback(car_id)
                 if images_data:
                     extracted.update(images_data)
-                    logger.info(f"[API] Получены изображения через fallback после блокировки для car_id={car_id}")
+                    logger.info(f"[API] Получены изображения через selenium после блокировки для car_id={car_id}")
             return extracted
         except Exception as e:
             logger.error(f"[API] Ошибка парсинга getcarinfo: {e}")
@@ -946,6 +974,33 @@ class Che168DetailedParserAPI:
         except Exception as e:
             logger.debug(f"[API] Fallback для изображений не удался для car_id={car_id}: {e}")
             return {}
+
+    def _fetch_images_desktop(self, car_id: int) -> Dict[str, Any]:
+        """
+        Основной Selenium-fallback: парсит галерею с десктопной страницы,
+        т.к. она стабильно отдаёт полный список изображений.
+        """
+        try:
+            # Импортируем тут, чтобы не тащить selenium при импорте модуля
+            from api.che168.parser import Che168Parser
+
+            car_url = f'https://www.che168.com/cardetail/{car_id}.html'
+            parser = Che168Parser(headless=True)
+            car_obj, _ = parser.fetch_car_detail(car_url)
+
+            if car_obj:
+                gallery = getattr(car_obj, 'image_gallery', None)
+                if gallery:
+                    images = gallery.split()
+                    logger.info(f"[API] Desktop fallback: найдено {len(images)} изображений для car_id={car_id}")
+                    return {
+                        'image': getattr(car_obj, 'image', None) or (images[0] if images else None),
+                        'image_gallery': gallery,
+                        'image_count': len(images),
+                    }
+        except Exception as e:
+            logger.debug(f"[API] Desktop fallback для изображений не удался для car_id={car_id}: {e}")
+        return {}
     
     def close(self):
         """Закрывает сессию"""

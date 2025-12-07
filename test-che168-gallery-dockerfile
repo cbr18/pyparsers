@@ -36,7 +36,8 @@ RUN pip install --no-cache-dir \
     selenium \
     requests \
     beautifulsoup4 \
-    lxml
+    lxml \
+    pydantic
 
 # Копируем тестовый скрипт и модули
 COPY test_che168_gallery_methods.py /app/

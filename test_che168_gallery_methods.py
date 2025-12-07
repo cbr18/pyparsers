@@ -9,12 +9,13 @@ import re
 import time
 import random
 import logging
+import os
 from typing import Optional, Dict, Any, List
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Тестовые car_id (актуальные объявления)
+# Тестовые car_id (актуальные объявления, если не заданы через ENV)
 TEST_CAR_IDS = [
     45678901,
     45678902,
@@ -58,6 +59,22 @@ def get_real_car_ids():
         logger.error(f"Ошибка получения списка машин: {e}")
     
     return TEST_CAR_IDS
+
+
+def get_env_car_ids() -> List[int]:
+    """
+    Позволяет переопределить список car_id через переменную окружения CAR_IDS.
+    Формат: CAR_IDS="id1,id2,id3"
+    """
+    raw = os.environ.get("CAR_IDS")
+    if not raw:
+        return []
+    ids = []
+    for part in raw.split(","):
+        part = part.strip()
+        if part.isdigit():
+            ids.append(int(part))
+    return ids
 
 
 def test_api_direct(car_id: int) -> Dict[str, Any]:
@@ -530,17 +547,14 @@ def main():
     logger.info("ТЕСТИРОВАНИЕ МЕТОДОВ ПОЛУЧЕНИЯ ГАЛЕРЕИ CHE168")
     logger.info("=" * 60)
     
-    # Получаем реальные car_id
-    car_ids = get_real_car_ids()
+    # Получаем car_id: сначала из ENV, иначе — с сайта, иначе — тестовые
+    car_ids = get_env_car_ids()
+    if not car_ids:
+        car_ids = get_real_car_ids()
     
     if not car_ids:
         logger.error("Не удалось получить car_id для тестирования")
         return
-    
-    # Тестируем первый car_id всеми методами
-    test_car_id = car_ids[0]
-    logger.info(f"\nТестирование car_id: {test_car_id}")
-    logger.info("-" * 40)
     
     methods = [
         ('1. API Direct (getcarinfo)', test_api_direct),
@@ -552,24 +566,29 @@ def main():
     ]
     
     results = []
-    
-    for name, method in methods:
-        logger.info(f"\n>>> Тестирование: {name}")
-        try:
-            result = method(test_car_id)
-            result['test_name'] = name
-            results.append(result)
+
+    for test_car_id in car_ids:
+        logger.info(f"\nТестирование car_id: {test_car_id}")
+        logger.info("-" * 40)
+
+        for name, method in methods:
+            logger.info(f"\n>>> Тестирование: {name}")
+            try:
+                result = method(test_car_id)
+                result['test_name'] = name
+                result['car_id'] = test_car_id
+                results.append(result)
+                
+                if result['success']:
+                    logger.info(f"✅ УСПЕХ: {result['count']} изображений")
+                    logger.info(f"   Галерея (первые 100 символов): {result.get('gallery', '')[:100]}...")
+                else:
+                    logger.warning(f"❌ НЕУДАЧА: {result.get('error', 'Unknown error')}")
+            except Exception as e:
+                logger.error(f"❌ ОШИБКА: {e}")
+                results.append({'test_name': name, 'car_id': test_car_id, 'success': False, 'error': str(e)})
             
-            if result['success']:
-                logger.info(f"✅ УСПЕХ: {result['count']} изображений")
-                logger.info(f"   Галерея (первые 100 символов): {result.get('gallery', '')[:100]}...")
-            else:
-                logger.warning(f"❌ НЕУДАЧА: {result.get('error', 'Unknown error')}")
-        except Exception as e:
-            logger.error(f"❌ ОШИБКА: {e}")
-            results.append({'test_name': name, 'success': False, 'error': str(e)})
-        
-        time.sleep(2)  # Пауза между тестами
+            time.sleep(2)  # Пауза между тестами
     
     # Итоговый отчет
     logger.info("\n" + "=" * 60)

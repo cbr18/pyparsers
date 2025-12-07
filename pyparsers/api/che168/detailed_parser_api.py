@@ -1016,7 +1016,7 @@ class Che168DetailedParserAPI:
     def _fetch_images_desktop(self, car_id: int, shop_id: Optional[int] = None) -> Dict[str, Any]:
         """
         Основной Selenium-fallback: парсит галерею с десктопной страницы.
-        Код один-в-один как в test_selenium_desktop (который возвращает 84/75 фото).
+        Использует eager page load strategy для быстрой загрузки.
         """
         logger.info(f"[API] Desktop selenium начинаем для car_id={car_id}, shop_id={shop_id}")
         try:
@@ -1032,7 +1032,7 @@ class Che168DetailedParserAPI:
             import tempfile
             import shutil
 
-            # Пробуем несколько URL: десктопный cardetail (основной), dealer, мобильный
+            # Пробуем несколько URL: dealer (если есть shop_id), потом cardetail
             urls_to_try = [
                 f'https://www.che168.com/cardetail/{car_id}.html',  # десктоп
             ]
@@ -1047,6 +1047,8 @@ class Che168DetailedParserAPI:
             chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             chrome_options.add_argument("--window-size=1920,1080")
             chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            # EAGER - не ждём полной загрузки, берём DOM как только готов
+            chrome_options.page_load_strategy = 'eager'
 
             # Как в тесте: temp user-data-dir
             temp_dir = tempfile.mkdtemp()
@@ -1064,21 +1066,29 @@ class Che168DetailedParserAPI:
                 driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
                     'source': 'Object.defineProperty(navigator, "webdriver", {get: () => undefined});'
                 })
+                
+                # Короткий таймаут - eager strategy не ждёт полной загрузки
+                driver.set_page_load_timeout(45)
 
                 for url in urls_to_try:
                     logger.info(f"[API] Desktop selenium пробуем URL: {url}")
                     try:
-                        driver.get(url)
+                        try:
+                            driver.get(url)
+                        except Exception as load_err:
+                            # Даже при таймауте пробуем извлечь изображения
+                            logger.warning(f"[API] Desktop: таймаут загрузки {url}, пробуем извлечь из частичной загрузки")
 
                         try:
-                            WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
                         except:
                             pass
 
                         # Прокрутка для загрузки динамического контента
-                        time.sleep(2)
-                        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                        time.sleep(2)
+                        time.sleep(3)
+                        for scroll_pos in [500, 1000, 1500, 2000]:
+                            driver.execute_script(f"window.scrollTo(0, {scroll_pos});")
+                            time.sleep(1)
                         driver.execute_script("window.scrollTo(0, 0);")
                         time.sleep(2)
 
@@ -1155,29 +1165,24 @@ class Che168DetailedParserAPI:
                                     except Exception as e:
                                         logger.debug(f"[API] Desktop: ошибка парсинга __NEXT_DATA__ (text): {e}")
 
-                        # Если не нашли в __NEXT_DATA__, пробуем CSS селекторы
+                        # Если не нашли в __NEXT_DATA__, пробуем все img теги
+                        # Это самый надёжный метод - ищем по доменам autoimg.cn
                         if not images_found:
-                            image_selectors = [
-                                '.car-thumb img', '.car-pic img', '.pic-list img',
-                                '.gallery img', '.photo-list img', '.slider img',
-                                'img[src*="autoimg"]', 'img[src*="che168"]',
-                                'img[src*="2sc"]', 'img[src*="escimg"]',
-                                '[class*="swiper"] img', '[class*="carousel"] img',
-                                '.detail-pic img', '.car-detail img',
-                            ]
-
-                            for selector in image_selectors:
-                                try:
-                                    elements = soup.select(selector)
-                                    for img in elements:
-                                        src = img.get('src') or img.get('data-src') or img.get('data-original')
-                                        if src:
-                                            if src.startswith('//'):
-                                                src = 'https:' + src
-                                            if 'http' in src and src not in images_found:
+                            valid_domains = ['autoimg.cn', '2sc.autoimg.cn', '2sc2.autoimg.cn', 'escimg']
+                            for img in soup.find_all('img'):
+                                src = img.get('src') or img.get('data-src') or img.get('data-original')
+                                if src:
+                                    if src.startswith('//'):
+                                        src = 'https:' + src
+                                    # Проверяем что это реальное фото машины (домен autoimg)
+                                    if any(domain in src for domain in valid_domains):
+                                        # Исключаем default/logo/служебные
+                                        if 'default' not in src and 'logo' not in src and '.png' not in src.lower():
+                                            if src not in images_found:
                                                 images_found.append(src)
-                                except:
-                                    continue
+                            
+                            if images_found:
+                                logger.info(f"[API] Desktop: найдено {len(images_found)} изображений через img теги")
 
                         logger.info(f"[API] Desktop fallback: сырых {len(images_found)} изображений для car_id={car_id} (url={url})")
 

@@ -368,7 +368,9 @@ class Che168DetailedParserAPI:
         try:
             # Получаем данные из обоих API
             params_data = self._fetch_params_api(car_id)
-            carinfo_data = self._fetch_carinfo_api(car_id)
+            # Передаем флаг has_gallery, чтобы не запускать лишние fallback, если галерея уже получена
+            has_gallery = bool(desktop_images and desktop_images.get('image_gallery'))
+            carinfo_data = self._fetch_carinfo_api(car_id, has_gallery=has_gallery)
             
             # Объединяем данные
             extracted = {'car_id': car_id}
@@ -599,12 +601,13 @@ class Che168DetailedParserAPI:
             logger.error(f"[API] Ошибка парсинга getparamtypeitems: {e}")
             return extracted
     
-    def _fetch_carinfo_api(self, car_id: int) -> Dict[str, Any]:
+    def _fetch_carinfo_api(self, car_id: int, has_gallery: bool = False) -> Dict[str, Any]:
         """
         Получает базовую информацию о машине из API getcarinfo
         
         Args:
             car_id: ID машины
+            has_gallery: True если галерея уже получена (не запускать fallback для изображений)
             
         Returns:
             Словарь с извлечёнными данными
@@ -625,17 +628,27 @@ class Che168DetailedParserAPI:
             if response.status_code in [403, 514]:
                 logger.warning(f"[API] getcarinfo вернул {response.status_code} для car_id={car_id} - API заблокирован")
                 extracted['is_banned'] = True  # Устанавливаем флаг блокировки
+                
+                # Если галерея уже получена, не запускаем fallback для изображений
+                if has_gallery:
+                    logger.info(f"[API] Галерея уже получена для car_id={car_id}, пропускаем fallback")
+                    return extracted
+                
                 # Пробуем получить изображения через selenium desktop (основной fallback)
                 images_data = self._fetch_images_desktop(car_id, extracted.get('shop_id'))
-                if images_data:
+                if images_data and images_data.get('image_gallery'):
                     extracted.update(images_data)
                     logger.info(f"[API] Получены изображения через selenium desktop для car_id={car_id}")
                 else:
                     # Если desktop не сработал, пробуем мобильный fallback
                     images_data = self._fetch_images_fallback(car_id)
-                    if images_data:
+                    if images_data and images_data.get('image_gallery'):
                         extracted.update(images_data)
                         logger.info(f"[API] Получены изображения через мобильный fallback для car_id={car_id}")
+                    else:
+                        # Все fallback не сработали - подтверждаем блокировку
+                        logger.warning(f"[API] Все fallback не сработали для car_id={car_id} - источник заблокирован")
+                        extracted['is_banned'] = True
                 return extracted
             
             response.raise_for_status()
@@ -754,7 +767,11 @@ class Che168DetailedParserAPI:
                     extracted['image_count'] = len(valid_images)
                     logger.info(f"[API] Сохранена image_gallery из {image_source} для car_id={car_id}: {len(valid_images)} изображений")
                 else:
-                    logger.warning(f"[API] Все изображения из {image_source} оказались пустыми для car_id={car_id}. Пример первого элемента: {images[0] if images else 'None'}")
+                    # Если фильтр слишком строгий — используем сырые изображения
+                    logger.warning(f"[API] Все изображения из {image_source} отфильтрованы для car_id={car_id}, используем сырые {len(images)}. Пример первого элемента: {images[0] if images else 'None'}")
+                    extracted['image'] = images[0] if images else None
+                    extracted['image_gallery'] = ' '.join(images) if images else None
+                    extracted['image_count'] = len(images) if images else 0
             else:
                 # Логируем доступные поля для отладки
                 image_fields = ['piclist', 'head_images', 'images', 'picurl', 'imageurl', 'carimage']
@@ -805,15 +822,55 @@ class Che168DetailedParserAPI:
             
         except requests.RequestException as e:
             logger.error(f"[API] Ошибка запроса getcarinfo: {e}")
-            # При любой сетевой ошибке пробуем fallbacks, считаем источник заблокированным/недоступным
+            # При любой сетевой ошибке считаем источник заблокированным/недоступным
             extracted['is_banned'] = True
-            images_data = self._fetch_images_desktop(car_id, extracted.get('shop_id')) or self._fetch_images_fallback(car_id)
-            if images_data:
+            
+            # Если галерея уже получена, не запускаем fallback для изображений
+            if has_gallery:
+                logger.info(f"[API] Галерея уже получена для car_id={car_id}, пропускаем fallback после ошибки API")
+                return extracted
+            
+            # Пробуем desktop fallback
+            images_data = self._fetch_images_desktop(car_id, extracted.get('shop_id'))
+            if images_data and images_data.get('image_gallery'):
                 extracted.update(images_data)
-                logger.info(f"[API] Получены изображения через selenium после ошибки API для car_id={car_id}")
+                logger.info(f"[API] Получены изображения через selenium desktop после ошибки API для car_id={car_id}")
+            else:
+                # Если desktop не сработал, пробуем мобильный fallback
+                images_data = self._fetch_images_fallback(car_id)
+                if images_data and images_data.get('image_gallery'):
+                    extracted.update(images_data)
+                    logger.info(f"[API] Получены изображения через мобильный fallback после ошибки API для car_id={car_id}")
+                else:
+                    # Все fallback не сработали - подтверждаем блокировку
+                    logger.warning(f"[API] Все fallback не сработали после ошибки API для car_id={car_id} - источник заблокирован")
+                    extracted['is_banned'] = True
             return extracted
         except Exception as e:
             logger.error(f"[API] Ошибка парсинга getcarinfo: {e}")
+            # При ошибке парсинга считаем источник заблокированным
+            extracted['is_banned'] = True
+            
+            # Если галерея уже получена, не запускаем fallback для изображений
+            if has_gallery:
+                logger.info(f"[API] Галерея уже получена для car_id={car_id}, пропускаем fallback после ошибки парсинга")
+                return extracted
+            
+            # Пробуем desktop fallback
+            images_data = self._fetch_images_desktop(car_id, extracted.get('shop_id'))
+            if images_data and images_data.get('image_gallery'):
+                extracted.update(images_data)
+                logger.info(f"[API] Получены изображения через selenium desktop после ошибки парсинга для car_id={car_id}")
+            else:
+                # Если desktop не сработал, пробуем мобильный fallback
+                images_data = self._fetch_images_fallback(car_id)
+                if images_data and images_data.get('image_gallery'):
+                    extracted.update(images_data)
+                    logger.info(f"[API] Получены изображения через мобильный fallback после ошибки парсинга для car_id={car_id}")
+                else:
+                    # Все fallback не сработали - подтверждаем блокировку
+                    logger.warning(f"[API] Все fallback не сработали после ошибки парсинга для car_id={car_id} - источник заблокирован")
+                    extracted['is_banned'] = True
             return extracted
     
     def _fetch_images_fallback(self, car_id: int) -> Dict[str, Any]:
@@ -901,6 +958,14 @@ class Che168DetailedParserAPI:
                                             'image_gallery': ' '.join(valid_images),
                                             'image_count': len(valid_images)
                                         }
+                                    else:
+                                        # Если фильтр слишком строгий — возвращаем сырые изображения
+                                        logger.warning(f"[API] Fallback (JS): фильтр убрал все изображения для car_id={car_id}, возвращаем сырые {len(head_images)}")
+                                        return {
+                                            'image': head_images[0] if head_images else None,
+                                            'image_gallery': ' '.join(head_images) if head_images else None,
+                                            'image_count': len(head_images)
+                                        }
                 except Exception as e:
                     logger.debug(f"[API] Ошибка получения __NEXT_DATA__ через JS для car_id={car_id}: {e}")
                 
@@ -947,6 +1012,14 @@ class Che168DetailedParserAPI:
                                                             'image_gallery': ' '.join(valid_images),
                                                             'image_count': len(valid_images)
                                                         }
+                                                    else:
+                                                        # Если фильтр слишком строгий — возвращаем сырые изображения
+                                                        logger.warning(f"[API] Fallback (HTML): фильтр убрал все изображения для car_id={car_id}, возвращаем сырые {len(head_images)}")
+                                                        return {
+                                                            'image': head_images[0] if head_images else None,
+                                                            'image_gallery': ' '.join(head_images) if head_images else None,
+                                                            'image_count': len(head_images)
+                                                        }
                         except Exception as e:
                             logger.debug(f"[API] Ошибка парсинга JSON в fallback для car_id={car_id}: {e}")
                             continue
@@ -987,15 +1060,24 @@ class Che168DetailedParserAPI:
                 
                 # Фильтруем найденные изображения (исключаем рекламу, логотипы и т.д.)
                 if images_found:
+                    raw_images = images_found.copy()  # Сохраняем сырые изображения
                     images_found = _filter_car_images(images_found)
-                
-                if images_found:
-                    logger.info(f"[API] Fallback: найдено {len(images_found)} изображений через CSS селекторы для car_id={car_id}")
-                    return {
-                        'image': images_found[0],
-                        'image_gallery': ' '.join(images_found),
-                        'image_count': len(images_found)
-                    }
+                    
+                    if images_found:
+                        logger.info(f"[API] Fallback: найдено {len(images_found)} изображений через CSS селекторы для car_id={car_id}")
+                        return {
+                            'image': images_found[0],
+                            'image_gallery': ' '.join(images_found),
+                            'image_count': len(images_found)
+                        }
+                    else:
+                        # Если фильтр слишком строгий — возвращаем сырые изображения
+                        logger.warning(f"[API] Fallback: фильтр убрал все изображения для car_id={car_id}, возвращаем сырые {len(raw_images)}")
+                        return {
+                            'image': raw_images[0] if raw_images else None,
+                            'image_gallery': ' '.join(raw_images) if raw_images else None,
+                            'image_count': len(raw_images)
+                        }
                 
                 return {}
             finally:

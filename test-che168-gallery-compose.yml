@@ -13,3 +13,4 @@ services:
       - CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
     shm_size: '2gb'
 
+

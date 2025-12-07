@@ -120,3 +120,4 @@ def _fetch_images_from_selenium_parser(self, car_id: int):
 **Решение**: Использовать уже рабочий Selenium парсер из `parser.py`, который успешно находит `head_images` из `__NEXT_DATA__`
 
 
+

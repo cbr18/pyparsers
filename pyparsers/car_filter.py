@@ -96,11 +96,10 @@ def filter_cars_by_year(cars, min_year=2017):
         else:
             car_dict = car
             
-        # Проверяем год выпуска
-        year = car_dict.get('year')
+        # Проверяем год выпуска (year или car_year)
+        year = car_dict.get('year') or car_dict.get('car_year')
         if year is not None:
             try:
-                # Преобразуем год в число, если это строка
                 year_int = int(year)
                 if year_int >= min_year:
                     filtered_cars.append(car)

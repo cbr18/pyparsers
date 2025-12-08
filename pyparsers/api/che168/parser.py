@@ -73,6 +73,14 @@ except ImportError:
     SELENIUM_AVAILABLE = False
     print("Selenium не установлен. Установите: pip install selenium")
 
+# Playwright (fallback при блокировках)
+try:
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
+    print("Playwright не установлен. Установите: pip install playwright && playwright install chromium")
+
 class Che168Parser(BaseCarParser):
     """Selenium парсер для сайта Che168"""
 
@@ -237,8 +245,8 @@ class Che168Parser(BaseCarParser):
 
                 self.driver.get(url)
 
-                # УМЕНЬШАЕМ ЗАДЕРЖКУ ДЛЯ УСКОРЕНИЯ
-                time.sleep(random.uniform(1, 2))  # Было 2-4, стало 1-2
+                # Задержка для избежания rate limiting (3-5 сек)
+                time.sleep(random.uniform(3, 5))
 
                 # Ожидаем загрузки страницы (увеличиваем timeout для медленных страниц)
                 page_loaded = self._wait_for_page_load(timeout=30)
@@ -268,10 +276,56 @@ class Che168Parser(BaseCarParser):
                     # Фильтруем рекламные блоки (car_id == None)
                     cars = [car for car in cars if car.car_id is not None]
 
-                    # Если данных нет или список пуст, возвращаем пустой результат
-                    # (но не считаем это ошибкой - возможно страница действительно пустая)
+                    # Если данных нет - возможно блокировка, retry + Playwright fallback
                     if not cars:
-                        logger.warning(f"Страница {page}: не найдено машин после парсинга (элементов найдено: {len(cars_elements)})")
+                        # Проверяем признаки блокировки
+                        is_blocked = '406' in page_source or '验证' in page_source or len(page_source) < 5000
+                        if is_blocked and not hasattr(self, '_retry_count'):
+                            self._retry_count = 0
+                        
+                        if is_blocked and self._retry_count < 2:
+                            self._retry_count += 1
+                            logger.warning(f"Страница {page}: возможна блокировка, retry {self._retry_count}/2 через 5 сек")
+                            time.sleep(5)
+                            # Пересоздаём драйвер для новой сессии
+                            try:
+                                self.driver.quit()
+                            except:
+                                pass
+                            self.driver = None
+                            return self.fetch_cars_by_page(page, source)
+                        
+                        self._retry_count = 0
+
+                        # Playwright fallback (десктоп UA, если Selenium заблокирован)
+                        fallback_html = self._fetch_with_playwright(page)
+                        if fallback_html:
+                            try:
+                                try:
+                                    soup_f = BeautifulSoup(fallback_html, 'lxml')
+                                except Exception:
+                                    soup_f = BeautifulSoup(fallback_html, 'html.parser')
+                                
+                                cars_elements_f = soup_f.select('div.content.card-wrap ul.viewlist_ul li.cards-li')
+                                cars_f = [self._parse_li_to_car(li) for li in cars_elements_f]
+                                cars_f = [car for car in cars_f if car.car_id is not None]
+
+                                if cars_f:
+                                    has_more = self._check_has_more_pages(soup_f, page)
+                                    data = Che168Data(
+                                        has_more=has_more,
+                                        search_sh_sku_info_list=cars_f,
+                                        total=len(cars_f)
+                                    )
+                                    return Che168ApiResponse(
+                                        data=data,
+                                        message="Success (Playwright fallback)",
+                                        status=200
+                                    )
+                            except Exception as e:
+                                logger.warning(f"Playwright fallback parse error: {e}")
+
+                        logger.warning(f"Страница {page}: не найдено машин (элементов: {len(cars_elements)})")
                         return Che168ApiResponse(
                             data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
                             message=f"Страница {page} не содержит машин",
@@ -281,12 +335,12 @@ class Che168Parser(BaseCarParser):
                     # МИНИМИЗИРУЕМ ЛОГИ ДЛЯ УСКОРЕНИЯ
                     logger.info(f"Страница {page}: найдено {len(cars)} автомобилей")
 
-                    # Проверяем, есть ли еще страницы (ищем пагинацию)
+                    # Проверяем, есть ли еще страницы
                     try:
-                        has_more = self._check_has_more_pages(soup)
+                        has_more = self._check_has_more_pages(soup, page)
                     except Exception as e:
                         logger.warning(f"Ошибка при анализе пагинации: {e}")
-                        has_more = False
+                        has_more = page < 100  # Fallback
 
                     data = Che168Data(
                         has_more=has_more,
@@ -421,43 +475,72 @@ class Che168Parser(BaseCarParser):
                     status=404
                 )
 
-    def _check_has_more_pages(self, soup) -> bool:
+    def _fetch_with_playwright(self, page: int) -> Optional[str]:
+        """Загружает страницу через Playwright (fallback при блокировке Selenium)"""
+        if not PLAYWRIGHT_AVAILABLE:
+            logger.warning("Playwright недоступен, установите playwright")
+            return None
+
+        url = self._build_url(page)
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=self.headless)
+                context = browser.new_context(
+                    viewport={"width": 1920, "height": 1080},
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    locale="zh-CN",
+                )
+                context.set_extra_http_headers({"Accept-Language": "zh-CN,zh;q=0.9"})
+
+                page_obj = context.new_page()
+                page_obj.goto(url, wait_until="networkidle", timeout=30000)
+                page_obj.wait_for_timeout(2000)
+                page_obj.evaluate("window.scrollTo(0, document.body.scrollHeight);")
+                page_obj.wait_for_timeout(1000)
+
+                html = page_obj.content()
+                browser.close()
+                return html
+        except Exception as e:
+            logger.warning(f"Playwright fallback failed for page {page}: {e}")
+            return None
+
+    def _check_has_more_pages(self, soup, current_page: int = 1) -> bool:
         """Проверяет, есть ли еще страницы"""
         try:
-            # Ищем пагинацию
+            # Che168 имеет до 100 страниц. Если текущая < 100, считаем что есть ещё
+            if current_page < 100:
+                # Проверяем что на странице есть машины (косвенный признак что пагинация работает)
+                cars = soup.select('li.cards-li')
+                if len(cars) > 0:
+                    return True
+            
+            # Ищем пагинацию для точного определения
             pagination = soup.select_one('div.pagination')
             if pagination:
-                # Ищем кнопку "следующая страница"
                 next_button = pagination.select_one('a.next')
-                if next_button and not 'disabled' in next_button.get('class', []):
-                    # Проверяем, что это действительно кнопка "следующая страница", а не другой элемент
-                    if next_button.get_text(strip=True) in ['下一页', '>', 'Next', '下一頁']:
-                        logger.info(f"Найдена кнопка следующей страницы: {next_button.get_text(strip=True)}")
+                if next_button and 'disabled' not in next_button.get('class', []):
+                    return True
+                    
+                # Ищем ссылки на страницы больше текущей
+                for link in pagination.select('a[href*="csp"]'):
+                    href = link.get('href', '')
+                    import re
+                    m = re.search(r'csp(\d+)exx', href)
+                    if m and int(m.group(1)) > current_page:
                         return True
 
-                # Проверяем наличие других индикаторов пагинации
-                page_links = pagination.select('a')
-                for link in page_links:
-                    # Если есть ссылка на страницу с номером больше текущей, значит есть еще страницы
-                    link_text = link.get_text(strip=True)
-                    if link_text.isdigit() and int(link_text) > 1:
-                        logger.info(f"Найдена ссылка на страницу {link_text}")
-                        return True
-
-            # Если не нашли явных признаков пагинации, проверяем альтернативные элементы
-            # Например, может быть кнопка "загрузить еще" или другие элементы пагинации
-            load_more = soup.select_one('[class*="load-more"], [class*="loadMore"], .more, .next-page')
+            # Альтернативный индикатор
+            load_more = soup.select_one('[class*="load-more"], [class*="loadMore"], .more')
             if load_more:
                 logger.info(f"Найдена кнопка 'загрузить еще': {load_more.get_text(strip=True)}")
                 return True
 
-            # Если не нашли никаких признаков пагинации, считаем что это последняя страница
-            logger.info("Не найдено признаков наличия следующих страниц")
             return False
 
         except Exception as e:
             logger.warning(f"Ошибка при проверке пагинации: {e}")
-            return False
+            return current_page < 100  # Fallback: продолжаем до 100
 
     def _parse_li_to_car(self, li) -> Che168Car:
         """Приватный метод для парсинга элемента li в объект Che168Car"""

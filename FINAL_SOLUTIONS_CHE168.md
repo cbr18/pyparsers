@@ -123,3 +123,4 @@ def _fetch_images_from_selenium_parser(self, car_id: int):
 
 
 
+

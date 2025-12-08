@@ -176,6 +176,26 @@ class Che168Parser(BaseCarParser):
             print("Убедитесь, что Chrome установлен и chromedriver доступен")
             raise
 
+    def _safe_quit_driver(self):
+        """Корректно завершает сессию и ждёт остановки процесса chromedriver."""
+        if not self.driver:
+            return
+        try:
+            self.driver.quit()
+        except Exception:
+            pass
+        # Дождаться завершения процесса chromedriver (если доступен)
+        try:
+            service = getattr(self.driver, "service", None)
+            proc = getattr(service, "process", None) if service else None
+            if proc:
+                proc.wait(timeout=5)
+        except Exception:
+            pass
+        # Небольшая пауза, чтобы crashpad успел завершиться
+        time.sleep(0.2)
+        self.driver = None
+
     def _wait_for_page_load(self, timeout: int = 20):  # Уменьшаем timeout с 30 до 20
         """Ожидание загрузки страницы"""
         if self.driver is None:
@@ -401,13 +421,8 @@ class Che168Parser(BaseCarParser):
                         status=404
                     )
             finally:
-                # Гарантируем закрытие драйвера и очистку ресурсов
-                if self.driver:
-                    try:
-                        self.driver.quit()
-                    except Exception:
-                        pass
-                    self.driver = None
+                # Гарантируем корректное закрытие драйвера и очистку ресурсов
+                self._safe_quit_driver()
                 # Удаляем временную директорию
                 if hasattr(self, '_temp_dir') and self._temp_dir:
                     try:

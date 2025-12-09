@@ -111,6 +111,12 @@ class Che168Parser(BaseCarParser):
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
+        # Отключаем crashpad/репортер, чтобы не плодить зомби-процессы
+        chrome_options.add_argument("--disable-crash-reporter")
+        chrome_options.add_argument("--disable-features=Crashpad")
+        chrome_options.add_argument("--disable-features=Breakpad")
+        chrome_options.add_argument("--disable-features=SendFeedback")
+        chrome_options.add_argument("--no-crashpad")
 
         # ОТКЛЮЧАЕМ ЗАГРУЗКУ ИЗОБРАЖЕНИЙ И МЕДИА (значительно ускоряет)
         prefs = {
@@ -195,6 +201,16 @@ class Che168Parser(BaseCarParser):
         # Небольшая пауза, чтобы crashpad успел завершиться
         time.sleep(0.2)
         self.driver = None
+        # Удаляем временный user-data-dir, если создавали
+        if hasattr(self, "_temp_dir") and getattr(self, "_temp_dir"):
+            try:
+                import shutil
+                if os.path.exists(self._temp_dir):
+                    shutil.rmtree(self._temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+            finally:
+                delattr(self, "_temp_dir")
 
     def _wait_for_page_load(self, timeout: int = 20):  # Уменьшаем timeout с 30 до 20
         """Ожидание загрузки страницы"""
@@ -423,16 +439,6 @@ class Che168Parser(BaseCarParser):
             finally:
                 # Гарантируем корректное закрытие драйвера и очистку ресурсов
                 self._safe_quit_driver()
-                # Удаляем временную директорию
-                if hasattr(self, '_temp_dir') and self._temp_dir:
-                    try:
-                        import os
-                        import shutil
-                        if os.path.exists(self._temp_dir):
-                            shutil.rmtree(self._temp_dir, ignore_errors=True)
-                    except Exception:
-                        pass
-                    delattr(self, '_temp_dir')
                 # Освобождаем память от soup
                 if 'soup' in locals():
                     try:

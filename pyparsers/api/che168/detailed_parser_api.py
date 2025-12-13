@@ -6,6 +6,8 @@ API-based парсер детальной информации с che168.com
 import re
 import logging
 import requests
+import time
+import json
 from typing import Optional, Dict, Any, Union, Tuple
 from .models.detailed_car import Che168DetailedCar
 from api.date_utils import normalize_first_registration_date
@@ -14,6 +16,11 @@ from api.mileage_utils import normalize_mileage
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Когда API che168 возвращает бан (403/514), не дергаем его BAN_COOLDOWN секунд,
+# используем только HTML-фоллбэк, затем делаем одиночную пробу снова.
+API_BAN_COOLDOWN_SECONDS = 300  # 5 минут
+_api_ban_until_ts: float = 0.0
 
 
 def _parse_int(value: Union[str, int, float, None]) -> Optional[int]:
@@ -158,6 +165,141 @@ def _filter_car_images(image_urls: list) -> list:
         logger.info(f"[API] Отфильтровано изображений: {len(image_urls)} -> {len(valid_images)} (исключено {len(image_urls) - len(valid_images)})")
     
     return valid_images
+
+
+def _parse_power_from_text(text: str) -> Optional[int]:
+    """
+    Пытается извлечь мощность (л.с.) из текста или kW.
+    """
+    if not text:
+        return None
+    # Ищем 马力 / Ps
+    m = re.search(r'(\d+)\s*马力', text)
+    if m:
+        return _parse_int(m.group(1))
+    m = re.search(r'(\d+)\s*Ps', text, re.IGNORECASE)
+    if m:
+        return _parse_int(m.group(1))
+    # Ищем кВт и конвертируем
+    m = re.search(r'(\d+(?:\.\d+)?)\s*kW', text, re.IGNORECASE)
+    if m:
+        try:
+            return int(float(m.group(1)) * 1.35962)
+        except Exception:
+            return None
+    # Общие шаблоны 最大马力/最大功率
+    m = re.search(r'最大马力[^0-9]*(\d+)', text)
+    if m:
+        return _parse_int(m.group(1))
+    m = re.search(r'最大功率[^0-9]*(\d+)', text)
+    if m:
+        return _parse_int(m.group(1))
+    return None
+
+
+def _parse_html_fields(page_source: str, extracted: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Обогащает extracted данными из HTML (__NEXT_DATA__ + текстовые паттерны).
+    Возвращает обновлённый словарь.
+    """
+    if not page_source:
+        return extracted
+    try:
+        from bs4 import BeautifulSoup
+    except Exception:
+        return extracted
+
+    soup = BeautifulSoup(page_source, 'html.parser')
+
+    def _set_if_missing(key: str, value: Any):
+        if value is None:
+            return
+        if key not in extracted or not extracted.get(key):
+            extracted[key] = value
+
+    # 1) __NEXT_DATA__ / skuDetail
+    try:
+        for script in soup.find_all('script'):
+            if not script.string or '__NEXT_DATA__' not in script.string:
+                continue
+            json_start = script.string.find('{')
+            if json_start == -1:
+                continue
+            data = json.loads(script.string[json_start:])
+            sku_detail = data.get('props', {}).get('pageProps', {}).get('skuDetail', {})
+            car_info = sku_detail.get('car_info', {}) if isinstance(sku_detail, dict) else {}
+            if car_info:
+                # power из engine_info / power
+                eng = str(car_info.get('engine_info', '') or '')
+                pwr = _parse_power_from_text(eng)
+                if not pwr:
+                    pwr = _parse_power_from_text(str(car_info.get('power', '')))
+                _set_if_missing('power', pwr)
+                # трансмиссия / топливо / объём
+                for field in ['transmission', 'fuel_type', 'engine_volume', 'engine_volume_ml', 'drive_type']:
+                    _set_if_missing(field, car_info.get(field))
+                # дата регистрации
+                for date_key in ['first_registration_time', 'registration_date', 'regdate', 'reg_date', 'first_reg_date', 'register_date', 'register_time', 'onboard_date', 'onboard_time']:
+                    if car_info.get(date_key):
+                        norm = normalize_first_registration_date(car_info[date_key])
+                        if norm:
+                            _set_if_missing('first_registration_time', norm)
+                            break
+                # пробег
+                if car_info.get('mileage'):
+                    km, _ = normalize_mileage(car_info.get('mileage'), year_hint=None, source="che168:html-json")
+                    if km is not None:
+                        _set_if_missing('mileage', str(km))
+                # галерея из head_images (если вдруг нет)
+                head_images = sku_detail.get('head_images') if isinstance(sku_detail, dict) else None
+                if head_images and isinstance(head_images, list) and not extracted.get('image_gallery'):
+                    filtered = _filter_car_images(head_images)
+                    if filtered:
+                        _set_if_missing('image', filtered[0])
+                        _set_if_missing('image_gallery', ' '.join(filtered))
+                        _set_if_missing('image_count', len(filtered))
+            break
+    except Exception as e:
+        logger.debug(f"[API] HTML parse (__NEXT_DATA__) ошибка: {e}")
+
+    # 2) Текстовые паттерны на мощности, если ещё нет
+    if not extracted.get('power'):
+        pwr = _parse_power_from_text(soup.get_text(" ", strip=True))
+        _set_if_missing('power', pwr)
+
+    # 3) Пробег из DOM, если ещё нет
+    if not extracted.get('mileage'):
+        mileage_html, _ = _extract_mileage_from_soup(soup, year_hint=None)
+        if mileage_html:
+            _set_if_missing('mileage', mileage_html)
+
+    # 4) Дата регистрации по тексту (паттерны года/месяца)
+    if not extracted.get('first_registration_time'):
+        try:
+            page_text = soup.get_text(" ", strip=True)
+            date_match = re.search(r'(20\\d{2})[年\\-/](\\d{1,2})?', page_text)
+            if date_match:
+                year = date_match.group(1)
+                month = date_match.group(2) or '01'
+                norm = normalize_first_registration_date(f"{year}-{month}-01")
+                if norm:
+                    _set_if_missing('first_registration_time', norm)
+        except Exception:
+            pass
+
+    return extracted
+
+
+def _is_api_banned_now() -> bool:
+    """Возвращает True, если мы в окне бана API и нужно использовать только HTML."""
+    return time.time() < _api_ban_until_ts
+
+
+def _set_api_ban():
+    """Фиксирует бан API на заданный кулдаун."""
+    global _api_ban_until_ts
+    _api_ban_until_ts = time.time() + API_BAN_COOLDOWN_SECONDS
+    logger.warning(f"[API] che168 API забанен, уходим в HTML-фоллбэк до {time.strftime('%H:%M:%S', time.localtime(_api_ban_until_ts))}")
 
 
 def _parse_float(value: Union[str, int, float, None]) -> Optional[float]:
@@ -448,23 +590,32 @@ class Che168DetailedParserAPI:
         logger.info(f"[API] Парсинг car_id: {car_id}, shop_id: {shop_id}")
         # Флаг блокировки должен сохраняться даже при исключениях
         is_banned: bool = False
+        api_blocked = _is_api_banned_now()
         
         # СНАЧАЛА получаем галерею через desktop selenium (основной метод, работает стабильно)
         # Если передан shop_id, используем dealer URL для получения полной галереи
         desktop_images: Dict[str, Any] = {}
         try:
-            desktop_images = self._fetch_images_desktop(car_id, shop_id=shop_id)
+            # Если API уже заблокирован, сразу берём HTML (page_source) чтобы не гонять второй раз
+            desktop_images = self._fetch_images_desktop(car_id, shop_id=shop_id, return_html=True)
             if desktop_images and desktop_images.get('image_gallery'):
                 logger.info(f"[API] Desktop Selenium: получено {desktop_images.get('image_count', 0)} изображений для car_id={car_id}")
         except Exception as e:
             logger.warning(f"[API] Desktop Selenium ошибка для car_id={car_id}: {e}")
         
         try:
-            # Получаем данные из обоих API
-            params_data = self._fetch_params_api(car_id)
-            # Передаем флаг has_gallery, чтобы не запускать лишние fallback, если галерея уже получена
-            has_gallery = bool(desktop_images and desktop_images.get('image_gallery'))
-            carinfo_data = self._fetch_carinfo_api(car_id, has_gallery=has_gallery)
+            # Если API в бане — пропускаем запросы и сразу пойдём в HTML
+            if api_blocked:
+                logger.info(f"[API] API заблокирован (cooldown), пропускаем запросы для car_id={car_id}")
+                params_data = {}
+                carinfo_data = {}
+                is_banned = True
+            else:
+                # Получаем данные из обоих API
+                params_data = self._fetch_params_api(car_id)
+                # Передаем флаг has_gallery, чтобы не запускать лишние fallback, если галерея уже получена
+                has_gallery = bool(desktop_images and desktop_images.get('image_gallery'))
+                carinfo_data = self._fetch_carinfo_api(car_id, has_gallery=has_gallery)
             
             # Объединяем данные
             extracted = {'car_id': car_id}
@@ -520,13 +671,28 @@ class Che168DetailedParserAPI:
             else:
                 extracted['is_banned'] = False
             
+            # HTML обогащение: если API забанен или power/ключевые поля не получены
+            need_html_enrich = api_blocked or not extracted.get('power') or not extracted.get('first_registration_time')
+            if need_html_enrich:
+                page_source = desktop_images.get('page_source') if desktop_images else None
+                if page_source:
+                    extracted = _parse_html_fields(page_source, extracted)
+                else:
+                    # На всякий случай попробуем ещё раз достать HTML, если не сохранили
+                    try:
+                        html_payload = self._fetch_images_desktop(car_id, shop_id=shop_id, return_html=True)
+                        if html_payload.get('page_source'):
+                            extracted = _parse_html_fields(html_payload['page_source'], {**extracted, **{k: v for k, v in html_payload.items() if k != 'page_source'}})
+                    except Exception as html_err:
+                        logger.debug(f"[API] HTML обогащение не удалось для car_id={car_id}: {html_err}")
+
             # Проверяем наличие обязательных полей
             if not extracted.get('power'):
                 logger.warning(f"[API] Не удалось получить power для car_id={car_id}")
                 # Пробуем извлечь из engine_info
                 engine_info = extracted.get('engine_info', '')
                 if engine_info:
-                    power_match = re.search(r'(\d+)\s*马力', engine_info)
+                    power_match = re.search(r'(\\d+)\\s*马力', engine_info)
                     if power_match:
                         extracted['power'] = _parse_int(power_match.group(1))  # int
                         logger.info(f"[API] Извлечено power из engine_info: {extracted['power']}")
@@ -590,6 +756,7 @@ class Che168DetailedParserAPI:
             if response.status_code in [403, 514]:
                 logger.warning(f"[API] getparamtypeitems вернул {response.status_code} для car_id={car_id} - API заблокирован")
                 extracted['is_banned'] = True
+                _set_api_ban()
                 return extracted
             
             response.raise_for_status()
@@ -726,6 +893,7 @@ class Che168DetailedParserAPI:
             if response.status_code in [403, 514]:
                 logger.warning(f"[API] getcarinfo вернул {response.status_code} для car_id={car_id} - API заблокирован")
                 extracted['is_banned'] = True  # Устанавливаем флаг блокировки
+                _set_api_ban()
                 
                 # Если галерея уже получена, не запускаем fallback для изображений
                 if has_gallery:
@@ -1190,7 +1358,7 @@ class Che168DetailedParserAPI:
             logger.debug(f"[API] Fallback для изображений не удался для car_id={car_id}: {e}")
             return {}
 
-    def _fetch_images_desktop(self, car_id: int, shop_id: Optional[int] = None) -> Dict[str, Any]:
+    def _fetch_images_desktop(self, car_id: int, shop_id: Optional[int] = None, return_html: bool = False) -> Dict[str, Any]:
         """
         Основной Selenium-fallback: парсит галерею с десктопной страницы.
         Использует eager page load strategy для быстрой загрузки.
@@ -1210,6 +1378,7 @@ class Che168DetailedParserAPI:
 
             driver = None
             temp_dir = None
+            last_page_source = None
             try:
                 driver, temp_dir = self._create_chrome_driver()
                 driver.set_page_load_timeout(45)
@@ -1236,7 +1405,8 @@ class Che168DetailedParserAPI:
                         driver.execute_script("window.scrollTo(0, 0);")
                         time.sleep(2)
 
-                        soup = BeautifulSoup(driver.page_source, 'html.parser')
+                        last_page_source = driver.page_source
+                        soup = BeautifulSoup(last_page_source, 'html.parser')
                         images_found = []
                         mileage_from_html, mileage_meta = _extract_mileage_from_soup(soup, year_hint=None)
 
@@ -1360,16 +1530,23 @@ class Che168DetailedParserAPI:
                                 }
                             if mileage_from_html:
                                 payload['mileage'] = mileage_from_html
+                            if return_html and last_page_source:
+                                payload['page_source'] = last_page_source
                             return payload
                         # Если нет картинок, но нашли пробег — вернём его, чтобы не терять данные
                         if mileage_from_html:
                             logger.info(f"[API] Desktop fallback: найден mileage без изображений для car_id={car_id}: {mileage_from_html}")
-                            return {'mileage': mileage_from_html}
+                            payload = {'mileage': mileage_from_html}
+                            if return_html and last_page_source:
+                                payload['page_source'] = last_page_source
+                            return payload
                     except Exception as url_err:
                         logger.warning(f"[API] Desktop selenium ошибка на URL {url}: {url_err}")
                         continue
 
                 logger.warning(f"[API] Desktop fallback: ни один URL не дал изображений для car_id={car_id}")
+                if return_html and last_page_source:
+                    return {'page_source': last_page_source}
 
             finally:
                 if driver:

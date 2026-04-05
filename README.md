@@ -7,7 +7,7 @@ CarCatch is a microservice platform that scrapes dongchedi.com and che168.com, e
 ```bash
 git clone <repository>
 cd CarsParser
-cp pyparsers/env.example pyparsers/.env
+cp pyparsers/env.example .env
 docker compose up -d --build
 ./scripts/health-check.sh   # or .ps1
 ```

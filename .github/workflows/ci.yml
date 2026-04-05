@@ -19,7 +19,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat > pyparsers/.env <<'EOF'
+          cat > .env <<'EOF'
           ALLOWED_IPS=127.0.0.1,::1
           DATAHUB_URL=http://127.0.0.1:8080
           DATAHUB_TIMEOUT=1800

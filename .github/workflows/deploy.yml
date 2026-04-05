@@ -30,7 +30,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat > pyparsers/.env <<'EOF'
+          cat > .env <<'EOF'
           ALLOWED_IPS=127.0.0.1,::1
           DATAHUB_URL=http://127.0.0.1:8080
           DATAHUB_TIMEOUT=1800
@@ -67,7 +67,7 @@ jobs:
           tar \
             --exclude=.git \
             --exclude=.github \
-            --exclude=pyparsers/.env \
+            --exclude=.env \
             -czf "${RELEASE_TAR}" .
 
       - name: Upload release archive
@@ -90,7 +90,7 @@ jobs:
             pwd
             ls -la
             ls -la pyparsers
-            test -f pyparsers/.env
+            test -f .env
             docker compose version
             docker compose config -q
             docker compose up -d --build --remove-orphans

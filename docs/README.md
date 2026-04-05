@@ -10,7 +10,7 @@ This folder aggregates every Markdown reference so you no longer have to guess w
 ```bash
 git clone <repository>
 cd CarsParser
-cp pyparsers/env.example pyparsers/.env
+cp pyparsers/env.example .env
 docker compose up -d --build
 ./scripts/health-check.sh   # or .ps1 on Windows
 ```

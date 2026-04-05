@@ -6,7 +6,7 @@ This guide consolidates the deployment, migrations, automation, and operational 
 
 ### Development
 1. Install Docker / Docker Compose.
-2. Clone the repo and copy `pyparsers/env.example` → `pyparsers/.env`.
+2. Clone the repo and copy `pyparsers/env.example` → `.env`.
 3. Start the parser stack with `docker compose up -d --build`.
 4. Run `./scripts/health-check.sh` (or the PowerShell variant) to ensure both parser services reply.
 

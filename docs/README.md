@@ -10,26 +10,25 @@ This folder aggregates every Markdown reference so you no longer have to guess w
 ```bash
 git clone <repository>
 cd CarsParser
-cp .env.example .env        # fill in secrets
-docker compose up -d        # start everything
+cp pyparsers/env.example pyparsers/.env
+docker compose up -d --build
 ./scripts/health-check.sh   # or .ps1 on Windows
 ```
 
 Useful URLs after compose finishes:
 
-- Reverse proxy: http://localhost
-- React app: http://localhost/podbortg
-- Angular app: http://localhost/ng
-- DataHub API: http://localhost:8080
-- PyParsers API: http://localhost:5000
-- Swagger / ReDoc: http://localhost/docs
+- Dongchedi parser: http://localhost:5001
+- Che168 parser: http://localhost:5002
+- Dongchedi Swagger / ReDoc: http://localhost:5001/docs
+- Che168 Swagger / ReDoc: http://localhost:5002/docs
 
 ## Service Map
 
 - `nginx` – frontend router, TLS termination, image proxy
 - `postgres` & `admin-postgres` – main and admin databases
 - `datahub` – Go API, enhancement worker, task orchestration
-- `pyparsers` – FastAPI service that handles scraping and translators
+- `pyparsers-dongchedi` – FastAPI service for dongchedi list/detail endpoints
+- `pyparsers-che168` – FastAPI service for che168 list/detail endpoints
 - `translator` & `redis` – async translation microservice with caching
 - `telegrambot`, `telegramapp`, `telegramngapp` – user‑facing entry points
 - `adminbot`, `adminservice`, `adminweb` – internal tooling
@@ -45,6 +44,6 @@ Useful URLs after compose finishes:
 - `changelog.md` – history of major parser/enhancement milestones
 - `services.md` – translator service, admin bot, and other supporting components
 - `telegram-app.md` – UI behavior, displayed fields, Angular/React quick start, image proxy details
-- `testing.md` – parser acceptance report and pyparsers unit-test guide
+- `testing.md` – smoke and integration checks for the split parser services
 
 If you need something that is not covered yet, add it here—this README is now the single source of truth for documentation entry points.

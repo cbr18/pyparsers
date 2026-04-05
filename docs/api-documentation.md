@@ -5,7 +5,8 @@
 1. [System Overview](#system-overview)
 2. [Architecture](#architecture)
 3. [Service Details](#service-details)
-   - [pyparsers (Python FastAPI)](#pyparsers-python-fastapi)
+   - [pyparsers-dongchedi (Python FastAPI)](#pyparsers-dongchedi-python-fastapi)
+   - [pyparsers-che168 (Python FastAPI)](#pyparsers-che168-python-fastapi)
    - [datahub (Go Gin)](#datahub-go-gin)
    - [telegrambot (Node.js Express)](#telegrambot-nodejs-express)
    - [telegramapp (React)](#telegramapp-react)
@@ -31,7 +32,8 @@ CarCatch - это микросервисная система для парси�
 
 ```
 nginx (80/443)
-├── pyparsers (5000) - Парсинг автомобилей
+├── pyparsers-dongchedi (5001) - Парсинг dongchedi
+├── pyparsers-che168 (5002) - Парсинг che168
 ├── datahub (8080) - Управление данными
 ├── telegrambot (3001) - Telegram бот
 ├── telegramapp (3002) - React веб-приложение
@@ -49,11 +51,11 @@ postgres (5432) - База данных
 
 ## Service Details
 
-### pyparsers (Python FastAPI)
+### pyparsers-dongchedi (Python FastAPI)
 
-**Port:** 5000  
+**Port:** 5001  
 **Technology:** Python 3.x, FastAPI, asyncio  
-**Purpose:** Асинхронный парсинг автомобилей с dongchedi.com и che168.com
+**Purpose:** Асинхронный парсинг автомобилей с dongchedi.com
 
 #### Root Endpoints
 
@@ -74,11 +76,6 @@ postgres (5432) - База данных
       "dongchedi_incremental": "/cars/dongchedi/incremental",
       "dongchedi_car": "/cars/dongchedi/car/{car_id}",
       "dongchedi_cars": "/cars/dongchedi/cars",
-      "che168": "/cars/che168",
-      "che168_page": "/cars/che168/page/{page}",
-      "che168_all": "/cars/che168/all",
-      "che168_incremental": "/cars/che168/incremental",
-      "che168_car": "/cars/che168/car",
       "health": "/health",
       "docs": "/docs",
       "redoc": "/redoc"
@@ -784,19 +781,21 @@ this.http.get<any>('/cars').subscribe({
 
 ### Service Ports Summary
 - **nginx:** 80, 443 (HTTP/HTTPS)
-- **pyparsers:** 5000 (Python FastAPI)
+- **pyparsers-dongchedi:** 5001 (Python FastAPI)
+- **pyparsers-che168:** 5002 (Python FastAPI)
 - **datahub:** 8080 (Go Gin)
 - **telegrambot:** 3001 (Node.js Express)
 - **telegramapp:** 3002 (React, served via nginx)
 - **postgres:** 5432 (Database)
 
 ### API Documentation URLs
-- **pyparsers:** `http://localhost:5000/docs` (Swagger), `http://localhost:5000/redoc` (ReDoc)
+- **pyparsers-dongchedi:** `http://localhost:5001/docs`
+- **pyparsers-che168:** `http://localhost:5002/docs`
 - **datahub:** `http://localhost:8080/swagger/index.html` (Swagger)
 
 ### Data Flow
-1. **Parsing:** pyparsers → External sources (dongchedi.com, che168.com)
-2. **Storage:** pyparsers → datahub → PostgreSQL
+1. **Parsing:** pyparsers-dongchedi / pyparsers-che168 → External sources
+2. **Storage:** parser services → datahub → PostgreSQL
 3. **Frontend:** telegramapp/telegramngapp → datahub → PostgreSQL
 4. **Notifications:** telegramapp → telegrambot → Telegram API
 
@@ -836,9 +835,9 @@ curl -X POST http://localhost:8080/update/dongchedi \
 ```
 
 ### Performance Features
-- **Async Processing:** pyparsers uses asyncio for concurrent parsing
+- **Async Processing:** the parser services use asyncio for concurrent parsing
 - **Memory Optimization:** Duplicate detection using sets for memory efficiency
-- **Performance Monitoring:** All pyparsers responses include execution time and memory usage
+- **Performance Monitoring:** parser responses include execution time and memory usage where supported
 - **Incremental Updates:** Only fetch new cars to minimize processing time
 
 ### Error Handling Best Practices

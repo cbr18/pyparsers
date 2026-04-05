@@ -31,7 +31,7 @@ The Go `EnhancementWorker` inside datahub continuously enriches cars:
 - Default config: `batch_size=10`, `delay_between_batches=300s`, `delay_between_cars=2s`, `max_concurrent=3`.
 - Endpoints: `GET /enhancement/status`, `POST /enhancement/start|stop|config`.
 - Cron container keeps inserting fresh listings so the worker always has something to do.
-- Success path: call pyparsers detail/spec routes → merge response → update car via GORM `.Updates()` (preserves indexed fields) → mark `has_details=true`.
+- Success path: call parser-service detail/spec routes → merge response → update car via GORM `.Updates()` (preserves indexed fields) → mark `has_details=true`.
 - Failure path: log error, increment `failed_enhancement_attempts`, leave `has_details=false` so future cycles can retry.
 
 **Throughput** (default config): ~120 cars/hour; adjust config for faster fill (example payload in `operations.md`).
@@ -41,8 +41,8 @@ The Go `EnhancementWorker` inside datahub continuously enriches cars:
 - Expanded selector logic (no longer assumes label/value share CSS classes) so >110 labels map correctly.
 - Added post-processing for combined fields such as `长*宽*高` → `length/width/height`, mileage normalization (`万公里` → km), year inference from registration date.
 - `_convert_to_domain_car` now feeds Go's `domain.Car` 1:1 with dongchedi fields, ensuring `has_details` semantics match.
-- FastAPI router at `/che168/detailed/*` exposes `parse`, `parse-batch`, and `health` endpoints, which are included in `pyparsers/async_api_server.py` via `include_router`.
-- Acceptance test (`TESTING_REPORT.md`) confirmed docker-compose builds, enhancement worker parity, and DB rows updated with detail timestamps.
+- FastAPI router at `/che168/detailed/*` exposes `parse`, `parse-batch`, and `health` endpoints, and is served by the dedicated `pyparsers-che168` service.
+- Current smoke coverage is provided by `tests/integration/test_source_services.py`, which verifies split-service startup plus live list/detail parsing against the direct `5001/5002` endpoints.
 
 ## Parser Refactor Summary
 
@@ -68,4 +68,3 @@ The Go `EnhancementWorker` inside datahub continuously enriches cars:
 - `@log_function` / `@log_async_function` trace entry/exit and funnel exceptions into the error handler.
 
 These utilities are shared by parsers, the async API server, and scheduled workers—keep them in mind whenever you add new external calls.
-

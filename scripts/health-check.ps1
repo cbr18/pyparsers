@@ -1,7 +1,7 @@
-# CarCatch Health Check Script (PowerShell)
-# This script checks the health of all services
+# PyParsers Health Check Script (PowerShell)
+# This script checks the split parser services
 
-Write-Host "🏥 CarCatch Health Check" -ForegroundColor Cyan
+Write-Host "🏥 PyParsers Health Check" -ForegroundColor Cyan
 Write-Host "========================" -ForegroundColor Cyan
 
 # Function to check HTTP endpoint
@@ -52,63 +52,23 @@ function Test-DockerContainer {
     }
 }
 
-# Function to check database
-function Test-Database {
-    Write-Host "Checking PostgreSQL... " -NoNewline
-
-    try {
-        $result = docker-compose exec -T postgres pg_isready -U postgres -d carsdb 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "✅ Ready" -ForegroundColor Green
-        } else {
-            Write-Host "❌ Not ready" -ForegroundColor Red
-        }
-    }
-    catch {
-        Write-Host "❌ Connection failed" -ForegroundColor Red
-    }
-}
-
 Write-Host ""
 Write-Host "🐳 Docker Containers:" -ForegroundColor Yellow
 Write-Host "--------------------"
-Test-DockerContainer "Nginx" "carcatch-nginx"
-Test-DockerContainer "DataHub" "carcatch-datahub"
-Test-DockerContainer "PyParsers" "carcatch-pyparsers"
-Test-DockerContainer "Telegram Bot" "carcatch-telegrambot"
-Test-DockerContainer "React App" "carcatch-telegramapp"
-Test-DockerContainer "Angular App" "carcatch-telegramngapp"
-Test-DockerContainer "PostgreSQL" "cars-postgres"
-Test-DockerContainer "Cron Updater" "carcatch-cron-updater"
+Test-DockerContainer "PyParsers Dongchedi" "carcatch-pyparsers-dongchedi"
+Test-DockerContainer "PyParsers Che168" "carcatch-pyparsers-che168"
 
 Write-Host ""
 Write-Host "🌐 HTTP Endpoints:" -ForegroundColor Yellow
 Write-Host "------------------"
-Test-HttpEndpoint "Nginx (HTTP)" "http://localhost/health"
-Test-HttpEndpoint "Development Server" "http://localhost:8000/health"
-Test-HttpEndpoint "DataHub API" "http://localhost:8080/cars"
-Test-HttpEndpoint "PyParsers API" "http://localhost:5000/health"
-Test-HttpEndpoint "React App" "http://localhost:3002/"
-Test-HttpEndpoint "Angular App" "http://localhost:3003/"
+Test-HttpEndpoint "PyParsers Dongchedi API" "http://localhost:5001/health"
+Test-HttpEndpoint "PyParsers Che168 API" "http://localhost:5002/health"
 
 Write-Host ""
-Write-Host "🗄️  Database:" -ForegroundColor Yellow
+Write-Host "📊 Parser Endpoints:" -ForegroundColor Yellow
 Write-Host "-------------"
-Test-Database
-
-Write-Host ""
-Write-Host "📊 API Endpoints:" -ForegroundColor Yellow
-Write-Host "-----------------"
-Test-HttpEndpoint "Cars API" "http://localhost/cars"
-Test-HttpEndpoint "Brands API" "http://localhost/brands"
-Test-HttpEndpoint "Swagger UI" "http://localhost/swagger/index.html"
-Test-HttpEndpoint "API Documentation" "http://localhost/docs"
-
-Write-Host ""
-Write-Host "🔗 Frontend Apps:" -ForegroundColor Yellow
-Write-Host "-----------------"
-Test-HttpEndpoint "Main App" "http://localhost/podbortg"
-Test-HttpEndpoint "Angular App" "http://localhost/ng"
+Test-HttpEndpoint "Dongchedi List" "http://localhost:5001/cars/dongchedi/page/1"
+Test-HttpEndpoint "Che168 Docs" "http://localhost:5002/docs"
 
 Write-Host ""
 Write-Host "📈 Service Statistics:" -ForegroundColor Yellow
@@ -132,7 +92,5 @@ Write-Host ""
 Write-Host "✅ Health check completed!" -ForegroundColor Green
 Write-Host ""
 Write-Host "🔗 Quick Links:" -ForegroundColor Cyan
-Write-Host "  Main App: http://localhost/podbortg"
-Write-Host "  API Docs: http://localhost/docs"
-Write-Host "  Swagger: http://localhost/swagger"
-Write-Host "  Development: http://localhost:8000"
+Write-Host "  Dongchedi Docs: http://localhost:5001/docs"
+Write-Host "  Che168 Docs: http://localhost:5002/docs"

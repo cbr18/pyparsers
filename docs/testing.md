@@ -1,48 +1,47 @@
 # Testing Reference
 
-## Che168 Enhancement Validation (Acceptance Snapshot)
+## Split Parser Smoke Test
 
-Latest compose test (see former `TESTING_REPORT.md`) covered:
+The parser layer is split into two services:
 
-- ✅ **Docker build** – all containers built in ~2 minutes; fix for stray `package` typo already merged.
-- ✅ **Enhancement API** – `https://localhost/enhancement/status` returned batch metrics for both sources (che168 + dongchedi).
-- ✅ **Che168 parser API** – `POST /pyparsers/che168/detailed/parse` with `{"car_id":56481576,"force_update":true}` returned full `domain.Car` payload.
-- ✅ **Worker logs** – background enhancement worker processed mixed-source batches and logged `[n/m] Successfully enhanced car ...`.
-- ✅ **Database** – rows updated with `has_details=true`, `last_detail_update=UTC timestamp`, detail counts matched expectations (20 che168 cars with details, 20 without before worker caught up).
-- ⚠️ **Known gaps** – some che168 fields (power, gallery) still depend on site variability; monitor logs for “Invalid power value” warnings.
+- `pyparsers-dongchedi` on `http://localhost:5001`
+- `pyparsers-che168` on `http://localhost:5002`
 
-Use these commands when you need to re-run the smoke suite:
+The main live smoke test is [`tests/integration/test_source_services.py`](../tests/integration/test_source_services.py).
+
+It verifies:
+
+- dongchedi list parsing
+- dongchedi detailed parsing for two cars
+- che168 list parsing
+- che168 detailed parsing for two cars when the upstream source responds
+- presence of image data in parsed responses
+
+## Run the Smoke Test
+
 ```bash
-curl -k -s https://localhost/enhancement/status | jq .
-curl -k -s -X POST https://localhost/pyparsers/che168/detailed/parse \
+python tests/integration/test_source_services.py
+```
+
+Expected behavior:
+
+- dongchedi should pass on live data
+- che168 may be skipped when the external site times out or triggers anti-bot protection
+- a non-zero exit code indicates a local regression
+
+## Manual Checks
+
+```bash
+curl -s http://localhost:5001/health
+curl -s http://localhost:5002/health
+curl -s http://localhost:5001/cars/dongchedi/page/1
+curl -s http://localhost:5002/cars/che168/page/1
+curl -s -X POST http://localhost:5002/che168/detailed/parse \
   -H "Content-Type: application/json" \
   -d '{"car_id":56481576,"force_update":true}'
-docker compose logs datahub --tail=50 | grep -i "enhanced\\|error"
 ```
 
-## PyParsers Unit Tests
+## Notes
 
-### Install dev dependencies
-```bash
-cd pyparsers
-pip install -e ".[dev]"
-```
-
-### Run all tests
-```bash
-cd pyparsers
-pytest tests/unit -v
-```
-
-### Focused test / coverage
-```bash
-pytest tests/unit/test_dongchedi_parser.py -v
-pytest tests/unit -v --cov=api
-pytest tests/unit --cov=api --cov-report=html   # generates htmlcov/
-```
-
-Notes:
-- HTTP interactions are mocked with `responses`, so no real network access occurs.
-- FastAPI routes use `TestClient`.
-- Keep an eye on `tests/unit/test_memory_optimization_integration.py` whenever you tweak the async parser or `MemoryOptimizedList`.
-
+- `che168` remains externally unstable; timeouts there are not automatically a local bug.
+- The smoke test is stdlib-only, so it can run without setting up a separate pytest environment on the host.

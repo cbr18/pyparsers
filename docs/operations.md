@@ -6,9 +6,9 @@ This guide consolidates the deployment, migrations, automation, and operational 
 
 ### Development
 1. Install Docker / Docker Compose.
-2. Clone the repo and copy `.env.example` → `.env`, filling in API keys, DB passwords, Telegram tokens, TLS paths, etc.
-3. Start everything with `docker compose up -d`.
-4. Run `./scripts/health-check.sh` (or the PowerShell variant) to ensure each service replies.
+2. Clone the repo and copy `pyparsers/env.example` → `pyparsers/.env`.
+3. Start the parser stack with `docker compose up -d --build`.
+4. Run `./scripts/health-check.sh` (or the PowerShell variant) to ensure both parser services reply.
 
 ### Production Basics
 - Use a dedicated `.env.production` with hardened secrets.
@@ -21,12 +21,10 @@ This guide consolidates the deployment, migrations, automation, and operational 
 
 | URL | Purpose |
 | --- | --- |
-| `http://localhost` | Reverse proxy + health endpoint |
-| `/podbortg` | React telegram web app |
-| `/ng` | Angular app |
-| `/api` | DataHub REST API |
-| `/pyparsers` | Parser API (FastAPI docs at `/pyparsers/docs`) |
-| `/docs` | Swagger UI aggregated by nginx |
+| `http://localhost:5001` | Dongchedi parser API |
+| `http://localhost:5002` | Che168 parser API |
+| `http://localhost:5001/docs` | Dongchedi Swagger UI |
+| `http://localhost:5002/docs` | Che168 Swagger UI |
 
 ### Common Compose Commands
 ```bash
@@ -141,4 +139,3 @@ docker run --rm -v carcatch_pg_data:/data -v $(pwd):/backup \
 5. **Image proxy issues?** Validate `/proxy-image/<encoded_url>` returns 200 and the nginx snippet from `docs/telegram-app.md` is loaded.
 
 Keeping these references in a single file means on-call engineers have one bookmark for every operational task.
-

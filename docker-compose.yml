@@ -1,22 +1,38 @@
-# Docker Compose для сервера pyparsers (отдельный сервер)
-# Основные сервисы (datahub, postgres и др.) работают на другом сервере
-
 services:
-  pyparsers:
+  pyparsers-dongchedi:
     build:
       context: ./pyparsers
       dockerfile: Dockerfile
-    container_name: carcatch-pyparsers
+    container_name: carcatch-pyparsers-dongchedi
     env_file:
       - ./pyparsers/.env
-    # Все переменные окружения берутся из ./pyparsers/.env
-    # (DATAHUB_URL, ALLOWED_IPS и др.)
+    command: ["granian", "--interface", "asgi", "--host", "0.0.0.0", "--port", "5000", "--http1-keep-alive", "app_dongchedi:app"]
     ports:
-      # Открываем порт наружу для запросов от основного сервера
-      - "5000:5000"
-    volumes:
-      # Монтируем код для быстрых обновлений
-      - ./pyparsers:/app/pyparsers:ro
+      - "5001:5000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "--timeout=5", "http://127.0.0.1:5000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    mem_limit: 4g
+    init: true
+
+  pyparsers-che168:
+    build:
+      context: ./pyparsers
+      dockerfile: Dockerfile
+    container_name: carcatch-pyparsers-che168
+    env_file:
+      - ./pyparsers/.env
+    command: ["granian", "--interface", "asgi", "--host", "0.0.0.0", "--port", "5000", "--http1-keep-alive", "app_che168:app"]
+    ports:
+      - "5002:5000"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "--timeout=5", "http://127.0.0.1:5000/health"]
@@ -34,5 +50,4 @@ services:
 networks:
   default:
     driver: bridge
-
 

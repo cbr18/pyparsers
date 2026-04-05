@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# CarCatch Health Check Script
-# This script checks the health of all services
+# PyParsers Health Check Script
+# This script checks the split parser services
 
 set -e
 
-echo "🏥 CarCatch Health Check"
+echo "🏥 PyParsers Health Check"
 echo "========================"
 
 # Colors for output
@@ -47,58 +47,22 @@ check_container() {
     fi
 }
 
-# Function to check database
-check_database() {
-    echo -n "Checking PostgreSQL... "
-
-    if docker-compose exec -T postgres pg_isready -U postgres -d carsdb >/dev/null 2>&1; then
-        echo -e "${GREEN}✅ Ready${NC}"
-    else
-        echo -e "${RED}❌ Not ready${NC}"
-    fi
-}
-
 echo "🐳 Docker Containers:"
 echo "--------------------"
-check_container "Nginx" "carcatch-nginx"
-check_container "DataHub" "carcatch-datahub"
-check_container "PyParsers" "carcatch-pyparsers"
-check_container "Telegram Bot" "carcatch-telegrambot"
-check_container "React App" "carcatch-telegramapp"
-check_container "Angular App" "carcatch-telegramngapp"
-check_container "PostgreSQL" "cars-postgres"
-check_container "Cron Updater" "carcatch-cron-updater"
+check_container "PyParsers Dongchedi" "carcatch-pyparsers-dongchedi"
+check_container "PyParsers Che168" "carcatch-pyparsers-che168"
 
 echo ""
 echo "🌐 HTTP Endpoints:"
 echo "------------------"
-check_http "Nginx (HTTP)" "http://localhost/health"
-check_http "Nginx (HTTPS)" "https://localhost/health" 200
-check_http "Development Server" "http://localhost:8000/health"
-check_http "DataHub API" "http://localhost:8080/cars"
-check_http "PyParsers API" "http://localhost:5000/health"
-check_http "Telegram Bot" "http://localhost:3001/health"
-check_http "React App" "http://localhost:3002/"
-check_http "Angular App" "http://localhost:3003/"
+check_http "PyParsers Dongchedi API" "http://localhost:5001/health"
+check_http "PyParsers Che168 API" "http://localhost:5002/health"
 
 echo ""
-echo "🗄️  Database:"
+echo "📊 Parser Endpoints:"
 echo "-------------"
-check_database
-
-echo ""
-echo "📊 API Endpoints:"
-echo "-----------------"
-check_http "Cars API" "http://localhost/cars"
-check_http "Brands API" "http://localhost/brands"
-check_http "Swagger UI" "http://localhost/swagger/index.html"
-check_http "API Documentation" "http://localhost/docs"
-
-echo ""
-echo "🔗 Frontend Apps:"
-echo "-----------------"
-check_http "Main App" "http://localhost/podbortg"
-check_http "Angular App" "http://localhost/ng"
+check_http "Dongchedi List" "http://localhost:5001/cars/dongchedi/page/1"
+check_http "Che168 Docs" "http://localhost:5002/docs"
 
 echo ""
 echo "📈 Service Statistics:"
@@ -119,7 +83,5 @@ echo ""
 echo "✅ Health check completed!"
 echo ""
 echo "🔗 Quick Links:"
-echo "  Main App: http://localhost/podbortg"
-echo "  API Docs: http://localhost/docs"
-echo "  Swagger: http://localhost/swagger"
-echo "  Development: http://localhost:8000"
+echo "  Dongchedi Docs: http://localhost:5001/docs"
+echo "  Che168 Docs: http://localhost:5002/docs"

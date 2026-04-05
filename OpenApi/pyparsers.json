@@ -1,38 +1,51 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Car-Catch",
-    "version": "1"
+    "title": "Pyparsers Split Services",
+    "version": "2.0.0",
+    "description": "Direct local API for the split parser services. Dongchedi runs on localhost:5001, che168 runs on localhost:5002."
   },
   "servers": [
-    { "url": "https://car-catch.ru" }
+    { "url": "http://localhost:5001", "description": "Dongchedi direct service" },
+    { "url": "http://localhost:5002", "description": "Che168 direct service" }
   ],
   "paths": {
-    "/pyparsers/": {
+    "/": {
       "get": {
         "summary": "Root",
-        "responses": { "200": { "description": "OK" } }
+        "responses": { "200": { "description": "Service metadata" } }
       }
     },
-    "/pyparsers/health": {
-      "get": { "summary": "Health", "responses": { "200": { "description": "OK" } } }
-    },
-    "/pyparsers/cars/dongchedi": {
-      "get": { "summary": "Dongchedi list", "responses": { "200": { "description": "OK" } } }
-    },
-    "/pyparsers/cars/dongchedi/page/{page}": {
+    "/health": {
       "get": {
-        "summary": "Dongchedi list by page",
-        "parameters": [ { "name": "page", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 1 } } ],
-        "responses": { "200": { "description": "OK" } }
+        "summary": "Health check",
+        "responses": { "200": { "description": "Service is healthy" } }
       }
     },
-    "/pyparsers/cars/dongchedi/all": {
-      "get": { "summary": "Dongchedi all", "responses": { "200": { "description": "OK" } } }
+    "/cars/dongchedi": {
+      "get": {
+        "summary": "Dongchedi first page",
+        "responses": { "200": { "description": "Dongchedi listing page" } }
+      }
     },
-    "/pyparsers/cars/dongchedi/incremental": {
+    "/cars/dongchedi/page/{page}": {
+      "get": {
+        "summary": "Dongchedi page",
+        "parameters": [
+          { "name": "page", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 1 } }
+        ],
+        "responses": { "200": { "description": "Dongchedi listing page" } }
+      }
+    },
+    "/cars/dongchedi/all": {
+      "get": {
+        "summary": "Dongchedi full listing",
+        "responses": { "200": { "description": "All available dongchedi pages" } }
+      }
+    },
+    "/cars/dongchedi/incremental": {
       "post": {
-        "summary": "Dongchedi incremental",
+        "summary": "Dongchedi incremental parse",
         "requestBody": {
           "required": true,
           "content": {
@@ -50,42 +63,21 @@
             }
           }
         },
-        "responses": { "200": { "description": "OK" } }
+        "responses": { "200": { "description": "Incremental parse result" } }
       }
     },
-    "/pyparsers/cars/dongchedi/car/{car_id}": {
+    "/cars/dongchedi/car/{car_id}": {
       "get": {
-        "summary": "Dongchedi car detail",
-        "parameters": [ { "name": "car_id", "in": "path", "required": true, "schema": { "type": "string" } } ],
-        "responses": { "200": { "description": "OK" }, "500": { "description": "Error" } }
+        "summary": "Dongchedi detailed car",
+        "parameters": [
+          { "name": "car_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "Detailed dongchedi car" } }
       }
     },
-    "/pyparsers/cars/dongchedi/cars": {
+    "/cars/dongchedi/cars": {
       "post": {
-        "summary": "Dongchedi multiple car details",
-        "requestBody": {
-          "required": true,
-          "content": { "application/json": { "schema": { "type": "object", "properties": { "car_ids": { "type": "array", "items": { "type": "string" } } }, "required": ["car_ids"] } } }
-        },
-        "responses": { "200": { "description": "OK" }, "400": { "description": "Too many IDs" } }
-      }
-    },
-    "/pyparsers/cars/che168": {
-      "get": { "summary": "Che168 list", "responses": { "200": { "description": "OK" } } }
-    },
-    "/pyparsers/cars/che168/page/{page}": {
-      "get": {
-        "summary": "Che168 list by page",
-        "parameters": [ { "name": "page", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 1 } } ],
-        "responses": { "200": { "description": "OK" } }
-      }
-    },
-    "/pyparsers/cars/che168/all": {
-      "get": { "summary": "Che168 all", "responses": { "200": { "description": "OK" } } }
-    },
-    "/pyparsers/cars/che168/incremental": {
-      "post": {
-        "summary": "Che168 incremental",
+        "summary": "Dongchedi batch detailed cars",
         "requestBody": {
           "required": true,
           "content": {
@@ -93,70 +85,159 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "existing_cars": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+                  "car_ids": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  }
+                },
+                "required": ["car_ids"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Detailed cars batch" } }
+      }
+    },
+    "/cars/dongchedi/stats": {
+      "get": {
+        "summary": "Dongchedi parser stats",
+        "responses": { "200": { "description": "Parser statistics" } }
+      }
+    },
+    "/update/dongchedi/full": {
+      "get": {
+        "summary": "Dongchedi full update",
+        "responses": { "200": { "description": "Update started or completed" } }
+      }
+    },
+    "/cars/che168": {
+      "get": {
+        "summary": "Che168 first page",
+        "responses": { "200": { "description": "Che168 listing page" } }
+      }
+    },
+    "/cars/che168/page/{page}": {
+      "get": {
+        "summary": "Che168 page",
+        "parameters": [
+          { "name": "page", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 1 } }
+        ],
+        "responses": { "200": { "description": "Che168 listing page" } }
+      }
+    },
+    "/cars/che168/all": {
+      "get": {
+        "summary": "Che168 full listing",
+        "responses": { "200": { "description": "All available che168 pages" } }
+      }
+    },
+    "/cars/che168/incremental": {
+      "post": {
+        "summary": "Che168 incremental parse",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "existing_cars": {
+                    "type": "array",
+                    "items": { "type": "object", "additionalProperties": true }
+                  }
                 },
                 "required": ["existing_cars"]
               }
             }
           }
         },
-        "responses": { "200": { "description": "OK" } }
+        "responses": { "200": { "description": "Incremental parse result" } }
       }
     },
-    "/pyparsersросто 
-    che168/car": {
+    "/cars/che168/car": {
       "post": {
-        "summary": "Che168 car detail by URL",
+        "summary": "Che168 detailed car by URL",
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "type": "object", "properties": { "car_url": { "type": "string", "format": "uri" } }, "required": ["car_url"] } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "car_url": { "type": "string", "format": "uri" }
+                },
+                "required": ["car_url"]
+              }
+            }
+          }
         },
-        "responses": { "200": { "description": "OK" }, "500": { "description": "Error" } }
+        "responses": { "200": { "description": "Detailed che168 car" } }
       }
     },
-    "/pyparsers/update/dongchedi/full": {
-      "get": { "summary": "Update dongchedi full", "responses": { "200": { "description": "OK" } } }
-    },
-    "/pyparsers/update/che168/full": {
-      "get": { "summary": "Update che168 full", "responses": { "200": { "description": "OK" } } }
-    },
-    "/pyparsers/tasks": {
+    "/che168/detailed/parse": {
       "post": {
-        "summary": "Создать задачу парсинга",
+        "summary": "Che168 detailed parse by identifiers",
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskCreateRequest" } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "car_id": { "type": "string" },
+                  "shop_id": { "type": "string" },
+                  "force_update": { "type": "boolean", "default": false }
+                },
+                "required": ["car_id", "shop_id"]
+              }
+            }
+          }
         },
-        "responses": { "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskCreateResponse" } } } } }
+        "responses": { "200": { "description": "Detailed che168 car" } }
       }
     },
-    "/pyparsers/tasks/{task_id}": {
+    "/che168/detailed/parse-batch": {
+      "post": {
+        "summary": "Che168 detailed batch parse",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "cars": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "car_id": { "type": "string" },
+                        "shop_id": { "type": "string" },
+                        "force_update": { "type": "boolean" }
+                      },
+                      "required": ["car_id", "shop_id"]
+                    }
+                  }
+                },
+                "required": ["cars"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Batch detailed che168 result" } }
+      }
+    },
+    "/che168/detailed/health": {
       "get": {
-        "summary": "Получить статус задачи",
-        "parameters": [ { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } } ],
-        "responses": { "200": { "description": "OK" }, "404": { "description": "Task not found" } }
+        "summary": "Che168 detailed parser health",
+        "responses": { "200": { "description": "Detailed parser is healthy" } }
       }
-    }
-  },
-  "components": {
-    "schemas": {
-      "TaskCreateRequest": {
-        "type": "object",
-        "properties": {
-          "source": { "type": "string", "enum": ["dongchedi", "che168"] },
-          "task_type": { "type": "string", "enum": ["full", "incremental"], "default": "full" },
-          "id_field": { "type": "string", "nullable": true },
-          "existing_ids": { "type": "array", "items": { "type": "string" }, "nullable": true }
-        },
-        "required": ["source"]
-      },
-      "TaskCreateResponse": {
-        "type": "object",
-        "properties": { "task_id": { "type": "string" } },
-        "required": ["task_id"]
+    },
+    "/update/che168/full": {
+      "get": {
+        "summary": "Che168 full update",
+        "responses": { "200": { "description": "Update started or completed" } }
       }
     }
   }
 }
-
-

@@ -281,7 +281,7 @@ def _parse_html_fields(page_source: str, extracted: Dict[str, Any]) -> Dict[str,
             if date_match:
                 year = date_match.group(1)
                 month = date_match.group(2) or '01'
-                norm = normalize_first_registration_date(f\"{year}-{month}-01\")
+                norm = normalize_first_registration_date(f"{year}-{month}-01")
                 if norm:
                     _set_if_missing('first_registration_time', norm)
         except Exception:
@@ -684,18 +684,18 @@ class Che168DetailedParserAPI:
                         if html_payload.get('page_source'):
                             extracted = _parse_html_fields(html_payload['page_source'], {**extracted, **{k: v for k, v in html_payload.items() if k != 'page_source'}})
                     except Exception as html_err:
-                        logger.debug(f\"[API] HTML обогащение не удалось для car_id={car_id}: {html_err}\")
+                        logger.debug(f"[API] HTML обогащение не удалось для car_id={car_id}: {html_err}")
 
             # Проверяем наличие обязательных полей
             if not extracted.get('power'):
-                logger.warning(f\"[API] Не удалось получить power для car_id={car_id}\")
+                logger.warning(f"[API] Не удалось получить power для car_id={car_id}")
                 # Пробуем извлечь из engine_info
                 engine_info = extracted.get('engine_info', '')
                 if engine_info:
                     power_match = re.search(r'(\\d+)\\s*马力', engine_info)
                     if power_match:
                         extracted['power'] = _parse_int(power_match.group(1))  # int
-                        logger.info(f\"[API] Извлечено power из engine_info: {extracted['power']}\")
+                        logger.info(f"[API] Извлечено power из engine_info: {extracted['power']}")
             
             # Проверяем валидность данных
             # Считаем значимыми поля силовой установки и наличие галереи/даты, чтобы не отбрасывать fallback
@@ -1567,4 +1567,3 @@ class Che168DetailedParserAPI:
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
-

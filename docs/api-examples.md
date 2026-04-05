@@ -8,7 +8,8 @@ This document provides practical examples of using the CarCatch API.
 - **Development:** `http://localhost:8000`
 - **Direct Services:**
   - DataHub: `http://localhost:8080`
-  - PyParsers: `http://localhost:5000`
+  - Dongchedi parser: `http://localhost:5001`
+  - Che168 parser: `http://localhost:5002`
   - Telegram Bot: `http://localhost:3001`
 
 ## Authentication
@@ -137,19 +138,19 @@ curl "http://localhost/brands"
 
 ```bash
 # First page
-curl "http://localhost/pyparsers/cars/dongchedi"
+curl "http://localhost:5001/cars/dongchedi"
 
 # Specific page
-curl "http://localhost/pyparsers/cars/dongchedi/page/2"
+curl "http://localhost:5001/cars/dongchedi/page/2"
 
 # All cars (warning: may take time)
-curl "http://localhost/pyparsers/cars/dongchedi/all"
+curl "http://localhost:5001/cars/dongchedi/all"
 ```
 
 ### 2. Incremental Update
 
 ```bash
-curl -X POST "http://localhost/pyparsers/cars/dongchedi/incremental" \
+curl -X POST "http://localhost:5001/cars/dongchedi/incremental" \
   -H "Content-Type: application/json" \
   -d '{
     "existing_cars": [
@@ -165,10 +166,10 @@ curl -X POST "http://localhost/pyparsers/cars/dongchedi/incremental" \
 
 ```bash
 # Single car details
-curl "http://localhost/pyparsers/cars/dongchedi/car/123456"
+curl "http://localhost:5001/cars/dongchedi/car/123456"
 
 # Multiple cars (max 20)
-curl -X POST "http://localhost/pyparsers/cars/dongchedi/cars" \
+curl -X POST "http://localhost:5001/cars/dongchedi/cars" \
   -H "Content-Type: application/json" \
   -d '{
     "car_ids": ["123456", "789012", "345678"]
@@ -178,7 +179,7 @@ curl -X POST "http://localhost/pyparsers/cars/dongchedi/cars" \
 ### 4. Get Statistics
 
 ```bash
-curl "http://localhost/pyparsers/cars/dongchedi/stats"
+curl "http://localhost:5001/cars/dongchedi/stats"
 ```
 
 **Response:**

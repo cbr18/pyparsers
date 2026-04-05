@@ -7,17 +7,16 @@ CarCatch is a microservice platform that scrapes dongchedi.com and che168.com, e
 ```bash
 git clone <repository>
 cd CarsParser
-cp .env.example .env        # fill in secrets
-docker compose up -d
+cp pyparsers/env.example pyparsers/.env
+docker compose up -d --build
 ./scripts/health-check.sh   # or .ps1
 ```
 
 Useful URLs:
-- React UI: http://localhost/podbortg
-- Angular UI: http://localhost/ng
-- Swagger: http://localhost/docs
-- DataHub API: http://localhost:8080
-- PyParsers API: http://localhost:5000
+- Dongchedi parser: http://localhost:5001
+- Che168 parser: http://localhost:5002
+- Dongchedi docs: http://localhost:5001/docs
+- Che168 docs: http://localhost:5002/docs
 
 ## Documentation
 
@@ -29,6 +28,6 @@ All markdown guides now live in `docs/`.
 - [`docs/api-documentation.md`](docs/api-documentation.md) / [`docs/api-examples.md`](docs/api-examples.md) – REST reference
 - [`docs/telegram-app.md`](docs/telegram-app.md) – React/Angular UIs and image proxy
 - [`docs/services.md`](docs/services.md) – translator and admin bot details
-- [`docs/testing.md`](docs/testing.md) – acceptance recap + pytest instructions
+- [`docs/testing.md`](docs/testing.md) – smoke and integration checks for the split parser services
 
 Use the docs folder for everything else (database schema, changelog, etc.).

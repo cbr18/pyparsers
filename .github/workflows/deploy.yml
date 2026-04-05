@@ -82,12 +82,17 @@ jobs:
           set -euo pipefail
           DEPLOY_PATH_VALUE="${DEPLOY_PATH:-/home/${SSH_USER}/pyparsers}"
           ssh -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" '
-            set -euo pipefail
+            set -euxo pipefail
             DEPLOY_PATH="'"${DEPLOY_PATH_VALUE}"'"
             mkdir -p "${DEPLOY_PATH}"
             tar -xzf /tmp/pyparsers-release.tar.gz -C "${DEPLOY_PATH}"
             cd "${DEPLOY_PATH}"
+            pwd
+            ls -la
+            ls -la pyparsers
             test -f pyparsers/.env
+            docker compose version
+            docker compose config -q
             docker compose up -d --build --remove-orphans
             docker compose ps
           '

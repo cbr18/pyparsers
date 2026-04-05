@@ -15,6 +15,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prepare CI env file
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > pyparsers/.env <<'EOF'
+          ALLOWED_IPS=127.0.0.1,::1
+          DATAHUB_URL=http://127.0.0.1:8080
+          DATAHUB_TIMEOUT=1800
+          DONGCHEDI_ENHANCE_MAX_CONCURRENT=5
+          CHE168_BATCH_MAX_CONCURRENT=5
+          INCREMENTAL_EXISTING_LIMIT=15000
+          PERF_ATTACH_BODY=false
+          CORS_ALLOW_ORIGINS=*
+          CORS_ALLOW_CREDENTIALS=true
+          CORS_ALLOW_METHODS=GET,POST,PUT,DELETE,OPTIONS
+          CORS_ALLOW_HEADERS=*
+          TASK_TTL_HOURS=24
+          MAX_TASKS=1000
+          EOF
+
       - name: Validate docker compose
         run: docker compose config -q
 

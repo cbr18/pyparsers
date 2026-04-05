@@ -63,17 +63,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          RELEASE_TAR="/tmp/pyparsers-release.tar.gz"
           tar \
             --exclude=.git \
             --exclude=.github \
             --exclude=pyparsers/.env \
-            -czf release.tar.gz .
+            -czf "${RELEASE_TAR}" .
 
       - name: Upload release archive
         shell: bash
         run: |
           set -euo pipefail
-          scp -P "${SSH_PORT}" release.tar.gz "${SSH_USER}@${SSH_HOST}:/tmp/pyparsers-release.tar.gz"
+          scp -P "${SSH_PORT}" /tmp/pyparsers-release.tar.gz "${SSH_USER}@${SSH_HOST}:/tmp/pyparsers-release.tar.gz"
 
       - name: Deploy on server
         shell: bash

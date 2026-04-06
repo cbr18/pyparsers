@@ -15,7 +15,11 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 import ipaddress
 from api.che168.parser import Che168Parser
-from api.che168.detailed_api import router as che168_detailed_router, _parse_car_details_async
+from api.che168.detailed_api import (
+    router as che168_detailed_router,
+    CarDetailRequest,
+    parse_car_details as parse_che168_car_details,
+)
 from api.dongchedi.models.response import DongchediApiResponse
 from api.dongchedi.models.car import DongchediCar
 from api.memory_optimized import MemoryOptimizedList
@@ -435,23 +439,21 @@ def _probe_error_message(exc: Exception) -> str:
     return message or exc.__class__.__name__
 
 
-def _pick_dongchedi_probe_candidate(items: List[Any]) -> Optional[Any]:
+def _probe_item_value(item: Any, field: str) -> Any:
+    if isinstance(item, dict):
+        return item.get(field)
+    return getattr(item, field, None)
+
+
+def _pick_probe_candidate(items: List[Any], required_fields: List[str]) -> Optional[Any]:
     for item in items:
-        car_id = getattr(item, "car_id", None)
-        image = getattr(item, "image", None)
-        if car_id and image:
+        if all(_probe_item_value(item, field) for field in required_fields):
             return item
     return None
 
 
-def _pick_che168_probe_candidate(items: List[Any]) -> Optional[Any]:
-    for item in items:
-        car_id = getattr(item, "car_id", None)
-        shop_id = getattr(item, "shop_id", None)
-        image = getattr(item, "image", None)
-        if car_id and shop_id and image:
-            return item
-    return None
+def _detail_has_images(detail_data: Dict[str, Any]) -> bool:
+    return bool(detail_data.get("image") or detail_data.get("image_gallery") or detail_data.get("image_count"))
 
 
 async def _probe_dongchedi_blocked() -> dict:
@@ -459,52 +461,54 @@ async def _probe_dongchedi_blocked() -> dict:
     details: Dict[str, Any] = {}
 
     try:
-        listing = await asyncio.wait_for(dongchedi_parser.async_fetch_cars_by_page(1), timeout=30)
+        listing = await asyncio.wait_for(get_dongchedi_cars_by_page(1), timeout=60)
     except Exception as exc:
         details["list_error"] = _probe_error_message(exc)
         return _build_blocked_payload("dongchedi", 1, checks, details)
 
-    cars = getattr(listing.data, "search_sh_sku_info_list", []) if getattr(listing, "data", None) else []
+    list_payload = listing.get("data") if isinstance(listing, dict) else None
+    cars = list_payload.get("search_sh_sku_info_list", []) if isinstance(list_payload, dict) else []
     if cars:
         checks["list"] = 1
         details["list_count"] = len(cars)
     else:
         details["list_count"] = 0
-        details["list_status"] = getattr(listing, "status", None)
-        details["list_message"] = getattr(listing, "message", None)
+        if isinstance(listing, dict):
+            details["list_status"] = listing.get("status")
+            details["list_message"] = listing.get("message")
         return _build_blocked_payload("dongchedi", 1, checks, details)
 
-    candidate = _pick_dongchedi_probe_candidate(cars)
+    candidate = _pick_probe_candidate(cars, ["car_id", "image"])
     if candidate is None:
         details["detail_reason"] = "no_probe_candidate"
         return _build_blocked_payload("dongchedi", 1, checks, details)
 
-    details["probe_car_id"] = getattr(candidate, "car_id", None)
+    probe_car_id = str(_probe_item_value(candidate, "car_id"))
+    details["probe_car_id"] = probe_car_id
     try:
-        car_obj, meta = await asyncio.wait_for(
-            dongchedi_parser.async_fetch_car_detail(str(candidate.car_id)),
-            timeout=45,
-        )
+        detail_response = await asyncio.wait_for(get_dongchedi_car_detail(probe_car_id), timeout=90)
     except Exception as exc:
         details["detail_error"] = _probe_error_message(exc)
         return _build_blocked_payload("dongchedi", 1, checks, details)
 
-    if car_obj is None:
-        details["detail_status"] = meta.get("status") if isinstance(meta, dict) else None
-        details["detail_error"] = meta.get("error") if isinstance(meta, dict) else "detail_unavailable"
+    detail_data = detail_response.get("data") if isinstance(detail_response, dict) else None
+    details["detail_status"] = detail_response.get("status") if isinstance(detail_response, dict) else None
+    if not isinstance(detail_data, dict):
+        details["detail_error"] = "detail_unavailable"
         return _build_blocked_payload("dongchedi", 1, checks, details)
 
-    car_data = car_obj.dict()
-    checks["detailed"] = 1
-    details["detail_status"] = meta.get("status") if isinstance(meta, dict) else 200
-    details["detail_is_banned"] = int(bool(car_data.get("is_banned")))
-    details["detail_has_images"] = int(
-        bool(car_data.get("image")) or bool(car_data.get("image_gallery")) or bool(car_data.get("image_count"))
-    )
-    details["detail_has_registration"] = int(bool(car_data.get("first_registration_time")))
+    detail_is_banned = int(bool(detail_data.get("is_banned")))
+    detail_has_images = int(_detail_has_images(detail_data))
+    details["detail_is_banned"] = detail_is_banned
+    details["detail_has_images"] = detail_has_images
+    details["detail_has_registration"] = int(bool(detail_data.get("first_registration_time")))
 
-    blocked = 1 if car_data.get("is_banned") else 0
-    return _build_blocked_payload("dongchedi", blocked, checks, details)
+    if detail_response.get("status") == 200 and not detail_is_banned and detail_has_images:
+        checks["detailed"] = 1
+        return _build_blocked_payload("dongchedi", 0, checks, details)
+
+    details["detail_error"] = detail_data.get("error") or "detailed_probe_failed"
+    return _build_blocked_payload("dongchedi", 1, checks, details)
 
 
 async def _probe_che168_blocked() -> dict:
@@ -512,51 +516,54 @@ async def _probe_che168_blocked() -> dict:
     details: Dict[str, Any] = {}
 
     try:
-        listing = await asyncio.wait_for(che168_parser.async_fetch_cars_by_page(1), timeout=30)
+        listing = await asyncio.wait_for(get_che168_cars_by_page(1), timeout=60)
     except Exception as exc:
         details["list_error"] = _probe_error_message(exc)
         return _build_blocked_payload("che168", 1, checks, details)
 
-    cars = getattr(listing.data, "search_sh_sku_info_list", []) if getattr(listing, "data", None) else []
+    list_payload = listing.get("data") if isinstance(listing, dict) else None
+    cars = list_payload.get("search_sh_sku_info_list", []) if isinstance(list_payload, dict) else []
     if cars:
         checks["list"] = 1
         details["list_count"] = len(cars)
     else:
         details["list_count"] = 0
-        details["list_status"] = getattr(listing, "status", None)
-        details["list_message"] = getattr(listing, "message", None)
+        if isinstance(listing, dict):
+            details["list_status"] = listing.get("status")
+            details["list_message"] = listing.get("message")
         return _build_blocked_payload("che168", 1, checks, details)
 
-    candidate = _pick_che168_probe_candidate(cars)
+    candidate = _pick_probe_candidate(cars, ["car_id", "shop_id", "image"])
     if candidate is None:
         details["detail_reason"] = "no_probe_candidate"
         return _build_blocked_payload("che168", 1, checks, details)
 
-    details["probe_car_id"] = getattr(candidate, "car_id", None)
-    details["probe_shop_id"] = getattr(candidate, "shop_id", None)
+    probe_car_id = int(_probe_item_value(candidate, "car_id"))
+    probe_shop_id = int(_probe_item_value(candidate, "shop_id"))
+    details["probe_car_id"] = probe_car_id
+    details["probe_shop_id"] = probe_shop_id
     try:
-        car_data, is_banned = await asyncio.wait_for(
-            _parse_car_details_async(int(candidate.car_id), shop_id=int(candidate.shop_id)),
-            timeout=45,
+        detail_response = await asyncio.wait_for(
+            parse_che168_car_details(CarDetailRequest(car_id=probe_car_id, shop_id=probe_shop_id, force_update=False)),
+            timeout=120,
         )
     except Exception as exc:
         details["detail_error"] = _probe_error_message(exc)
         return _build_blocked_payload("che168", 1, checks, details)
 
-    checks["detailed"] = 1 if (car_data is not None or is_banned is not None) else 0
-    details["detail_is_banned"] = int(bool(is_banned))
-    if car_data is not None:
-        details["detail_has_images"] = int(
-            bool(car_data.image) or bool(car_data.image_gallery) or bool(car_data.image_count)
-        )
-        details["detail_has_registration"] = int(bool(car_data.first_registration_time))
-    else:
-        details["detail_has_images"] = 0
-        details["detail_has_registration"] = 0
-        details["detail_result"] = "no_data"
+    detail_data = detail_response.data or {}
+    detail_is_banned = int(bool(detail_response.is_banned))
+    detail_has_images = int(_detail_has_images(detail_data) if isinstance(detail_data, dict) else False)
+    details["detail_is_banned"] = detail_is_banned
+    details["detail_has_images"] = detail_has_images
+    details["detail_has_registration"] = int(bool(detail_data.get("first_registration_time"))) if isinstance(detail_data, dict) else 0
 
-    blocked = 1 if is_banned else 0
-    return _build_blocked_payload("che168", blocked, checks, details)
+    if detail_response.success and not detail_is_banned and detail_has_images:
+        checks["detailed"] = 1
+        return _build_blocked_payload("che168", 0, checks, details)
+
+    details["detail_error"] = detail_response.error or "detailed_probe_failed"
+    return _build_blocked_payload("che168", 1, checks, details)
 
 
 @app.get("/blocked/dongchedi")

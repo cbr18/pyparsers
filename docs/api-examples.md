@@ -201,6 +201,39 @@ curl "http://localhost:5001/cars/dongchedi/stats"
 }
 ```
 
+### 5. Probe IP Block Status
+
+```bash
+curl "http://localhost:5001/blocked/dongchedi"
+curl "http://localhost:5002/blocked/che168"
+```
+
+**Response:**
+```json
+{
+  "data": {
+    "source": "dongchedi",
+    "blocked": 0,
+    "checks": {
+      "list": 1,
+      "detailed": 1
+    },
+    "details": {
+      "list_count": 20,
+      "probe_car_id": "7398947128411625779",
+      "detail_status": 200,
+      "detail_is_banned": 0,
+      "detail_has_images": 1,
+      "detail_has_registration": 1
+    }
+  },
+  "message": "Source availability probe completed",
+  "status": 200
+}
+```
+
+`blocked=1` means the source likely blocks requests from the current IP, or the short probe could not complete successfully.
+
 ## Update Operations
 
 ### 1. Full Update

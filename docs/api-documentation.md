@@ -76,6 +76,8 @@ postgres (5432) - База данных
       "dongchedi_incremental": "/cars/dongchedi/incremental",
       "dongchedi_car": "/cars/dongchedi/car/{car_id}",
       "dongchedi_cars": "/cars/dongchedi/cars",
+      "dongchedi_blocked": "/blocked/dongchedi",
+      "che168_blocked": "/blocked/che168",
       "health": "/health",
       "docs": "/docs",
       "redoc": "/redoc"
@@ -104,6 +106,35 @@ postgres (5432) - База данных
   "status": 200
 }
 ```
+
+##### GET /blocked/dongchedi
+Короткий live-probe для проверки, не блокируется ли текущий IP источником dongchedi. Эндпоинт делает два шага: парсит `page/1`, затем пытается забрать одну `detailed` машину с картинками.
+
+**Response:**
+```json
+{
+  "data": {
+    "source": "dongchedi",
+    "blocked": 0,
+    "checks": {
+      "list": 1,
+      "detailed": 1
+    },
+    "details": {
+      "list_count": 20,
+      "probe_car_id": "7398947128411625779",
+      "detail_status": 200,
+      "detail_is_banned": 0,
+      "detail_has_images": 1,
+      "detail_has_registration": 1
+    }
+  },
+  "message": "Source availability probe completed",
+  "status": 200
+}
+```
+
+`blocked=1` означает, что источник, вероятно, блокирует текущий IP, либо короткий probe не завершился успешно.
 
 #### Dongchedi Endpoints
 
@@ -260,6 +291,11 @@ postgres (5432) - База данных
 ```
 
 #### Che168 Endpoints
+
+##### GET /blocked/che168
+Короткий live-probe для проверки, не блокируется ли текущий IP источником che168. Эндпоинт делает два шага: парсит `page/1`, затем пытается забрать одну `detailed` машину по `car_id` и `shop_id`.
+
+**Response:** Формат аналогичен `/blocked/dongchedi`, но с `source: "che168"`.
 
 ##### GET /cars/che168
 Получает первую страницу автомобилей с che168 (фильтр по году >= 2017).

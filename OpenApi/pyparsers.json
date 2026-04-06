@@ -22,6 +22,68 @@
         "responses": { "200": { "description": "Service is healthy" } }
       }
     },
+    "/blocked/dongchedi": {
+      "get": {
+        "summary": "Dongchedi blocked probe",
+        "description": "Short live probe: parses page 1 and one detailed car to detect whether the current IP is likely blocked by dongchedi.",
+        "responses": {
+          "200": {
+            "description": "Blocked probe result",
+            "content": {
+              "application/json": {
+                "example": {
+                  "data": {
+                    "source": "dongchedi",
+                    "blocked": 0,
+                    "checks": { "list": 1, "detailed": 1 },
+                    "details": {
+                      "list_count": 20,
+                      "probe_car_id": "7398947128411625779",
+                      "detail_status": 200,
+                      "detail_is_banned": 0,
+                      "detail_has_images": 1,
+                      "detail_has_registration": 1
+                    }
+                  },
+                  "message": "Source availability probe completed",
+                  "status": 200
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/blocked/che168": {
+      "get": {
+        "summary": "Che168 blocked probe",
+        "description": "Short live probe: parses page 1 and one detailed car to detect whether the current IP is likely blocked by che168.",
+        "responses": {
+          "200": {
+            "description": "Blocked probe result",
+            "content": {
+              "application/json": {
+                "example": {
+                  "data": {
+                    "source": "che168",
+                    "blocked": 1,
+                    "checks": { "list": 1, "detailed": 0 },
+                    "details": {
+                      "list_count": 20,
+                      "probe_car_id": "86926831",
+                      "probe_shop_id": "530619",
+                      "detail_error": "upstream timeout"
+                    }
+                  },
+                  "message": "Source availability probe completed",
+                  "status": 200
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/cars/dongchedi": {
       "get": {
         "summary": "Dongchedi first page",

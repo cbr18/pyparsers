@@ -17,6 +17,8 @@ Useful URLs:
 - Che168 parser: http://localhost:5002
 - Dongchedi docs: http://localhost:5001/docs
 - Che168 docs: http://localhost:5002/docs
+- Dongchedi blocked probe: http://localhost:5001/blocked/dongchedi
+- Che168 blocked probe: http://localhost:5002/blocked/che168
 
 ## Documentation
 

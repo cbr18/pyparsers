@@ -14,6 +14,10 @@
           "request": { "method": "GET", "url": { "raw": "{{dongchediBaseUrl}}/health", "host": ["{{dongchediBaseUrl}}"], "path": ["health"] } }
         },
         {
+          "name": "GET /blocked/dongchedi",
+          "request": { "method": "GET", "url": { "raw": "{{dongchediBaseUrl}}/blocked/dongchedi", "host": ["{{dongchediBaseUrl}}"], "path": ["blocked", "dongchedi"] } }
+        },
+        {
           "name": "GET /cars/dongchedi/page/1",
           "request": { "method": "GET", "url": { "raw": "{{dongchediBaseUrl}}/cars/dongchedi/page/1", "host": ["{{dongchediBaseUrl}}"], "path": ["cars", "dongchedi", "page", "1"] } }
         },
@@ -59,6 +63,10 @@
         {
           "name": "GET /health",
           "request": { "method": "GET", "url": { "raw": "{{che168BaseUrl}}/health", "host": ["{{che168BaseUrl}}"], "path": ["health"] } }
+        },
+        {
+          "name": "GET /blocked/che168",
+          "request": { "method": "GET", "url": { "raw": "{{che168BaseUrl}}/blocked/che168", "host": ["{{che168BaseUrl}}"], "path": ["blocked", "che168"] } }
         },
         {
           "name": "GET /cars/che168/page/1",

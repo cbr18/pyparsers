@@ -51,7 +51,46 @@ def _assert_has_images(detail_data: dict, *, fallback_image: str | None = None):
         assert image_count >= 0
 
 
+def _get_block_status(base_url: str, source: str, *, allow_transport_errors: bool = False) -> dict:
+    try:
+        payload = _request_json(f"{base_url}/blocked/{source}", timeout=180)
+    except (TimeoutError, socket.timeout, urllib.error.URLError, ConnectionResetError, ConnectionError) as exc:
+        if not allow_transport_errors:
+            raise
+        return {
+            "source": source,
+            "blocked": 1,
+            "checks": {"list": 0, "detailed": 0},
+            "details": {"transport_error": str(exc) or exc.__class__.__name__},
+        }
+
+    assert payload["status"] == 200
+    assert payload["message"] == "Source availability probe completed"
+    assert payload["data"]["source"] == source
+    assert payload["data"]["blocked"] in (0, 1)
+    assert isinstance(payload["data"]["checks"], dict)
+    assert "list" in payload["data"]["checks"]
+    assert "detailed" in payload["data"]["checks"]
+    assert isinstance(payload["data"]["details"], dict)
+    return payload["data"]
+
+
+def test_blocked_endpoints_return_schema():
+    dongchedi = _get_block_status(DONGCHEDI_BASE_URL, "dongchedi")
+    che168 = _get_block_status(CHE168_BASE_URL, "che168", allow_transport_errors=True)
+
+    assert dongchedi["checks"]["list"] in (0, 1)
+    assert dongchedi["checks"]["detailed"] in (0, 1)
+    assert che168["checks"]["list"] in (0, 1)
+    assert che168["checks"]["detailed"] in (0, 1)
+
+
 def test_dongchedi_service_list_and_detailed():
+    block_status = _get_block_status(DONGCHEDI_BASE_URL, "dongchedi")
+    if block_status["blocked"] == 1:
+        print(f"dongchedi live parsing skipped: blocked probe returned {block_status}")
+        return
+
     listing = _request_json(f"{DONGCHEDI_BASE_URL}/cars/dongchedi/page/1", timeout=120)
     cars = listing["data"]["search_sh_sku_info_list"]
 
@@ -75,6 +114,11 @@ def test_dongchedi_service_list_and_detailed():
 
 
 def test_che168_service_list_and_detailed():
+    block_status = _get_block_status(CHE168_BASE_URL, "che168", allow_transport_errors=True)
+    if block_status["blocked"] == 1:
+        print(f"che168 live parsing skipped: blocked probe returned {block_status}")
+        return
+
     try:
         listing = _request_json(f"{CHE168_BASE_URL}/cars/che168/page/1", timeout=60)
     except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:

@@ -7,8 +7,8 @@ import async_api_server
 
 COMMON_PATHS = {"/", "/health", "/docs", "/redoc", "/openapi.json"}
 SOURCE_PREFIXES = {
-    "dongchedi": ("/cars/dongchedi", "/update/dongchedi"),
-    "che168": ("/cars/che168", "/che168/detailed"),
+    "dongchedi": ("/cars/dongchedi", "/update/dongchedi", "/blocked/dongchedi"),
+    "che168": ("/cars/che168", "/che168/detailed", "/blocked/che168"),
 }
 
 

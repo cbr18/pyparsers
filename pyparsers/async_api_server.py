@@ -452,10 +452,6 @@ def _pick_probe_candidate(items: List[Any], required_fields: List[str]) -> Optio
     return None
 
 
-def _detail_has_images(detail_data: Dict[str, Any]) -> bool:
-    return bool(detail_data.get("image") or detail_data.get("image_gallery") or detail_data.get("image_count"))
-
-
 async def _probe_dongchedi_blocked() -> dict:
     checks = {"list": 0, "detailed": 0}
     details: Dict[str, Any] = {}
@@ -498,12 +494,13 @@ async def _probe_dongchedi_blocked() -> dict:
         return _build_blocked_payload("dongchedi", 1, checks, details)
 
     detail_is_banned = int(bool(detail_data.get("is_banned")))
-    detail_has_images = int(_detail_has_images(detail_data))
     details["detail_is_banned"] = detail_is_banned
-    details["detail_has_images"] = detail_has_images
+    details["detail_has_images"] = int(
+        bool(detail_data.get("image")) or bool(detail_data.get("image_gallery")) or bool(detail_data.get("image_count"))
+    )
     details["detail_has_registration"] = int(bool(detail_data.get("first_registration_time")))
 
-    if detail_response.get("status") == 200 and not detail_is_banned and detail_has_images:
+    if detail_response.get("status") == 200:
         checks["detailed"] = 1
         return _build_blocked_payload("dongchedi", 0, checks, details)
 
@@ -553,12 +550,13 @@ async def _probe_che168_blocked() -> dict:
 
     detail_data = detail_response.data or {}
     detail_is_banned = int(bool(detail_response.is_banned))
-    detail_has_images = int(_detail_has_images(detail_data) if isinstance(detail_data, dict) else False)
     details["detail_is_banned"] = detail_is_banned
-    details["detail_has_images"] = detail_has_images
+    details["detail_has_images"] = int(
+        bool(detail_data.get("image")) or bool(detail_data.get("image_gallery")) or bool(detail_data.get("image_count"))
+    ) if isinstance(detail_data, dict) else 0
     details["detail_has_registration"] = int(bool(detail_data.get("first_registration_time"))) if isinstance(detail_data, dict) else 0
 
-    if detail_response.success and not detail_is_banned and detail_has_images:
+    if detail_response.success and isinstance(detail_data, dict) and detail_data:
         checks["detailed"] = 1
         return _build_blocked_payload("che168", 0, checks, details)
 

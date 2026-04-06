@@ -232,7 +232,7 @@ curl "http://localhost:5002/blocked/che168"
 }
 ```
 
-`blocked=1` means the full short probe is not healthy: page 1 parsing and one detailed parse did not both complete successfully from the current IP.
+`blocked=1` means the service could not complete the same list+detailed parsing flow that the public endpoints use.
 
 ## Update Operations
 

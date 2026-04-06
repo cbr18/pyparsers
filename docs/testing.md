@@ -27,8 +27,8 @@ python tests/integration/test_source_services.py
 Expected behavior:
 
 - `GET /blocked/{source}` runs a short live probe: page 1 list + one detailed car
-- `blocked=0` means both parts of the probe worked: page 1 list and one detailed parse
-- `blocked=1` means the source likely blocks or degrades requests from the current IP, or one of the probe stages could not complete
+- `blocked=0` means the same list and detailed code paths used by the public endpoints completed successfully
+- `blocked=1` means one of those two public parsing stages did not complete successfully
 - dongchedi should pass on live data
 - che168 may be skipped when the external site times out or triggers anti-bot protection
 - a non-zero exit code indicates a local regression

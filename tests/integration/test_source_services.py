@@ -20,6 +20,10 @@ def _request_json(url: str, *, method: str = "GET", payload: dict | None = None,
         return json.load(response)
 
 
+def _is_whitelist_forbidden(exc: Exception) -> bool:
+    return isinstance(exc, urllib.error.HTTPError) and exc.code == 403
+
+
 def _pick_candidates(items: list[dict], *, require_shop_id: bool = False) -> list[dict]:
     candidates = []
     for item in items:
@@ -91,7 +95,13 @@ def test_dongchedi_service_list_and_detailed():
         print(f"dongchedi live parsing skipped: blocked probe returned {block_status}")
         return
 
-    listing = _request_json(f"{DONGCHEDI_BASE_URL}/cars/dongchedi/page/1", timeout=120)
+    try:
+        listing = _request_json(f"{DONGCHEDI_BASE_URL}/cars/dongchedi/page/1", timeout=120)
+    except Exception as exc:
+        if _is_whitelist_forbidden(exc):
+            print(f"dongchedi live parsing skipped: list endpoint is whitelist-protected ({exc})")
+            return
+        raise
     cars = listing["data"]["search_sh_sku_info_list"]
 
     assert listing["data"]["current_page"] == 1
@@ -121,7 +131,10 @@ def test_che168_service_list_and_detailed():
 
     try:
         listing = _request_json(f"{CHE168_BASE_URL}/cars/che168/page/1", timeout=60)
-    except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
+    except (TimeoutError, socket.timeout, urllib.error.URLError, urllib.error.HTTPError) as exc:
+        if _is_whitelist_forbidden(exc):
+            print(f"che168 live parsing skipped: list endpoint is whitelist-protected ({exc})")
+            return
         print(f"che168 live parsing skipped: list request failed with {exc}")
         return
     cars = listing["data"]["search_sh_sku_info_list"]

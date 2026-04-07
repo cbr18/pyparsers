@@ -1,4 +1,4 @@
-FROM python:3.13-slim
+FROM python:3.13-slim AS runtime-base
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
@@ -11,10 +11,6 @@ ENV PIP_NO_CACHE_DIR=1 \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     PATH="/app/.venv/bin:${PATH}"
 
-WORKDIR /app
-
-# Install Chromium browser and chromedriver with needed system deps.
-# Create an unprivileged runtime user and keep package metadata out of the image.
 RUN set -eux; \
     . /etc/os-release; \
     if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
@@ -55,6 +51,10 @@ RUN set -eux; \
     chown -R app:app /app /home/app /tmp/uv-cache; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+FROM runtime-base AS app
 
 COPY --chown=app:app pyproject.toml uv.lock ./
 

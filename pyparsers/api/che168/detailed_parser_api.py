@@ -592,17 +592,6 @@ class Che168DetailedParserAPI:
         is_banned: bool = False
         api_blocked = _is_api_banned_now()
         
-        # СНАЧАЛА получаем галерею через desktop selenium (основной метод, работает стабильно)
-        # Если передан shop_id, используем dealer URL для получения полной галереи
-        desktop_images: Dict[str, Any] = {}
-        try:
-            # Если API уже заблокирован, сразу берём HTML (page_source) чтобы не гонять второй раз
-            desktop_images = self._fetch_images_desktop(car_id, shop_id=shop_id, return_html=True)
-            if desktop_images and desktop_images.get('image_gallery'):
-                logger.info(f"[API] Desktop Selenium: получено {desktop_images.get('image_count', 0)} изображений для car_id={car_id}")
-        except Exception as e:
-            logger.warning(f"[API] Desktop Selenium ошибка для car_id={car_id}: {e}")
-        
         try:
             # Если API в бане — пропускаем запросы и сразу пойдём в HTML
             if api_blocked:
@@ -613,24 +602,10 @@ class Che168DetailedParserAPI:
             else:
                 # Получаем данные из обоих API
                 params_data = self._fetch_params_api(car_id)
-                # Передаем флаг has_gallery, чтобы не запускать лишние fallback, если галерея уже получена
-                has_gallery = bool(desktop_images and desktop_images.get('image_gallery'))
-                carinfo_data = self._fetch_carinfo_api(car_id, has_gallery=has_gallery)
+                carinfo_data = self._fetch_carinfo_api(car_id, has_gallery=False)
             
             # Объединяем данные
             extracted = {'car_id': car_id}
-            
-            # Сначала добавляем галерею и пробег из desktop (если есть)
-            if desktop_images:
-                if desktop_images.get('image_gallery'):
-                    extracted['image_gallery'] = desktop_images['image_gallery']
-                    extracted['image_count'] = desktop_images.get('image_count', len(desktop_images['image_gallery'].split()))
-                if desktop_images.get('image'):
-                    extracted['image'] = desktop_images['image']
-                # Добавляем пробег из desktop HTML, если есть
-                if desktop_images.get('mileage'):
-                    extracted['mileage'] = desktop_images['mileage']
-                    logger.info(f"[API] Пробег из desktop HTML: {extracted['mileage']} для car_id={car_id}")
             
             # Добавляем данные из getparamtypeitems (технические характеристики)
             if params_data:
@@ -654,6 +629,28 @@ class Che168DetailedParserAPI:
                 if carinfo_data.get('is_banned'):
                     is_banned = True
                 logger.info(f"[API] Получено {len(carinfo_data)} полей из getcarinfo")
+
+            desktop_images: Dict[str, Any] = {}
+            need_desktop_fetch = api_blocked or not extracted.get('image_gallery')
+            if need_desktop_fetch:
+                try:
+                    desktop_images = self._fetch_images_desktop(car_id, shop_id=shop_id, return_html=True)
+                    if desktop_images and desktop_images.get('image_gallery'):
+                        logger.info(
+                            f"[API] Desktop Selenium: получено {desktop_images.get('image_count', 0)} изображений для car_id={car_id}"
+                        )
+                except Exception as e:
+                    logger.warning(f"[API] Desktop Selenium ошибка для car_id={car_id}: {e}")
+
+            if desktop_images:
+                if desktop_images.get('image_gallery') and not extracted.get('image_gallery'):
+                    extracted['image_gallery'] = desktop_images['image_gallery']
+                    extracted['image_count'] = desktop_images.get('image_count', len(desktop_images['image_gallery'].split()))
+                if desktop_images.get('image') and not extracted.get('image'):
+                    extracted['image'] = desktop_images['image']
+                if desktop_images.get('mileage') and not extracted.get('mileage'):
+                    extracted['mileage'] = desktop_images['mileage']
+                    logger.info(f"[API] Пробег из desktop HTML: {extracted['mileage']} для car_id={car_id}")
 
             # Определяем, заблокирован ли источник
             # Если API был заблокирован (403/514) и не удалось получить критичные поля через fallback, устанавливаем is_banned

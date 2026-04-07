@@ -121,11 +121,13 @@ def test_dongchedi_service_list_and_detailed():
 
     detailed_ok = 0
     for item in _pick_candidates(cars):
+        detail_identifier = item.get("sku_id") or item["car_id"]
         detail = _request_json(
-            f"{DONGCHEDI_BASE_URL}/cars/car/{item['car_id']}",
+            f"{DONGCHEDI_BASE_URL}/cars/car/{detail_identifier}",
             timeout=120,
         )
         assert detail["status"] == 200
+        assert detail["data"]["sku_id"] == str(detail_identifier)
         assert detail["data"]["car_id"] == item["car_id"]
         _assert_has_images(detail["data"], fallback_image=item.get("image"))
         detailed_ok += 1

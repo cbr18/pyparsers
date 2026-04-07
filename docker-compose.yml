@@ -1,8 +1,11 @@
 services:
   pyparsers-dongchedi:
+    image: pyparsers-app:latest
+    pull_policy: never
     build:
       context: ./pyparsers
       dockerfile: Dockerfile
+      target: app
     container_name: carcatch-pyparsers-dongchedi
     env_file:
       - ./.env
@@ -24,9 +27,10 @@ services:
     init: true
 
   pyparsers-che168:
-    build:
-      context: ./pyparsers
-      dockerfile: Dockerfile
+    image: pyparsers-app:latest
+    pull_policy: never
+    depends_on:
+      - pyparsers-dongchedi
     container_name: carcatch-pyparsers-che168
     env_file:
       - ./.env

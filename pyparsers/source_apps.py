@@ -141,7 +141,7 @@ def _build_dongchedi_app() -> FastAPI:
         "cars_page": "/cars/page/{page}",
         "cars_all": "/cars/all",
         "cars_incremental": "/cars/incremental",
-        "cars_detail": "/cars/car/{car_id}",
+        "cars_detail": "/cars/car/{sku_id}",
         "cars_batch_detail": "/cars/cars",
         "cars_stats": "/cars/stats",
         "cars_enhance": "/cars/enhance/{sku_id}",
@@ -161,7 +161,7 @@ def _build_dongchedi_app() -> FastAPI:
     app.add_api_route("/cars/page/{page}", async_api_server.get_dongchedi_cars_by_page, methods=["GET"])
     app.add_api_route("/cars/all", async_api_server.get_dongchedi_all_cars, methods=["GET"])
     app.add_api_route("/cars/incremental", async_api_server.get_dongchedi_incremental_cars, methods=["POST"])
-    app.add_api_route("/cars/car/{car_id}", async_api_server.get_dongchedi_car_detail, methods=["GET"])
+    app.add_api_route("/cars/car/{sku_id}", async_api_server.get_dongchedi_car_detail, methods=["GET"])
     app.add_api_route("/cars/cars", async_api_server.get_dongchedi_multiple_cars, methods=["POST"])
     app.add_api_route("/cars/stats", async_api_server.get_dongchedi_stats, methods=["GET"])
     app.add_api_route("/cars/enhance/{sku_id}", async_api_server.enhance_dongchedi_car, methods=["GET"])

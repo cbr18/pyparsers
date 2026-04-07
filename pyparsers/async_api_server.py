@@ -421,7 +421,13 @@ def _summarize_dongchedi_detail(detail_response: Any, details: Dict[str, Any]) -
     )
     details["detail_has_registration"] = int(bool(detail_data.get("first_registration_time")))
 
-    if detail_response.get("status") == 200:
+    has_meaningful_detail = bool(detail_data.get("title")) and (
+        bool(detail_data.get("image"))
+        or bool(detail_data.get("image_gallery"))
+        or bool(detail_data.get("image_count"))
+        or bool(detail_data.get("first_registration_time"))
+    )
+    if detail_response.get("status") == 200 and not bool(detail_data.get("is_banned")) and has_meaningful_detail:
         return True
 
     details["detail_error"] = detail_data.get("error") or "detailed_probe_failed"
@@ -446,9 +452,11 @@ def _summarize_che168_detail(detail_response: Any, details: Dict[str, Any]) -> b
 def _build_dongchedi_probe() -> SourceProbe:
     return SourceProbe(
         source="dongchedi",
-        candidate_fields=("car_id", "image"),
+        candidate_fields=("sku_id", "car_id", "image"),
         list_fetch=lambda: get_dongchedi_cars_by_page(1),
-        detail_fetch=lambda candidate: get_dongchedi_car_detail(str(probe_item_value(candidate, "car_id"))),
+        detail_fetch=lambda candidate: get_dongchedi_car_detail(
+            str(probe_item_value(candidate, "sku_id") or probe_item_value(candidate, "car_id"))
+        ),
         summarize_detail=_summarize_dongchedi_detail,
         list_timeout=60,
         detail_timeout=90,
@@ -788,14 +796,14 @@ async def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
     gc.collect()
     return response_payload
 
-async def get_dongchedi_car_detail(car_id: str):
+async def get_dongchedi_car_detail(sku_id: str):
     """
-    Получает детальную информацию о конкретной машине с dongchedi по ID.
+    Получает детальную информацию о конкретной машине с dongchedi по SKU ID.
 
     Использует асинхронный метод async_fetch_car_detail для получения данных.
     """
     # Получаем детальную информацию о машине
-    car_obj, meta = await dongchedi_parser.async_fetch_car_detail(car_id)
+    car_obj, meta = await dongchedi_parser.async_fetch_car_detail(sku_id)
 
     if car_obj is not None:
         return {
@@ -805,7 +813,7 @@ async def get_dongchedi_car_detail(car_id: str):
         }
     else:
         return {
-            "data": {"car_id": car_id, "is_available": False, "source": "dongchedi", "error": meta.get("error")},
+            "data": {"sku_id": sku_id, "is_available": False, "source": "dongchedi", "error": meta.get("error")},
             "message": f"Ошибка при парсинге: {meta.get('error')}",
             "status": meta.get("status", 500)
         }

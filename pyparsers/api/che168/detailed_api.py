@@ -99,7 +99,7 @@ def _convert_field_with_circle(value) -> Optional[bool]:
     # Если символов нет, возвращаем None
     return None
 
-router = APIRouter(prefix="/che168/detailed", tags=["che168-detailed"])
+router = APIRouter(prefix="/detailed", tags=["che168-detailed"])
 
 
 def _get_int_env(name: str, default: int, minimum: int = 1) -> int:
@@ -457,7 +457,6 @@ async def parse_cars_details_batch(request: BatchDetailRequest):
 async def health_check():
     """Проверка здоровья сервиса"""
     return {"status": "healthy", "service": "che168-detailed-parser"}
-
 
 
 

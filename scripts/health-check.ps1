@@ -9,13 +9,14 @@ function Test-HttpEndpoint {
     param(
         [string]$Name,
         [string]$Url,
-        [int]$ExpectedCode = 200
+        [int]$ExpectedCode = 200,
+        [int]$TimeoutSec = 10
     )
 
     Write-Host "Checking $Name... " -NoNewline
 
     try {
-        $response = Invoke-WebRequest -Uri $Url -TimeoutSec 10 -UseBasicParsing -ErrorAction Stop
+        $response = Invoke-WebRequest -Uri $Url -TimeoutSec $TimeoutSec -UseBasicParsing -ErrorAction Stop
         if ($response.StatusCode -eq $ExpectedCode) {
             Write-Host "✅ Healthy" -ForegroundColor Green -NoNewline
             Write-Host " (HTTP $($response.StatusCode))"
@@ -63,12 +64,14 @@ Write-Host "🌐 HTTP Endpoints:" -ForegroundColor Yellow
 Write-Host "------------------"
 Test-HttpEndpoint "PyParsers Dongchedi API" "http://localhost:5001/health"
 Test-HttpEndpoint "PyParsers Che168 API" "http://localhost:5002/health"
+Test-HttpEndpoint "Dongchedi Blocked Probe" "http://localhost:5001/blocked" 200 120
+Test-HttpEndpoint "Che168 Blocked Probe" "http://localhost:5002/blocked" 200 180
 
 Write-Host ""
 Write-Host "📊 Parser Endpoints:" -ForegroundColor Yellow
 Write-Host "-------------"
-Test-HttpEndpoint "Dongchedi List" "http://localhost:5001/cars/dongchedi/page/1"
-Test-HttpEndpoint "Che168 Docs" "http://localhost:5002/docs"
+Test-HttpEndpoint "Dongchedi List" "http://localhost:5001/cars/page/1"
+Test-HttpEndpoint "Che168 List" "http://localhost:5002/cars/page/1" 200 60
 
 Write-Host ""
 Write-Host "📈 Service Statistics:" -ForegroundColor Yellow

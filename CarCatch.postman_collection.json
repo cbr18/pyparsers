@@ -1,124 +1,108 @@
 {
   "info": {
-    "_postman_id": "ca4f567e-7d12-47a8-b3a8-c5eb24c4e2c4",
-    "name": "Car-Catch Parser Services (direct localhost)",
-    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Current local parser setup with split services: dongchedi on :5001 and che168 on :5002."
+    "_postman_id": "e74fdb0a-3cb9-4d60-8c42-9c565443e7c1",
+    "name": "CarCatch Direct Parsers",
+    "description": "Current local parser setup with split direct services: dongchedi on :5001 and che168 on :5002.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
     {
-      "name": "Dongchedi Direct (:5001)",
+      "name": "Dongchedi",
       "item": [
         {
-          "name": "GET /health",
-          "request": { "method": "GET", "url": { "raw": "{{dongchediBaseUrl}}/health", "host": ["{{dongchediBaseUrl}}"], "path": ["health"] } }
+          "name": "GET /blocked",
+          "request": { "method": "GET", "url": { "raw": "{{dongchediBaseUrl}}/blocked", "host": ["{{dongchediBaseUrl}}"], "path": ["blocked"] } }
         },
         {
-          "name": "GET /blocked/dongchedi",
-          "request": { "method": "GET", "url": { "raw": "{{dongchediBaseUrl}}/blocked/dongchedi", "host": ["{{dongchediBaseUrl}}"], "path": ["blocked", "dongchedi"] } }
+          "name": "GET /cars/page/1",
+          "request": { "method": "GET", "url": { "raw": "{{dongchediBaseUrl}}/cars/page/1", "host": ["{{dongchediBaseUrl}}"], "path": ["cars", "page", "1"] } }
         },
         {
-          "name": "GET /cars/dongchedi/page/1",
-          "request": { "method": "GET", "url": { "raw": "{{dongchediBaseUrl}}/cars/dongchedi/page/1", "host": ["{{dongchediBaseUrl}}"], "path": ["cars", "dongchedi", "page", "1"] } }
+          "name": "GET /cars/all",
+          "request": { "method": "GET", "url": { "raw": "{{dongchediBaseUrl}}/cars/all", "host": ["{{dongchediBaseUrl}}"], "path": ["cars", "all"] } }
         },
         {
-          "name": "GET /cars/dongchedi/all",
-          "request": { "method": "GET", "url": { "raw": "{{dongchediBaseUrl}}/cars/dongchedi/all", "host": ["{{dongchediBaseUrl}}"], "path": ["cars", "dongchedi", "all"] } }
-        },
-        {
-          "name": "POST /cars/dongchedi/incremental",
+          "name": "POST /cars/incremental",
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"existing_cars\": [\n    { \"car_id\": 123 },\n    { \"sku_id\": \"abc\" }\n  ]\n}" },
-            "url": { "raw": "{{dongchediBaseUrl}}/cars/dongchedi/incremental", "host": ["{{dongchediBaseUrl}}"], "path": ["cars", "dongchedi", "incremental"] }
+            "body": { "mode": "raw", "raw": "[{\"car_id\":39813}]" },
+            "url": { "raw": "{{dongchediBaseUrl}}/cars/incremental", "host": ["{{dongchediBaseUrl}}"], "path": ["cars", "incremental"] }
           }
         },
         {
-          "name": "GET /cars/dongchedi/car/{car_id}",
-          "request": { "method": "GET", "url": { "raw": "{{dongchediBaseUrl}}/cars/dongchedi/car/123456", "host": ["{{dongchediBaseUrl}}"], "path": ["cars", "dongchedi", "car", "123456"] } }
+          "name": "GET /cars/car/{car_id}",
+          "request": { "method": "GET", "url": { "raw": "{{dongchediBaseUrl}}/cars/car/39813", "host": ["{{dongchediBaseUrl}}"], "path": ["cars", "car", "39813"] } }
         },
         {
-          "name": "POST /cars/dongchedi/cars",
+          "name": "POST /cars/cars",
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"car_ids\": [\"123\", \"456\"]\n}" },
-            "url": { "raw": "{{dongchediBaseUrl}}/cars/dongchedi/cars", "host": ["{{dongchediBaseUrl}}"], "path": ["cars", "dongchedi", "cars"] }
+            "body": { "mode": "raw", "raw": "{\"car_ids\":[\"39813\",\"39814\"]}" },
+            "url": { "raw": "{{dongchediBaseUrl}}/cars/cars", "host": ["{{dongchediBaseUrl}}"], "path": ["cars", "cars"] }
           }
         },
         {
-          "name": "GET /cars/dongchedi/stats",
-          "request": { "method": "GET", "url": { "raw": "{{dongchediBaseUrl}}/cars/dongchedi/stats", "host": ["{{dongchediBaseUrl}}"], "path": ["cars", "dongchedi", "stats"] } }
-        },
-        {
-          "name": "GET /update/dongchedi/full",
-          "request": { "method": "GET", "url": { "raw": "{{dongchediBaseUrl}}/update/dongchedi/full", "host": ["{{dongchediBaseUrl}}"], "path": ["update", "dongchedi", "full"] } }
+          "name": "GET /cars/stats",
+          "request": { "method": "GET", "url": { "raw": "{{dongchediBaseUrl}}/cars/stats", "host": ["{{dongchediBaseUrl}}"], "path": ["cars", "stats"] } }
         }
       ]
     },
     {
-      "name": "Che168 Direct (:5002)",
+      "name": "Che168",
       "item": [
         {
-          "name": "GET /health",
-          "request": { "method": "GET", "url": { "raw": "{{che168BaseUrl}}/health", "host": ["{{che168BaseUrl}}"], "path": ["health"] } }
+          "name": "GET /blocked",
+          "request": { "method": "GET", "url": { "raw": "{{che168BaseUrl}}/blocked", "host": ["{{che168BaseUrl}}"], "path": ["blocked"] } }
         },
         {
-          "name": "GET /blocked/che168",
-          "request": { "method": "GET", "url": { "raw": "{{che168BaseUrl}}/blocked/che168", "host": ["{{che168BaseUrl}}"], "path": ["blocked", "che168"] } }
+          "name": "GET /cars/page/1",
+          "request": { "method": "GET", "url": { "raw": "{{che168BaseUrl}}/cars/page/1", "host": ["{{che168BaseUrl}}"], "path": ["cars", "page", "1"] } }
         },
         {
-          "name": "GET /cars/che168/page/1",
-          "request": { "method": "GET", "url": { "raw": "{{che168BaseUrl}}/cars/che168/page/1", "host": ["{{che168BaseUrl}}"], "path": ["cars", "che168", "page", "1"] } }
+          "name": "GET /cars/all",
+          "request": { "method": "GET", "url": { "raw": "{{che168BaseUrl}}/cars/all", "host": ["{{che168BaseUrl}}"], "path": ["cars", "all"] } }
         },
         {
-          "name": "GET /cars/che168/all",
-          "request": { "method": "GET", "url": { "raw": "{{che168BaseUrl}}/cars/che168/all", "host": ["{{che168BaseUrl}}"], "path": ["cars", "che168", "all"] } }
-        },
-        {
-          "name": "POST /cars/che168/incremental",
+          "name": "POST /cars/incremental",
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"existing_cars\": [\n    { \"car_id\": \"c1\" }\n  ]\n}" },
-            "url": { "raw": "{{che168BaseUrl}}/cars/che168/incremental", "host": ["{{che168BaseUrl}}"], "path": ["cars", "che168", "incremental"] }
+            "body": { "mode": "raw", "raw": "[{\"car_id\":57885738}]" },
+            "url": { "raw": "{{che168BaseUrl}}/cars/incremental", "host": ["{{che168BaseUrl}}"], "path": ["cars", "incremental"] }
           }
         },
         {
-          "name": "POST /cars/che168/car",
+          "name": "POST /cars/car",
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"car_url\": \"https://www.che168.com/dealer/12345/987654.html\"\n}" },
-            "url": { "raw": "{{che168BaseUrl}}/cars/che168/car", "host": ["{{che168BaseUrl}}"], "path": ["cars", "che168", "car"] }
+            "body": { "mode": "raw", "raw": "{\"car_url\":\"https://m.che168.com/cardetail/index?infoid=57885738\"}" },
+            "url": { "raw": "{{che168BaseUrl}}/cars/car", "host": ["{{che168BaseUrl}}"], "path": ["cars", "car"] }
           }
         },
         {
-          "name": "POST /che168/detailed/parse",
+          "name": "POST /detailed/parse",
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"car_id\": \"86926831\",\n  \"shop_id\": \"530619\",\n  \"force_update\": false\n}" },
-            "url": { "raw": "{{che168BaseUrl}}/che168/detailed/parse", "host": ["{{che168BaseUrl}}"], "path": ["che168", "detailed", "parse"] }
+            "body": { "mode": "raw", "raw": "{\"car_id\":57885738,\"shop_id\":629891,\"force_update\":false}" },
+            "url": { "raw": "{{che168BaseUrl}}/detailed/parse", "host": ["{{che168BaseUrl}}"], "path": ["detailed", "parse"] }
           }
         },
         {
-          "name": "POST /che168/detailed/parse-batch",
+          "name": "POST /detailed/parse-batch",
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"cars\": [\n    { \"car_id\": \"86926831\", \"shop_id\": \"530619\", \"force_update\": false },\n    { \"car_id\": \"86928706\", \"shop_id\": \"530619\", \"force_update\": false }\n  ]\n}" },
-            "url": { "raw": "{{che168BaseUrl}}/che168/detailed/parse-batch", "host": ["{{che168BaseUrl}}"], "path": ["che168", "detailed", "parse-batch"] }
+            "body": { "mode": "raw", "raw": "{\"requests\":[{\"car_id\":57885738,\"shop_id\":629891,\"force_update\":false}]}" },
+            "url": { "raw": "{{che168BaseUrl}}/detailed/parse-batch", "host": ["{{che168BaseUrl}}"], "path": ["detailed", "parse-batch"] }
           }
         },
         {
-          "name": "GET /che168/detailed/health",
-          "request": { "method": "GET", "url": { "raw": "{{che168BaseUrl}}/che168/detailed/health", "host": ["{{che168BaseUrl}}"], "path": ["che168", "detailed", "health"] } }
-        },
-        {
-          "name": "GET /update/che168/full",
-          "request": { "method": "GET", "url": { "raw": "{{che168BaseUrl}}/update/che168/full", "host": ["{{che168BaseUrl}}"], "path": ["update", "che168", "full"] } }
+          "name": "GET /detailed/health",
+          "request": { "method": "GET", "url": { "raw": "{{che168BaseUrl}}/detailed/health", "host": ["{{che168BaseUrl}}"], "path": ["detailed", "health"] } }
         }
       ]
     }

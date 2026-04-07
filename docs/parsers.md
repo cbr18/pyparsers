@@ -41,7 +41,7 @@ The Go `EnhancementWorker` inside datahub continuously enriches cars:
 - Expanded selector logic (no longer assumes label/value share CSS classes) so >110 labels map correctly.
 - Added post-processing for combined fields such as `长*宽*高` → `length/width/height`, mileage normalization (`万公里` → km), year inference from registration date.
 - `_convert_to_domain_car` now feeds Go's `domain.Car` 1:1 with dongchedi fields, ensuring `has_details` semantics match.
-- FastAPI router at `/che168/detailed/*` exposes `parse`, `parse-batch`, and `health` endpoints, and is served by the dedicated `pyparsers-che168` service.
+- FastAPI router at `/detailed/*` exposes `parse`, `parse-batch`, and `health` endpoints on the dedicated `pyparsers-che168` service.
 - Current smoke coverage is provided by `tests/integration/test_source_services.py`, which verifies split-service startup plus live list/detail parsing against the direct `5001/5002` endpoints.
 
 ## Parser Refactor Summary

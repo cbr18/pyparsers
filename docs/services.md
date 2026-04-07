@@ -72,16 +72,6 @@ docker build -t adminbot .
 docker run -d --env-file .env -p 8002:8000 adminbot
 ```
 
-### nginx Integration
-```nginx
-location /admin-lead {
-    proxy_pass http://adminbot_backend/lead;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-```
+### Integration Note
 
-Hook `telegramapp/src/services/api.js::sendLeadRequest` to `/admin-lead` so UI submissions alert admins immediately.
-
+UI or backend clients can call the admin bot directly on its own HTTP endpoint. No nginx-specific routing is required for the parser stack.

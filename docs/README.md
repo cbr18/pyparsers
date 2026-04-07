@@ -24,11 +24,10 @@ Useful URLs after compose finishes:
 
 ## Service Map
 
-- `nginx` – frontend router, TLS termination, image proxy
 - `postgres` & `admin-postgres` – main and admin databases
 - `datahub` – Go API, enhancement worker, task orchestration
-- `pyparsers-dongchedi` – FastAPI service for dongchedi list/detail endpoints
-- `pyparsers-che168` – FastAPI service for che168 list/detail endpoints
+- `pyparsers-dongchedi` – FastAPI service on `:5001` with direct routes like `/blocked`, `/cars/page/{page}`, `/cars/car/{car_id}`
+- `pyparsers-che168` – FastAPI service on `:5002` with direct routes like `/blocked`, `/cars/page/{page}`, `/detailed/parse`
 - `translator` & `redis` – async translation microservice with caching
 - `telegrambot`, `telegramapp`, `telegramngapp` – user‑facing entry points
 - `adminbot`, `adminservice`, `adminweb` – internal tooling

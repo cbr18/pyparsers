@@ -102,9 +102,10 @@ else:
 
 class IPWhitelistMiddleware(BaseHTTPMiddleware):
     """Middleware для проверки IP адреса клиента по whitelist"""
-    
-    # Эндпоинты, доступные без проверки IP (для healthcheck)
-    PUBLIC_PATHS = {"/health", "/", "/blocked/dongchedi", "/blocked/che168"}
+
+    def __init__(self, app, public_paths: set[str] | None = None):
+        super().__init__(app)
+        self.public_paths = public_paths or {"/health", "/"}
     
     async def dispatch(self, request: Request, call_next):
         # Если whitelist не настроен - пропускаем всех
@@ -112,7 +113,7 @@ class IPWhitelistMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         
         # Публичные эндпоинты доступны всем
-        if request.url.path in self.PUBLIC_PATHS:
+        if request.url.path in self.public_paths:
             return await call_next(request)
         
         # Получаем IP клиента (учитываем прокси)
@@ -367,7 +368,6 @@ class AsyncChe168Wrapper:
 dongchedi_parser = AsyncDongchediWrapper(dongchedi_parser_instance)
 che168_parser = AsyncChe168Wrapper(che168_parser_instance)
 
-@app.get("/")
 async def root():
     """
     Корневой эндпоинт API.
@@ -378,19 +378,11 @@ async def root():
             "version": "1.0.0",
             "description": "Асинхронный API для парсинга информации о машинах с различных источников",
             "endpoints": {
-                "dongchedi": "/cars/dongchedi",
-                "dongchedi_page": "/cars/dongchedi/page/{page}",
-                "dongchedi_all": "/cars/dongchedi/all",
-                "dongchedi_incremental": "/cars/dongchedi/incremental",
-                "dongchedi_car": "/cars/dongchedi/car/{car_id}",
-                "dongchedi_cars": "/cars/dongchedi/cars",
-                "che168": "/cars/che168",
-                "che168_page": "/cars/che168/page/{page}",
-                "che168_all": "/cars/che168/all",
-                "che168_incremental": "/cars/che168/incremental",
-                "che168_car": "/cars/che168/car",
-                "dongchedi_blocked": "/blocked/dongchedi",
-                "che168_blocked": "/blocked/che168",
+                "blocked": "/blocked",
+                "cars": "/cars",
+                "cars_page": "/cars/page/{page}",
+                "cars_all": "/cars/all",
+                "cars_incremental": "/cars/incremental",
                 "health": "/health",
                 "docs": "/docs",
                 "redoc": "/redoc"
@@ -400,8 +392,6 @@ async def root():
         "status": 200
     }
 
-@app.get("/health")
-@app.head("/health")
 async def health_check():
     """
     Проверка работоспособности API.
@@ -485,18 +475,15 @@ def _build_che168_probe() -> SourceProbe:
     )
 
 
-@app.get("/blocked/dongchedi")
 async def get_dongchedi_blocked_status():
     """Короткий probe по dongchedi: list page 1 + one detailed."""
     return await run_source_probe(_build_dongchedi_probe())
 
 
-@app.get("/blocked/che168")
 async def get_che168_blocked_status():
     """Короткий probe по che168: list page 1 + one detailed."""
     return await run_source_probe(_build_che168_probe())
 
-@app.get("/cars/dongchedi")
 async def get_dongchedi_cars():
     """
     Получает данные о машинах с dongchedi.
@@ -548,7 +535,6 @@ async def get_dongchedi_cars():
         "status": response.status
     }
 
-@app.get("/cars/dongchedi/page/{page}")
 async def get_dongchedi_cars_by_page(page: int):
     """
     Получает данные о машинах с dongchedi для конкретной страницы.
@@ -693,7 +679,6 @@ async def _collect_dongchedi_all_cars() -> Dict[str, Any]:
     return response_payload
 
 
-@app.get("/cars/dongchedi/all")
 async def get_dongchedi_all_cars():
     """
     Получает все машины со всех страниц dongchedi, затем повторно проверяет первые страницы и добавляет только новые машины до первого совпадения.
@@ -703,7 +688,6 @@ async def get_dongchedi_all_cars():
     async with lock:
         return await _collect_dongchedi_all_cars()
 
-@app.post("/cars/dongchedi/incremental")
 async def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
     """
     Получает только новые машины с dongchedi до первого совпадения с существующими.
@@ -806,7 +790,6 @@ async def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
     gc.collect()
     return response_payload
 
-@app.get("/cars/dongchedi/car/{car_id}")
 async def get_dongchedi_car_detail(car_id: str):
     """
     Получает детальную информацию о конкретной машине с dongchedi по ID.
@@ -829,7 +812,6 @@ async def get_dongchedi_car_detail(car_id: str):
             "status": meta.get("status", 500)
         }
 
-@app.post("/cars/dongchedi/cars")
 async def get_dongchedi_multiple_cars(request: MultipleCarIdsRequest):
     """
     Получает детальную информацию о нескольких машинах с dongchedi по их ID.
@@ -881,7 +863,6 @@ async def get_dongchedi_multiple_cars(request: MultipleCarIdsRequest):
         "status": 200
     }
 
-@app.get("/cars/che168")
 async def get_che168_cars():
     """
     Получает данные о машинах с che168.
@@ -919,7 +900,6 @@ async def get_che168_cars():
         "status": response.status
     }
 
-@app.get("/cars/che168/page/{page}")
 async def get_che168_cars_by_page(page: int):
     """
     Получает данные о машинах с che168 для конкретной страницы
@@ -961,7 +941,6 @@ async def get_che168_cars_by_page(page: int):
         "status": response.status
     }
 
-@app.post("/cars/che168/incremental")
 async def get_che168_incremental_cars(existing_cars: List[Dict]):
     """
     Получает только новые машины с che168 до первого совпадения с существующими.
@@ -1150,7 +1129,6 @@ async def _collect_che168_all_cars() -> Dict[str, Any]:
     return result
 
 
-@app.get("/cars/che168/all")
 async def get_che168_all_cars():
     """
     Получает все машины со всех страниц che168.
@@ -1161,7 +1139,6 @@ async def get_che168_all_cars():
     async with lock:
         return await _collect_che168_all_cars()
 
-@app.post("/cars/che168/car")
 async def get_che168_car_detail(request: CarUrlRequest):
     """
     Получает детальную информацию о конкретной машине с che168 по URL
@@ -1180,7 +1157,6 @@ async def get_che168_car_detail(request: CarUrlRequest):
             "status": meta.get("status", 500)
         }
 
-@app.get("/cars/dongchedi/stats")
 async def get_dongchedi_stats():
     """
     Получает статистику по машинам с dongchedi.
@@ -1215,7 +1191,6 @@ async def get_dongchedi_stats():
         "status": 200
     }
 
-@app.get("/update/dongchedi/full")
 async def update_dongchedi_full():
     """
     Эндпоинт для полного обновления данных dongchedi.
@@ -1251,7 +1226,6 @@ async def update_dongchedi_full():
             "message": str(e)
         }
 
-@app.get("/update/che168/full")
 async def update_che168_full():
     """
     Эндпоинт для полного обновления данных che168.
@@ -1276,7 +1250,6 @@ async def update_che168_full():
             "message": str(e)
         }
 
-@app.post("/tasks", response_model=TaskCreateResponse)
 async def create_task(request: TaskCreateRequest):
     """
     Создать новую задачу парсинга
@@ -1295,7 +1268,6 @@ async def create_task(request: TaskCreateRequest):
     
     return TaskCreateResponse(task_id=task.id)
 
-@app.get("/tasks/{task_id}")
 async def get_task_status(task_id: str):
     """
     Получить статус задачи
@@ -1312,7 +1284,6 @@ async def get_task_status(task_id: str):
         "updated_at": task.updated_at
     }
 
-@app.get("/cars/dongchedi/enhance/{sku_id}")
 async def enhance_dongchedi_car(sku_id: str, car_id: str = None):
     """
     Улучшает машину детальной информацией.
@@ -1363,7 +1334,6 @@ async def enhance_dongchedi_car(sku_id: str, car_id: str = None):
             "status": 500
         }
 
-@app.get("/cars/dongchedi/specs/{car_id}")
 async def get_dongchedi_car_specs(car_id: str):
     """
     Получает технические характеристики машины по car_id.
@@ -1390,7 +1360,6 @@ async def get_dongchedi_car_specs(car_id: str):
             "status": 500
         }
 
-@app.post("/cars/dongchedi/batch-enhance")
 async def batch_enhance_dongchedi_cars(request: dict):
     """
     Массовое улучшение машин детальной информацией.
@@ -1475,7 +1444,6 @@ async def batch_enhance_dongchedi_cars(request: dict):
             "status": 500
         }
 
-@app.on_event("shutdown")
 async def shutdown_event():
     """
     Закрыть HTTP сессию при завершении работы

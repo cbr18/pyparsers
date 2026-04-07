@@ -12,9 +12,7 @@ This guide consolidates the deployment, migrations, automation, and operational 
 
 ### Production Basics
 - Use a dedicated `.env.production` with hardened secrets.
-- nginx terminates TLS; point it at `/nginx/ssl` or mount LetsEncrypt certs.
 - `docker compose up -d --build` deploys new images.
-- To expose only the public endpoints keep everything behind nginx and the compose network.
 - Scaling example: `docker compose up -d --scale datahub=3 --scale telegramapp=2`.
 
 ### Service Access
@@ -43,8 +41,7 @@ docker compose down -v          # stop and drop volumes
 - `docker compose ps` – quick readiness check.
 - Port conflicts: use `netstat -tulpn | grep :<port>` and stop foreign services (e.g., `sudo systemctl stop apache2`).
 - Database woes: `docker compose logs postgres`, `docker compose exec postgres psql -U postgres -d carsdb`.
-- SSL renewals: run `certbot`, then reload nginx.
-- Slow responses: inspect nginx cache headers, review DB activity via `SELECT * FROM pg_stat_activity;`.
+- Slow responses: inspect parser logs and review DB activity via `SELECT * FROM pg_stat_activity;`.
 
 ## Automated Migrations
 
@@ -134,8 +131,8 @@ docker run --rm -v carcatch_pg_data:/data -v $(pwd):/backup \
 
 1. **Worker stuck?** Check `datahub` logs for enhancement errors, then `curl /enhancement/status`.
 2. **Parser timeouts?** Adjust HTTP client rate limiting / retries (see `docs/parsers.md`) or bump `max_concurrent`.
-3. **Admin bot webhook?** Ensure nginx routes `/admin-lead` to `adminbot` and tokens match `env`.
+3. **Admin bot webhook?** Ensure the client calls the correct admin bot endpoint and tokens match `env`.
 4. **Translator failures?** Confirm Redis is reachable and Yandex credentials exist in `.env`.
-5. **Image proxy issues?** Validate `/proxy-image/<encoded_url>` returns 200 and the nginx snippet from `docs/telegram-app.md` is loaded.
+5. **Image proxy issues?** Validate the image proxy endpoint returns 200 and the proxy service is reachable.
 
 Keeping these references in a single file means on-call engineers have one bookmark for every operational task.

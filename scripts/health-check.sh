@@ -19,10 +19,11 @@ check_http() {
     local name=$1
     local url=$2
     local expected_code=${3:-200}
+    local max_time=${4:-10}
 
     echo -n "Checking $name... "
 
-    if response=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "$url" 2>/dev/null); then
+    if response=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time "$max_time" "$url" 2>/dev/null); then
         if [ "$response" -eq "$expected_code" ]; then
             echo -e "${GREEN}✅ Healthy${NC} (HTTP $response)"
         else
@@ -57,12 +58,14 @@ echo "🌐 HTTP Endpoints:"
 echo "------------------"
 check_http "PyParsers Dongchedi API" "http://localhost:5001/health"
 check_http "PyParsers Che168 API" "http://localhost:5002/health"
+check_http "Dongchedi Blocked Probe" "http://localhost:5001/blocked" 200 120
+check_http "Che168 Blocked Probe" "http://localhost:5002/blocked" 200 180
 
 echo ""
 echo "📊 Parser Endpoints:"
 echo "-------------"
-check_http "Dongchedi List" "http://localhost:5001/cars/dongchedi/page/1"
-check_http "Che168 Docs" "http://localhost:5002/docs"
+check_http "Dongchedi List" "http://localhost:5001/cars/page/1"
+check_http "Che168 List" "http://localhost:5002/cars/page/1" 200 60
 
 echo ""
 echo "📈 Service Statistics:"

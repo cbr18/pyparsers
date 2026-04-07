@@ -26,7 +26,7 @@ python tests/integration/test_source_services.py
 
 Expected behavior:
 
-- `GET /blocked/{source}` runs a short live probe: page 1 list + one detailed car
+- `GET /blocked` runs a short live probe: page 1 list + one detailed car
 - `blocked=0` means the same list and detailed code paths used by the public endpoints completed successfully
 - `blocked=1` means one of those two public parsing stages did not complete successfully
 - dongchedi should pass on live data
@@ -38,11 +38,11 @@ Expected behavior:
 ```bash
 curl -s http://localhost:5001/health
 curl -s http://localhost:5002/health
-curl -s http://localhost:5001/blocked/dongchedi
-curl -s http://localhost:5002/blocked/che168
-curl -s http://localhost:5001/cars/dongchedi/page/1
-curl -s http://localhost:5002/cars/che168/page/1
-curl -s -X POST http://localhost:5002/che168/detailed/parse \
+curl -s http://localhost:5001/blocked
+curl -s http://localhost:5002/blocked
+curl -s http://localhost:5001/cars/page/1
+curl -s http://localhost:5002/cars/page/1
+curl -s -X POST http://localhost:5002/detailed/parse \
   -H "Content-Type: application/json" \
   -d '{"car_id":56481576,"force_update":true}'
 ```

@@ -6,7 +6,7 @@ This timeline highlights the parser/enhancement milestones that previously lived
 - Added resilient label matching (no reliance on `css-1rynq56`) and expanded the mapping to 110+ technical fields.
 - Normalized complex values: `长×宽×高`, `万公里` mileage, registration year inference, gallery extraction via `head_images[]`.
 - Updated `_convert_to_domain_car` so every parsed field maps 1:1 to the Go `domain.Car` struct.
-- Verified via docker-compose acceptance test: `/enhancement/status`, `http://localhost:5002/che168/detailed/parse`, and DB counters.
+- Verified via docker-compose acceptance test: `/enhancement/status`, `http://localhost:5002/detailed/parse`, and DB counters.
 
 ## 2025‑10 — Automatic enhancement worker & infrastructure cleanup
 - Replaced bespoke Che168 detail services with the same `EnhancementService`/`EnhancementWorker` stack used by dongchedi.

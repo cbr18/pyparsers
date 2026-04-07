@@ -29,9 +29,7 @@ from typing import List, Dict, Optional, Any
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from datetime import datetime, timezone
-from models import TaskCreateRequest, TaskCreateResponse, TaskType
 from source_probes import SourceProbe, probe_item_value, run_source_probe
-from task_service import task_service
 
 # Настройка логирования
 logging.basicConfig(
@@ -1250,40 +1248,6 @@ async def update_che168_full():
             "message": str(e)
         }
 
-async def create_task(request: TaskCreateRequest):
-    """
-    Создать новую задачу парсинга
-    """
-    if request.source not in ["dongchedi", "che168"]:
-        return {"error": "Invalid source. Must be 'dongchedi' or 'che168'"}
-    
-    # Тип задачи: full / incremental (по умолчанию full)
-    task_type = getattr(request, 'task_type', TaskType.FULL)
-    id_field = getattr(request, 'id_field', None)
-    existing_ids = getattr(request, 'existing_ids', None)
-    task = task_service.create_task(request.source, task_type, id_field, existing_ids)
-    
-    # Запускаем обработку задачи в фоне
-    asyncio.create_task(task_service.process_task(task.id))
-    
-    return TaskCreateResponse(task_id=task.id)
-
-async def get_task_status(task_id: str):
-    """
-    Получить статус задачи
-    """
-    if task_id not in task_service.tasks:
-        return {"error": "Task not found"}
-    
-    task = task_service.tasks[task_id]
-    return {
-        "task_id": task.id,
-        "source": task.source,
-        "status": task.status,
-        "created_at": task.created_at,
-        "updated_at": task.updated_at
-    }
-
 async def enhance_dongchedi_car(sku_id: str, car_id: str = None):
     """
     Улучшает машину детальной информацией.
@@ -1448,7 +1412,6 @@ async def shutdown_event():
     """
     Закрыть HTTP сессию при завершении работы
     """
-    await task_service.close_session()
     # Закрываем глобальную HTTP сессию
     from api.http_client import http_client
     await http_client.close()

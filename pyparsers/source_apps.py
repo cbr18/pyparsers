@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 import async_api_server
+from models import TaskCreateRequest
+from task_service import build_task_service
 
 
 def _build_root_handler(source: str, endpoints: dict[str, str]) -> Callable[[], dict]:
@@ -44,11 +46,92 @@ def _build_base_app(source: str, endpoints: dict[str, str]) -> FastAPI:
         allow_methods=async_api_server.cors_methods,
         allow_headers=async_api_server.cors_headers,
     )
+    task_service = build_task_service(source)
+    app.state.task_service = task_service
     app.middleware("http")(async_api_server.add_performance_info)
+    app.add_event_handler("startup", task_service.startup)
     app.add_event_handler("shutdown", async_api_server.shutdown_event)
+    app.add_event_handler("shutdown", task_service.shutdown)
     app.add_api_route("/", _build_root_handler(source, endpoints), methods=["GET"])
     app.add_api_route("/health", async_api_server.health_check, methods=["GET", "HEAD"])
+    app.add_api_route("/tasks", _create_task(task_service), methods=["POST"])
+    app.add_api_route("/tasks", _list_tasks(task_service), methods=["GET"])
+    app.add_api_route("/tasks/{task_id}", _get_task(task_service), methods=["GET"])
+    app.add_api_route("/tasks/{task_id}/result", _get_task_result(task_service), methods=["GET"])
+    app.add_api_route("/tasks/{task_id}/cancel", _cancel_task(task_service), methods=["POST"])
     return app
+
+
+def _create_task(task_service):
+    async def handler(request: TaskCreateRequest):
+        try:
+            task = task_service.create_task(request)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "data": task.model_dump(mode="json"),
+            "message": "Task created",
+            "status": 202,
+        }
+
+    return handler
+
+
+def _list_tasks(task_service):
+    async def handler():
+        tasks = [task.model_dump(mode="json") for task in task_service.list_tasks()]
+        return {
+            "data": {
+                "items": tasks,
+                "total": len(tasks),
+            },
+            "message": "Tasks fetched",
+            "status": 200,
+        }
+
+    return handler
+
+
+def _get_task(task_service):
+    async def handler(task_id: str):
+        task = task_service.get_task(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return {
+            "data": task.model_dump(mode="json"),
+            "message": "Task fetched",
+            "status": 200,
+        }
+
+    return handler
+
+
+def _get_task_result(task_service):
+    async def handler(task_id: str):
+        envelope = task_service.get_task_result(task_id)
+        if envelope is None:
+            raise HTTPException(status_code=404, detail="Task result not found")
+        return {
+            "data": envelope.model_dump(mode="json"),
+            "message": "Task result fetched",
+            "status": 200,
+        }
+
+    return handler
+
+
+def _cancel_task(task_service):
+    async def handler(task_id: str):
+        task = task_service.cancel_task(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return {
+            "data": task.model_dump(mode="json"),
+            "message": "Task cancellation requested",
+            "status": 200,
+        }
+
+    return handler
 
 
 def _build_dongchedi_app() -> FastAPI:
@@ -65,6 +148,10 @@ def _build_dongchedi_app() -> FastAPI:
         "cars_specs": "/cars/specs/{car_id}",
         "cars_batch_enhance": "/cars/batch-enhance",
         "update_full": "/update/full",
+        "tasks": "/tasks",
+        "task": "/tasks/{task_id}",
+        "task_result": "/tasks/{task_id}/result",
+        "task_cancel": "/tasks/{task_id}/cancel",
         "docs": "/docs",
         "redoc": "/redoc",
     }
@@ -96,6 +183,10 @@ def _build_che168_app() -> FastAPI:
         "detailed_parse_batch": "/detailed/parse-batch",
         "detailed_health": "/detailed/health",
         "update_full": "/update/full",
+        "tasks": "/tasks",
+        "task": "/tasks/{task_id}",
+        "task_result": "/tasks/{task_id}/result",
+        "task_cancel": "/tasks/{task_id}/cancel",
         "docs": "/docs",
         "redoc": "/redoc",
     }

@@ -14,96 +14,82 @@ curl http://localhost:5001/blocked
 curl http://localhost:5002/blocked
 ```
 
-## Dongchedi
-
-List page 1:
+## Dongchedi Parsing
 
 ```bash
 curl http://localhost:5001/cars/page/1
-```
-
-All cars:
-
-```bash
 curl http://localhost:5001/cars/all
-```
-
-Incremental parse:
-
-```bash
-curl -X POST http://localhost:5001/cars/incremental \
-  -H "Content-Type: application/json" \
-  -d '[{"car_id":39813}]'
-```
-
-One detailed car:
-
-```bash
 curl http://localhost:5001/cars/car/39813
-```
-
-Batch detailed fetch:
-
-```bash
 curl -X POST http://localhost:5001/cars/cars \
   -H "Content-Type: application/json" \
   -d '{"car_ids":["39813","39814"]}'
 ```
 
-Stats:
-
-```bash
-curl http://localhost:5001/cars/stats
-```
-
-## Che168
-
-List page 1:
+## Che168 Parsing
 
 ```bash
 curl http://localhost:5002/cars/page/1
-```
-
-All cars:
-
-```bash
 curl http://localhost:5002/cars/all
-```
-
-Incremental parse:
-
-```bash
-curl -X POST http://localhost:5002/cars/incremental \
-  -H "Content-Type: application/json" \
-  -d '[{"car_id":57885738}]'
-```
-
-Legacy URL-based detail endpoint for che168 service:
-
-```bash
 curl -X POST http://localhost:5002/cars/car \
   -H "Content-Type: application/json" \
   -d '{"car_url":"https://m.che168.com/cardetail/index?infoid=57885738"}'
-```
-
-Structured detailed parse:
-
-```bash
 curl -X POST http://localhost:5002/detailed/parse \
   -H "Content-Type: application/json" \
   -d '{"car_id":57885738,"shop_id":629891,"force_update":false}'
 ```
 
-Batch detailed parse:
+## Create Parser Tasks
+
+Dongchedi incremental:
 
 ```bash
-curl -X POST http://localhost:5002/detailed/parse-batch \
+curl -X POST http://localhost:5001/tasks \
   -H "Content-Type: application/json" \
-  -d '{"requests":[{"car_id":57885738,"shop_id":629891,"force_update":false}]}'
+  -d '{
+    "task_type": "incremental",
+    "parameters": {
+      "id_field": "car_id",
+      "existing_ids": ["87014"]
+    },
+    "metadata": {
+      "requested_by": "datahub"
+    }
+  }'
 ```
 
-Detailed parser health:
+Dongchedi detailed:
 
 ```bash
-curl http://localhost:5002/detailed/health
+curl -X POST http://localhost:5001/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task_type": "detailed",
+    "parameters": {
+      "car_ids": ["39813","39814"]
+    }
+  }'
+```
+
+Che168 detailed:
+
+```bash
+curl -X POST http://localhost:5002/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task_type": "detailed",
+    "parameters": {
+      "requests": [
+        {"car_id": 57885738, "shop_id": 629891, "force_update": false}
+      ]
+    }
+  }'
+```
+
+## Poll Task Status
+
+```bash
+curl http://localhost:5001/tasks
+curl http://localhost:5001/tasks/<task_id>
+curl http://localhost:5001/tasks/<task_id>/result
+curl -X POST http://localhost:5001/tasks/<task_id>/cancel
 ```

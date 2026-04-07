@@ -21,6 +21,8 @@ Useful URLs after compose finishes:
 - Che168 parser: http://localhost:5002
 - Dongchedi Swagger / ReDoc: http://localhost:5001/docs
 - Che168 Swagger / ReDoc: http://localhost:5002/docs
+- Dongchedi tasks: http://localhost:5001/tasks
+- Che168 tasks: http://localhost:5002/tasks
 
 ## Service Map
 
@@ -37,6 +39,8 @@ Useful URLs after compose finishes:
 
 - `api-documentation.md` – complete REST API reference (pyparsers, datahub, telegram services)
 - `api-examples.md` – practical cURL/Postman snippets
+- `data-structure.md` – parser task snapshots, result envelopes, and payload shape
+- `datahub-task-contract.md` – parser task lifecycle and the expected datahub interaction pattern
 - `operations.md` – deployment, migrations, task API, troubleshooting, backups
 - `database-schema.md` – tables, indexes, and field glossary
 - `parsers.md` – parser pipeline, enhancement worker, HTTP client utilities

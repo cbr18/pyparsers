@@ -87,6 +87,7 @@ class Che168Parser(BaseCarParser):
     def __init__(self, headless: bool = True):
         self.headless = headless
         self.driver = None
+        self._temp_dir = None
 
     def _build_url(self, page: int = 1) -> str:
         """Строит URL с номером страницы для che168"""
@@ -201,16 +202,16 @@ class Che168Parser(BaseCarParser):
         # Небольшая пауза, чтобы crashpad успел завершиться
         time.sleep(0.2)
         self.driver = None
+        temp_dir = getattr(self, "_temp_dir", None)
+        self._temp_dir = None
         # Удаляем временный user-data-dir, если создавали
-        if hasattr(self, "_temp_dir") and getattr(self, "_temp_dir"):
+        if temp_dir:
             try:
                 import shutil
-                if os.path.exists(self._temp_dir):
-                    shutil.rmtree(self._temp_dir, ignore_errors=True)
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir, ignore_errors=True)
             except Exception:
                 pass
-            finally:
-                delattr(self, "_temp_dir")
 
     def _wait_for_page_load(self, timeout: int = 20):  # Уменьшаем timeout с 30 до 20
         """Ожидание загрузки страницы"""

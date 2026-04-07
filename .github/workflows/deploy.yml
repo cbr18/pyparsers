@@ -111,7 +111,14 @@ jobs:
             docker compose version
             docker compose config -q
             docker compose up -d --build --remove-orphans
-            curl -fsS http://127.0.0.1:5001/health >/dev/null
-            curl -fsS http://127.0.0.1:5002/health >/dev/null
+            for url in http://127.0.0.1:5001/health http://127.0.0.1:5002/health; do
+              for i in $(seq 1 30); do
+                if curl -fsS "${url}" >/dev/null; then
+                  break
+                fi
+                sleep 2
+              done
+              curl -fsS "${url}" >/dev/null
+            done
             docker compose ps
           '

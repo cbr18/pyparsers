@@ -91,6 +91,15 @@ class Che168Parser(BaseCarParser):
     _SEARCH_API_SECRET = "com.rnw.www"
     _SEARCH_API_APP_ID = "2sc.m"
     _SEARCH_API_VERSION = "11.41.5"
+    _SERIES_BRAND_ALIASES = {
+        "Cayenne": "保时捷",
+        "Macan": "保时捷",
+        "Panamera": "保时捷",
+        "718": "保时捷",
+        "911": "保时捷",
+        "卡宴": "保时捷",
+        "雅阁": "本田",
+    }
 
     def __init__(self, headless: bool = True):
         self.headless = headless
@@ -235,6 +244,8 @@ class Che168Parser(BaseCarParser):
         series_name = car.get("syname")
         if not brand_name and not series_name:
             brand_name, series_name = self._extract_title_parts(title)
+        if not brand_name and series_name:
+            brand_name = self._SERIES_BRAND_ALIASES.get(series_name)
 
         first_registration_time = normalize_first_registration_date(car.get("firstregyear"))
         image = car.get("imageurl")

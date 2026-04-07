@@ -135,6 +135,27 @@ class Che168ParserTests(unittest.TestCase):
         self.assertIsNone(brand_name)
         self.assertEqual(series_name, "Cayenne")
 
+    def test_parse_api_car_uses_series_brand_aliases(self):
+        parser = Che168Parser()
+
+        car = parser._parse_api_car(
+            {
+                "carname": "Cayenne 2024款 Cayenne 3.0T",
+                "price": "78.8",
+                "imageurl": "https://example.com/cayenne.jpg",
+                "mileage": "1.3",
+                "cname": "苏州",
+                "dealerid": 1,
+                "infoid": 2,
+                "firstregyear": "2025年",
+                "seriesid": 172,
+                "cartags": {},
+            }
+        )
+
+        self.assertEqual(car.brand_name, "保时捷")
+        self.assertEqual(car.series_name, "Cayenne")
+
 
 if __name__ == "__main__":
     unittest.main()

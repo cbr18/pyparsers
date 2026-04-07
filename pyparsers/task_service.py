@@ -1,724 +1,777 @@
+from __future__ import annotations
+
 import asyncio
-import aiohttp
-import logging
-import re
 import gc
+import hashlib
+import logging
 import os
-import json
-from datetime import datetime, timedelta
-from typing import Dict, Optional, List
-from collections import OrderedDict
-from threading import Lock as ThreadLock
-from concurrent.futures import ThreadPoolExecutor
-from models import Task, TaskStatus, TaskType
-from api.dongchedi.parser import DongchediParser
-from api.che168.parser import Che168Parser
-from converters import decode_dongchedi_list_sh_price
-from car_filter import filter_cars_by_year, is_electric_car
+import re
 import uuid
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
+
 from api.memory_optimized import MemoryOptimizedList
+from car_filter import filter_cars_by_year
+from converters import decode_dongchedi_list_sh_price
+from models import TaskCreateRequest, TaskResultEnvelope, TaskSnapshot, TaskStage, TaskStatus, TaskType
 
 logger = logging.getLogger(__name__)
+
 INCREMENTAL_EXISTING_LIMIT = int(os.getenv("INCREMENTAL_EXISTING_LIMIT", "15000"))
-TASK_TTL_HOURS = int(os.getenv("TASK_TTL_HOURS", "24"))  # Задачи старше 24 часов удаляются
-MAX_TASKS = int(os.getenv("MAX_TASKS", "1000"))  # Максимум задач в памяти
+TASK_TTL_HOURS = int(os.getenv("TASK_TTL_HOURS", "24"))
+TASK_RESULT_TTL_MINUTES = int(os.getenv("TASK_RESULT_TTL_MINUTES", "30"))
+MAX_TASKS = int(os.getenv("MAX_TASKS", "1000"))
+
+
+class TaskCancelledError(Exception):
+    pass
+
+
+@dataclass
+class TaskRecord:
+    id: str
+    source: str
+    task_type: TaskType
+    status: TaskStatus
+    stage: TaskStage
+    parameters: Dict[str, Any]
+    metadata: Dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+    heartbeat_at: datetime
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    message: Optional[str] = None
+    error_message: Optional[str] = None
+    progress_current: Optional[int] = None
+    progress_total: Optional[int] = None
+    progress_unit: Optional[str] = None
+    items_found: int = 0
+    items_processed: int = 0
+    items_sent: int = 0
+    cancel_requested: bool = False
+    result_available: bool = False
+    result_summary: Dict[str, Any] = field(default_factory=dict)
+    result_fetched_at: Optional[datetime] = None
+
+    def to_snapshot(self) -> TaskSnapshot:
+        return TaskSnapshot(
+            id=self.id,
+            source=self.source,
+            task_type=self.task_type,
+            status=self.status,
+            stage=self.stage,
+            message=self.message,
+            error_message=self.error_message,
+            parameters=self.parameters,
+            metadata=self.metadata,
+            progress_current=self.progress_current,
+            progress_total=self.progress_total,
+            progress_unit=self.progress_unit,
+            items_found=self.items_found,
+            items_processed=self.items_processed,
+            items_sent=self.items_sent,
+            cancel_requested=self.cancel_requested,
+            result_available=self.result_available,
+            result_summary=self.result_summary,
+            created_at=self.created_at,
+            started_at=self.started_at,
+            finished_at=self.finished_at,
+            updated_at=self.updated_at,
+            heartbeat_at=self.heartbeat_at,
+            result_fetched_at=self.result_fetched_at,
+        )
+
+
+@dataclass
+class TaskRunResult:
+    result: Any
+    summary: Dict[str, Any]
+
+
+class TaskContext:
+    def __init__(self, service: "TaskService", task_id: str):
+        self._service = service
+        self.task_id = task_id
+
+    async def set_stage(
+        self,
+        stage: TaskStage,
+        *,
+        message: Optional[str] = None,
+        progress_current: Optional[int] = None,
+        progress_total: Optional[int] = None,
+        progress_unit: Optional[str] = None,
+    ) -> None:
+        await self._service._update_task(
+            self.task_id,
+            stage=stage,
+            message=message,
+            progress_current=progress_current,
+            progress_total=progress_total,
+            progress_unit=progress_unit,
+        )
+
+    async def update(
+        self,
+        *,
+        message: Optional[str] = None,
+        progress_current: Optional[int] = None,
+        progress_total: Optional[int] = None,
+        progress_unit: Optional[str] = None,
+        items_found: Optional[int] = None,
+        items_processed: Optional[int] = None,
+        items_sent: Optional[int] = None,
+        result_summary: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        await self._service._update_task(
+            self.task_id,
+            message=message,
+            progress_current=progress_current,
+            progress_total=progress_total,
+            progress_unit=progress_unit,
+            items_found=items_found,
+            items_processed=items_processed,
+            items_sent=items_sent,
+            result_summary=result_summary,
+        )
+
+    async def check_cancelled(self) -> None:
+        task = self._service.tasks.get(self.task_id)
+        if task and task.cancel_requested:
+            raise TaskCancelledError(f"Task {self.task_id} was cancelled")
+
+    async def run_sync(self, func: Callable[..., Any], *args: Any) -> Any:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._service._executor, func, *args)
+
 
 class TaskService:
-    def __init__(self, datahub_url: Optional[str] = None, datahub_timeout: Optional[int] = None):
-        env_datahub_url = os.getenv("DATAHUB_URL")
-        env_datahub_timeout = os.getenv("DATAHUB_TIMEOUT")
+    def __init__(
+        self,
+        *,
+        source: str,
+        runners: Dict[TaskType, Callable[[TaskContext, Dict[str, Any]], Awaitable[TaskRunResult]]],
+    ):
+        self.source = source
+        self.runners = runners
+        self.tasks: OrderedDict[str, TaskRecord] = OrderedDict()
+        self.results: Dict[str, Any] = {}
+        self._queue: asyncio.Queue[str] = asyncio.Queue()
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix=f"{source}-task")
+        self._worker_task: Optional[asyncio.Task] = None
 
-        self.datahub_url = datahub_url or env_datahub_url or "http://localhost:8080"
-        if datahub_timeout is not None:
-            self.datahub_timeout = datahub_timeout
-        elif env_datahub_timeout:
+    async def startup(self) -> None:
+        if self._worker_task is None or self._worker_task.done():
+            self._worker_task = asyncio.create_task(self._worker_loop(), name=f"{self.source}-task-worker")
+
+    async def shutdown(self) -> None:
+        if self._worker_task is not None:
+            self._worker_task.cancel()
             try:
-                self.datahub_timeout = int(env_datahub_timeout)
-            except ValueError:
-                logger.warning("Invalid DATAHUB_TIMEOUT value '%s', fallback to 1800 seconds", env_datahub_timeout)
-                self.datahub_timeout = 1800
-        else:
-            self.datahub_timeout = 1800
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
+        self._executor.shutdown(wait=False)
 
-        self._session_timeout = aiohttp.ClientTimeout(total=self.datahub_timeout)
-        self.tasks: OrderedDict[str, Task] = OrderedDict()  # Используем OrderedDict для LRU
-        self.session: Optional[aiohttp.ClientSession] = None
-        self._source_locks: OrderedDict[str, asyncio.Lock] = OrderedDict()
-        self._source_locks_max_size = 50  # Максимум 50 блокировок
-        self._source_locks_lock = ThreadLock()
-        # Executor для выполнения синхронных операций парсеров в отдельных потоках
-        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="parser")
-    
-    async def get_session(self) -> aiohttp.ClientSession:
-        """Получить или создать HTTP сессию"""
-        if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession(timeout=self._session_timeout)
-        return self.session
-    
-    async def close_session(self):
-        """Закрыть HTTP сессию"""
-        if self.session and not self.session.closed:
-            await self.session.close()
-    
-    def shutdown_executor(self):
-        """Закрыть executor для парсеров"""
-        if self._executor:
-            self._executor.shutdown(wait=True)
-    
-    def create_task(self, source: str, task_type: TaskType = TaskType.FULL, id_field: Optional[str] = None, existing_ids: Optional[List[str]] = None) -> Task:
-        """Создать новую задачу"""
-        # Очищаем старые задачи перед созданием новой
+    def create_task(self, request: TaskCreateRequest) -> TaskSnapshot:
+        if request.task_type not in self.runners:
+            raise ValueError(f"Unsupported task type '{request.task_type}' for source '{self.source}'")
+
         self._cleanup_old_tasks()
-        
-        # Если достигли лимита, удаляем самые старые задачи
-        if len(self.tasks) >= MAX_TASKS:
-            # Удаляем 10% самых старых задач
-            to_remove = MAX_TASKS // 10
-            for _ in range(to_remove):
-                if self.tasks:
-                    self.tasks.popitem(last=False)
-        
+        self._trim_if_needed()
+
+        now = datetime.now(timezone.utc)
         task_id = str(uuid.uuid4())
-        now = datetime.now()
-        
-        task = Task(
+        record = TaskRecord(
             id=task_id,
-            source=source,
-            task_type=task_type,
-            id_field=id_field,
-            existing_ids=existing_ids,
-            status=TaskStatus.PENDING,
+            source=self.source,
+            task_type=request.task_type,
+            status=TaskStatus.QUEUED,
+            stage=TaskStage.QUEUED,
+            parameters=request.parameters,
+            metadata=request.metadata,
             created_at=now,
-            updated_at=now
+            updated_at=now,
+            heartbeat_at=now,
+            message="Task is queued",
         )
-        
-        self.tasks[task_id] = task
-        # Перемещаем в конец (LRU)
+        self.tasks[task_id] = record
         self.tasks.move_to_end(task_id)
-        logger.info(f"Created task {task_id} for source {source}")
-        return task
-    
-    def update_task_status(self, task_id: str, status: TaskStatus):
-        """Обновить статус задачи"""
-        if task_id in self.tasks:
-            self.tasks[task_id].status = status
-            self.tasks[task_id].updated_at = datetime.now()
-            # Перемещаем в конец (LRU)
-            self.tasks.move_to_end(task_id)
-            logger.info(f"Updated task {task_id} status to {status}")
-    
-    def _cleanup_old_tasks(self):
-        """Удаляет задачи старше TTL"""
-        now = datetime.now()
-        cutoff_time = now - timedelta(hours=TASK_TTL_HOURS)
-        
-        tasks_to_remove = []
-        for task_id, task in self.tasks.items():
-            if task.created_at < cutoff_time:
-                tasks_to_remove.append(task_id)
-        
-        for task_id in tasks_to_remove:
-            del self.tasks[task_id]
-            logger.info(f"Removed old task {task_id} (older than {TASK_TTL_HOURS} hours)")
-    
-    def _get_source_lock(self, key: str) -> asyncio.Lock:
-        with self._source_locks_lock:
-            # Если блокировка уже существует, перемещаем её в конец (LRU)
-            if key in self._source_locks:
-                lock = self._source_locks.pop(key)
-                self._source_locks[key] = lock
-                return lock
-            
-            # Если достигли лимита, удаляем самую старую блокировку
-            if len(self._source_locks) >= self._source_locks_max_size:
-                self._source_locks.popitem(last=False)
-            
-            # Создаём новую блокировку
-            lock = asyncio.Lock()
-            self._source_locks[key] = lock
-            return lock
+        self._queue.put_nowait(task_id)
+        return record.to_snapshot()
 
-    def _normalize_car_data(self, car_dict: dict, source: str) -> dict:
-        """Нормализует данные машины для отправки в datahub"""
-        normalized = {}
-        
-        # Обязательные поля
-        if 'car_id' not in car_dict or car_dict['car_id'] is None:
-            logger.warning(f"Missing car_id in car data, skipping normalization")
+    def list_tasks(self) -> list[TaskSnapshot]:
+        self._cleanup_old_tasks()
+        return [task.to_snapshot() for task in reversed(self.tasks.values())]
+
+    def get_task(self, task_id: str) -> Optional[TaskSnapshot]:
+        self._cleanup_old_tasks()
+        task = self.tasks.get(task_id)
+        if not task:
             return None
-        
-        normalized['car_id'] = int(car_dict['car_id'])
-        normalized['source'] = source
-        
-        # year (int) - НЕ car_year!
-        if 'year' in car_dict and car_dict['year'] is not None:
-            try:
-                normalized['year'] = int(car_dict['year'])
-            except (ValueError, TypeError):
-                pass
-        
-        # mileage (int32) - НЕ car_mileage строка!
-        if 'mileage' in car_dict and car_dict['mileage'] is not None:
-            try:
-                normalized['mileage'] = int(car_dict['mileage'])
-            except (ValueError, TypeError):
-                pass
-        
-        # price (float64) - НЕ sh_price строка!
-        if 'price' in car_dict and car_dict['price'] is not None:
-            try:
-                # Если price строка, преобразуем в float
-                if isinstance(car_dict['price'], str):
-                    normalized['price'] = float(car_dict['price'])
-                else:
-                    normalized['price'] = float(car_dict['price'])
-            except (ValueError, TypeError):
-                pass
-        
-        # shop_id (int32) - НЕ строка!
-        if 'shop_id' in car_dict and car_dict['shop_id'] is not None:
-            try:
-                normalized['shop_id'] = int(car_dict['shop_id'])
-            except (ValueError, TypeError):
-                normalized['shop_id'] = 0
-        else:
-            normalized['shop_id'] = 0
-        
-        # is_available (bool) - НЕ null!
-        if 'is_available' in car_dict:
-            normalized['is_available'] = bool(car_dict['is_available']) if car_dict['is_available'] is not None else True
-        else:
-            normalized['is_available'] = True
-        
-        # Копируем остальные поля как есть
-        for key, value in car_dict.items():
-            if key not in normalized and key not in ['car_year', 'car_mileage', 'sh_price']:  # Удаляем лишние поля
-                normalized[key] = value
-        
-        return normalized
+        self.tasks.move_to_end(task_id)
+        return task.to_snapshot()
 
-    def _build_payload_bytes(self, task_id: str, source: str, task_type: TaskType, data: list) -> bytes:
-        """Сериализует полезную нагрузку и освобождает исходные данные из памяти."""
-        # Нормализуем данные перед отправкой
-        normalized_data = []
-        skipped_count = 0
-        for car_dict in data:
-            normalized = self._normalize_car_data(car_dict, source)
-            if normalized:
-                normalized_data.append(normalized)
-            else:
-                skipped_count += 1
-        
-        if skipped_count > 0:
-            logger.warning(f"Skipped {skipped_count} cars due to missing car_id")
-        
-        # Логируем информацию о данных перед сериализацией
-        if normalized_data and len(normalized_data) > 0:
-            sample_car = normalized_data[0]
-            logger.info(f"Building payload for task {task_id} (source={source}, type={task_type}): {len(normalized_data)} cars (skipped {skipped_count}), sample car keys: {list(sample_car.keys())[:20] if isinstance(sample_car, dict) else type(sample_car)}")
-        
-        payload = {
-            "task_id": task_id,
-            "source": source,
-            "task_type": str(task_type.value) if isinstance(task_type, TaskType) else str(task_type),
-            "status": "done",
-            "data": normalized_data,
-        }
-        payload_bytes = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        logger.info(f"Payload size for task {task_id}: {len(payload_bytes)} bytes")
-        if hasattr(data, "clear"):
-            data.clear()
-        gc.collect()
-        return payload_bytes
+    def get_task_result(self, task_id: str) -> Optional[TaskResultEnvelope]:
+        self._cleanup_old_tasks()
+        task = self.tasks.get(task_id)
+        if not task or task_id not in self.results:
+            return None
+        task.result_fetched_at = datetime.now(timezone.utc)
+        task.updated_at = task.result_fetched_at
+        self.tasks.move_to_end(task_id)
+        return TaskResultEnvelope(task=task.to_snapshot(), result=self.results[task_id])
 
-    async def send_task_to_datahub(self, task_id: str, source: str, task_type: TaskType, status: str, data: list = None) -> bool:
-        """Отправить задачу в datahub (при создании или обновлении статуса)"""
-        try:
-            session = await self.get_session()
-            url = f"{self.datahub_url}/api/tasks/{task_id}/complete"
-            headers = {"Content-Type": "application/json"}
-            
-            # Если данные не переданы, используем пустой массив
-            if data is None:
-                data = []
-            
-            payload = {
-                "task_id": task_id,
-                "source": source,
-                "task_type": str(task_type.value) if isinstance(task_type, TaskType) else str(task_type),
-                "status": status,
-                "data": data,
-            }
-            payload_bytes = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-            
-            async with session.post(
-                url,
-                data=payload_bytes,
-                headers=headers,
-                timeout=self._session_timeout,
-            ) as response:
-                if response.status == 200:
-                    logger.info(f"Successfully sent task {task_id} to datahub with status {status}")
-                    return True
-                else:
-                    text = await response.text()
-                    payload_preview = payload_bytes[:1000].decode('utf-8', errors='ignore') if len(payload_bytes) > 0 else "empty"
-                    logger.error(f"Failed to send task {task_id} to datahub (source={source}, type={task_type}, status={status}): {response.status} body={text[:500]}")
-                    logger.debug(f"Payload preview (first 1000 chars): {payload_preview}")
-                    return False
-                    
-        except Exception as e:
-            logger.exception(f"Error sending task {task_id} to datahub: {e}")
-            return False
+    def cancel_task(self, task_id: str) -> Optional[TaskSnapshot]:
+        task = self.tasks.get(task_id)
+        if task is None:
+            return None
 
-    async def send_to_datahub(self, task_id: str, source: str, task_type: TaskType, payload_bytes: bytes) -> bool:
-        """Отправить сериализованные данные в datahub (legacy метод для обратной совместимости)"""
-        try:
-            session = await self.get_session()
-            url = f"{self.datahub_url}/api/tasks/{task_id}/complete"
-            headers = {"Content-Type": "application/json"}
-            
-            async with session.post(
-                url,
-                data=payload_bytes,
-                headers=headers,
-                timeout=self._session_timeout,
-            ) as response:
-                if response.status == 200:
-                    logger.info(f"Successfully sent data to datahub for task {task_id}")
-                    return True
-                else:
-                    text = await response.text()
-                    # Логируем первые 1000 символов payload для отладки
-                    payload_preview = payload_bytes[:1000].decode('utf-8', errors='ignore') if len(payload_bytes) > 0 else "empty"
-                    logger.error(f"Failed to send data to datahub for task {task_id} (source={source}, type={task_type}): {response.status} body={text[:500]}")
-                    logger.debug(f"Payload preview (first 1000 chars): {payload_preview}")
-                    return False
-                    
-        except Exception as e:
-            logger.exception(f"Error sending data to datahub for task {task_id}: {e}")
-            return False
-    
-    async def retry_send_to_datahub(self, task_id: str, source: str, task_type: TaskType, payload_bytes: bytes):
-        """Повторять отправку в datahub каждые 30 секунд до успеха"""
+        now = datetime.now(timezone.utc)
+        if task.status == TaskStatus.QUEUED:
+            task.status = TaskStatus.CANCELLED
+            task.stage = TaskStage.CANCELLED
+            task.message = "Task was cancelled before execution"
+            task.finished_at = now
+        elif task.status == TaskStatus.RUNNING:
+            task.cancel_requested = True
+            task.message = "Cancellation requested"
+        task.updated_at = now
+        task.heartbeat_at = now
+        self.tasks.move_to_end(task_id)
+        return task.to_snapshot()
+
+    async def _worker_loop(self) -> None:
         while True:
-            success = await self.send_to_datahub(task_id, source, task_type, payload_bytes)
-            if success:
-                # Обновляем статус задачи на DONE после успешной отправки
-                if task_id in self.tasks:
-                    self.update_task_status(task_id, TaskStatus.DONE)
-                # Удаляем данные из памяти после успешной отправки
-                if task_id in self.tasks:
-                    del self.tasks[task_id]
-                payload_bytes = b""  # Освобождаем ссылку
-                del payload_bytes  # Явно удаляем
-                gc.collect()
-                break
-            
-            logger.info(f"Retrying send to datahub for task {task_id} in 30 seconds...")
-            await asyncio.sleep(30)
-    
-    async def process_task(self, task_id: str):
-        """Обработать задачу парсинга"""
-        if task_id not in self.tasks:
-            logger.error(f"Task {task_id} not found")
+            task_id = await self._queue.get()
+            try:
+                await self._execute(task_id)
+            finally:
+                self._queue.task_done()
+
+    async def _execute(self, task_id: str) -> None:
+        task = self.tasks.get(task_id)
+        if task is None or task.status == TaskStatus.CANCELLED:
             return
-        
-        task = self.tasks[task_id]
-        
-        # Отправляем задачу в datahub со статусом "pending" при создании
-        await self.send_task_to_datahub(task_id, task.source, task.task_type, "pending", [])
-        
-        # Обновляем статус на IN_PROGRESS и отправляем в datahub
-        self.update_task_status(task_id, TaskStatus.IN_PROGRESS)
-        await self.send_task_to_datahub(task_id, task.source, task.task_type, "in_progress", [])
-        
+
+        task.status = TaskStatus.RUNNING
+        task.stage = TaskStage.INITIALIZING
+        task.started_at = datetime.now(timezone.utc)
+        task.message = "Task is running"
+        task.updated_at = task.started_at
+        task.heartbeat_at = task.started_at
+        self.tasks.move_to_end(task_id)
+
+        context = TaskContext(self, task_id)
+        runner = self.runners[task.task_type]
+
         try:
-            data = []
-            
-            # Обработка по типу задачи
-            if task.source == "dongchedi":
-                if task.task_type == TaskType.FULL:
-                    data = await self._parse_dongchedi_full()
-                else:
-                    data = await self._parse_dongchedi_incremental(task.existing_ids or [], task.id_field or "sku_id")
-            elif task.source == "che168":
-                if task.task_type == TaskType.FULL:
-                    data = await self._parse_che168_full()
-                else:
-                    data = await self._parse_che168_incremental(task.existing_ids or [], task.id_field or "car_id")
-            else:
-                logger.error(f"Unknown source: {task.source}")
-                self.update_task_status(task_id, TaskStatus.FAILED)
-                # Отправляем задачу как failed в datahub
-                await self.send_task_to_datahub(task_id, task.source, task.task_type, "failed", [])
-                return
-            
-            # Уникальность по car_id
-            ids = [d.get('car_id') for d in data]
-            unique_ids = set(ids)
-            dup_count = len(ids) - len(unique_ids)
-            logger.info(f"Collected {len(data)} cars for source {task.source} (task {task_id}); unique car_id={len(unique_ids)}, duplicates={dup_count}")
+            result = await runner(context, task.parameters)
+            await self._update_task(
+                task_id,
+                status=TaskStatus.SUCCEEDED,
+                stage=TaskStage.COMPLETED,
+                message="Task completed successfully",
+                items_sent=len(result.result) if isinstance(result.result, Iterable) and not isinstance(result.result, (dict, str, bytes)) else task.items_sent,
+                result_summary=result.summary,
+                finished_at=datetime.now(timezone.utc),
+                result_available=True,
+            )
+            self.results[task_id] = result.result
+        except TaskCancelledError:
+            await self._update_task(
+                task_id,
+                status=TaskStatus.CANCELLED,
+                stage=TaskStage.CANCELLED,
+                message="Task execution was cancelled",
+                finished_at=datetime.now(timezone.utc),
+            )
+        except Exception as exc:
+            logger.exception("Task %s failed", task_id)
+            await self._update_task(
+                task_id,
+                status=TaskStatus.FAILED,
+                stage=TaskStage.FAILED,
+                message="Task failed",
+                error_message=str(exc) or exc.__class__.__name__,
+                finished_at=datetime.now(timezone.utc),
+            )
 
-            if data:
-                # Отправляем задачу как выполненную с данными
-                payload_bytes = self._build_payload_bytes(task_id, task.source, task.task_type, data)
-                asyncio.create_task(self.retry_send_to_datahub(task_id, task.source, task.task_type, payload_bytes))
-                # Пока отправляем, держим задачу IN_PROGRESS; DONE поставит отправка при очистке
-                return
-            else:
-                logger.warning(f"No data collected for task {task_id} source {task.source}")
-                self.update_task_status(task_id, TaskStatus.FAILED)
-                # Отправляем задачу как failed в datahub
-                await self.send_task_to_datahub(task_id, task.source, task.task_type, "failed", [])
-                
-        except Exception as e:
-            logger.exception(f"Error processing task {task_id}: {e}")
-            self.update_task_status(task_id, TaskStatus.FAILED)
-            # Отправляем задачу как failed в datahub
-            await self.send_task_to_datahub(task_id, task.source, task.task_type, "failed", [])
-    
-    async def _parse_dongchedi_full(self) -> list:
-        """Полный парсинг dongchedi (все страницы) с защитой от параллельных запусков"""
-        lock = self._get_source_lock("dongchedi_full")
-        async with lock:
-            return await self._parse_dongchedi_full_unlocked()
+    async def _update_task(
+        self,
+        task_id: str,
+        *,
+        status: Optional[TaskStatus] = None,
+        stage: Optional[TaskStage] = None,
+        message: Optional[str] = None,
+        error_message: Optional[str] = None,
+        progress_current: Optional[int] = None,
+        progress_total: Optional[int] = None,
+        progress_unit: Optional[str] = None,
+        items_found: Optional[int] = None,
+        items_processed: Optional[int] = None,
+        items_sent: Optional[int] = None,
+        result_summary: Optional[Dict[str, Any]] = None,
+        finished_at: Optional[datetime] = None,
+        result_available: Optional[bool] = None,
+    ) -> None:
+        task = self.tasks.get(task_id)
+        if task is None:
+            return
 
-    async def _parse_dongchedi_full_unlocked(self) -> list:
-        """Внутренняя реализация полного парсинга dongchedi"""
+        now = datetime.now(timezone.utc)
+        if status is not None:
+            task.status = status
+        if stage is not None:
+            task.stage = stage
+        if message is not None:
+            task.message = message
+        if error_message is not None:
+            task.error_message = error_message
+        if progress_current is not None:
+            task.progress_current = progress_current
+        if progress_total is not None:
+            task.progress_total = progress_total
+        if progress_unit is not None:
+            task.progress_unit = progress_unit
+        if items_found is not None:
+            task.items_found = items_found
+        if items_processed is not None:
+            task.items_processed = items_processed
+        if items_sent is not None:
+            task.items_sent = items_sent
+        if result_summary is not None:
+            task.result_summary = result_summary
+        if finished_at is not None:
+            task.finished_at = finished_at
+        if result_available is not None:
+            task.result_available = result_available
+        task.updated_at = now
+        task.heartbeat_at = now
+        self.tasks.move_to_end(task_id)
+
+    def _cleanup_old_tasks(self) -> None:
+        now = datetime.now(timezone.utc)
+        task_cutoff = now - timedelta(hours=TASK_TTL_HOURS)
+        result_cutoff = now - timedelta(minutes=TASK_RESULT_TTL_MINUTES)
+
+        to_delete: list[str] = []
+        for task_id, task in self.tasks.items():
+            if task.created_at < task_cutoff:
+                to_delete.append(task_id)
+                continue
+            if task_id in self.results and task.finished_at and task.finished_at < result_cutoff:
+                del self.results[task_id]
+                task.result_available = False
+
+        for task_id in to_delete:
+            self.tasks.pop(task_id, None)
+            self.results.pop(task_id, None)
+
+    def _trim_if_needed(self) -> None:
+        while len(self.tasks) >= MAX_TASKS:
+            task_id, task = next(iter(self.tasks.items()))
+            if task.status in {TaskStatus.RUNNING, TaskStatus.QUEUED}:
+                break
+            self.tasks.pop(task_id, None)
+            self.results.pop(task_id, None)
+
+
+def _hash_car_id_from_link(link: str) -> int:
+    digest = hashlib.md5(link.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=False)
+
+
+def _normalize_che168_listing_car(car_dict: dict, index: int, total: int) -> Optional[dict]:
+    if not car_dict.get("link") and car_dict.get("car_id"):
+        car_dict["link"] = f'https://m.che168.com/cardetail/index?infoid={car_dict["car_id"]}'
+
+    car_dict.update({
+        "sort_number": total - index,
+        "source": "che168",
+    })
+
+    if car_dict.get("sh_price") not in (None, ""):
         try:
-            parser = DongchediParser()
-            # Собираем все страницы
-            all_data = MemoryOptimizedList()
-            page = 1
-            loop = asyncio.get_event_loop()
-            while True:
-                # Выполняем синхронный вызов парсера в отдельном потоке, чтобы не блокировать event loop
-                response = await loop.run_in_executor(self._executor, parser.fetch_cars_by_page, page)
-                if not response.data or not response.data.search_sh_sku_info_list:
-                    if response.status != 200:
-                        logger.warning(f"Dongchedi API returned status {response.status} for page {page}: {response.message}")
-                    else:
-                        logger.info(f"No more data available for dongchedi page {page}")
-                    break
-                cars_list = response.data.search_sh_sku_info_list
-                filtered_cars = filter_cars_by_year(cars_list, min_year=2017)
-                for i, car in enumerate(filtered_cars):
-                    car_dict = car.dict()
-                    car_dict.update({
-                        'sort_number': len(filtered_cars) - i,
-                        'source': 'dongchedi'
-                    })
-                    if car_dict.get('sh_price'):
-                        car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
-                    if 'car_id' in car_dict and car_dict['car_id'] is not None:
-                        try:
-                            car_dict['car_id'] = int(car_dict['car_id'])
-                        except (ValueError, TypeError):
-                            car_dict['car_id'] = 0
-                    # Тип силовой установки определяется в datahub
-                    all_data.append(car_dict)
-                if not getattr(response.data, 'has_more', False):
-                    break
-                page += 1
-            return all_data
-        except Exception as e:
-            logger.error(f"Error parsing dongchedi: {e}")
-            return []
-    
-    async def _parse_dongchedi_incremental(self, existing_ids: List[str], id_field: str) -> list:
-        """Инкрементальный парсинг dongchedi (первые страницы до первого совпадения)"""
+            car_dict["price"] = float(str(car_dict["sh_price"]).strip())
+        except (ValueError, TypeError):
+            pass
+
+    year_val = car_dict.get("car_year")
+    if year_val is not None:
         try:
-            parser = DongchediParser()
-            data = MemoryOptimizedList()
-            limited_existing_ids = (str(x) for idx, x in enumerate(existing_ids) if x and idx < INCREMENTAL_EXISTING_LIMIT)
-            existing_set = set(limited_existing_ids)
-            del limited_existing_ids  # Освобождаем генератор
+            car_dict["year"] = int(year_val)
+        except (ValueError, TypeError):
+            car_dict["year"] = None
 
-            loop = asyncio.get_event_loop()
-            for page in range(1, 101):
-                # Выполняем синхронный вызов парсера в отдельном потоке
-                response = await loop.run_in_executor(self._executor, parser.fetch_cars_by_page, page)
-                if not response.data or not response.data.search_sh_sku_info_list:
-                    break
-                cars_list = response.data.search_sh_sku_info_list
-                filtered_cars = filter_cars_by_year(cars_list, min_year=2017)
-                found_existing = False
-                for i, car in enumerate(filtered_cars):
-                    car_dict = car.dict()
-                    # Остановка при первом совпадении по нужному полю
-                    key_val = car_dict.get(id_field)
-                    key_val = str(key_val) if key_val is not None else None
-                    if key_val and key_val in existing_set:
-                        found_existing = True
-                        break
-                    car_dict.update({
-                        'sort_number': len(filtered_cars) - i,
-                        'source': 'dongchedi'
-                    })
-                    if car_dict.get('sh_price'):
-                        car_dict['sh_price'] = decode_dongchedi_list_sh_price(car_dict['sh_price'])
-                    if 'car_id' in car_dict and car_dict['car_id'] is not None:
-                        try:
-                            car_dict['car_id'] = int(car_dict['car_id'])
-                        except (ValueError, TypeError):
-                            car_dict['car_id'] = 0
-                    # Тип силовой установки определяется в datahub
-                    data.append(car_dict)
-                if found_existing:
-                    break
-                if not getattr(response.data, 'has_more', False):
-                    break
-            # Очищаем existing_set для освобождения памяти
-            existing_set.clear()
-            del existing_set
-            gc.collect()
-            return data
-        except Exception as e:
-            logger.error(f"Error parsing dongchedi incremental: {e}")
-            return []
+    if car_dict.get("year") in (None, 0):
+        title_text = car_dict.get("title") or ""
+        match = re.search(r"(19|20)\d{2}", title_text)
+        if match:
+            try:
+                candidate_year = int(match.group(0))
+                if 1990 <= candidate_year <= 2030:
+                    car_dict["year"] = candidate_year
+            except ValueError:
+                pass
 
-    async def _parse_che168_full(self) -> list:
-        """Полный парсинг che168 (все страницы до 100) с защитой от параллельных запусков"""
-        lock = self._get_source_lock("che168_full")
-        async with lock:
-            return await self._parse_che168_full_unlocked()
+    if car_dict.get("year") is not None and car_dict["year"] < 2017:
+        return None
 
-    async def _parse_che168_full_unlocked(self) -> list:
-        """Внутренняя реализация полного парсинга che168"""
-        try:
-            parser = Che168Parser()
-            data = MemoryOptimizedList()
-            missing_id_count = 0
-            filtered_by_year = 0
-            empty_pages_count = 0  # Счетчик подряд идущих пустых страниц
-            max_empty_pages = 3  # Останавливаемся после 3 подряд идущих пустых страниц
-            loop = asyncio.get_event_loop()
-            # Собираем страницы 1..100 или до конца
-            for page in range(1, 101):
-                # Выполняем синхронный вызов парсера в отдельном потоке, чтобы не блокировать event loop
-                response = await loop.run_in_executor(self._executor, parser.fetch_cars_by_page, page)
-                if not response.data or not response.data.search_sh_sku_info_list:
-                    empty_pages_count += 1
-                    logger.warning(f"che168 page {page}: пустая страница (статус: {response.status}, сообщение: {response.message})")
-                    if empty_pages_count >= max_empty_pages:
-                        logger.info(f"che168: остановка парсинга после {empty_pages_count} подряд идущих пустых страниц")
-                        break
-                    continue  # Пропускаем пустую страницу, но продолжаем парсинг
-                
-                # Если страница не пустая, сбрасываем счетчик пустых страниц
-                empty_pages_count = 0
-                cars_list = response.data.search_sh_sku_info_list
-                logger.info(f"che168 page {page}: processing {len(cars_list)} cars")
-                
-                for i, car in enumerate(cars_list):
-                    car_dict = car.dict(exclude_none=False)
-                    # Нормализуем ссылку: всегда используем формат как в details
-                    # https://m.che168.com/cardetail/index?infoid={car_id}
-                    car_id = car_dict.get('car_id')
-                    existing_link = car_dict.get('link', '')
-                    
-                    if car_id:
-                        # Если есть car_id, всегда используем его для формирования ссылки
-                        car_dict['link'] = f'https://m.che168.com/cardetail/index?infoid={car_id}'
-                    elif existing_link:
-                        # Если нет car_id, но есть ссылка, пытаемся извлечь car_id из ссылки
-                        match = re.search(r'/(\d+)\.html|infoid=(\d+)', existing_link)
-                        if match:
-                            extracted_id = match.group(1) or match.group(2)
-                            car_dict['link'] = f'https://m.che168.com/cardetail/index?infoid={extracted_id}'
-                    # Если нет ни car_id, ни link, оставляем как есть (будет None или пустая строка)
-                    car_dict.update({
-                        'sort_number': len(cars_list) - i,
-                        'source': 'che168'
-                    })
-                    # price должен быть float64, не строка!
-                    if car_dict.get('sh_price') is not None and car_dict.get('sh_price') != '':
-                        try:
-                            price_str = str(car_dict['sh_price']).strip()
-                            car_dict['price'] = float(price_str)
-                        except (ValueError, TypeError):
-                            pass
-                    year_val = car_dict.get('car_year')
-                    if year_val is not None:
-                        try:
-                            car_dict['year'] = int(year_val)
-                        except (ValueError, TypeError):
-                            car_dict['year'] = None
-                    if car_dict.get('year') in (None, 0):
-                        title_text = car_dict.get('title') or ''
-                        m = re.search(r'(19|20)\d{2}', title_text)
-                        if m:
-                            try:
-                                y = int(m.group(0))
-                                if 1990 <= y <= 2030:
-                                    car_dict['year'] = y
-                            except Exception:
-                                pass
-                    
-                    # Логируем фильтрацию по году
-                    if car_dict.get('year') is not None and car_dict.get('year') < 2017:
-                        filtered_by_year += 1
-                        logger.debug(f"che168: filtered car {car_dict.get('car_id')} - year {car_dict.get('year')} < 2017")
-                        continue  # Пропускаем машины старше 2017
-                    
-                    if car_dict.get('car_source_city_name'):
-                        car_dict['city'] = car_dict.get('car_source_city_name')
-                    # Тип силовой установки определяется в datahub
-                    mileage_raw = car_dict.get('car_mileage')
-                    if isinstance(mileage_raw, str) and mileage_raw.strip() != '':
-                        text = mileage_raw.strip()
-                        num_match = re.search(r"[0-9]+(?:\.[0-9]+)?", text)
-                        if num_match:
-                            num_str = num_match.group(0)
-                            try:
-                                if '万' in text:
-                                    km_val = int(float(num_str) * 10000.0)
-                                else:
-                                    km_val = int(float(num_str))
-                                if km_val >= 0:
-                                    car_dict['mileage'] = km_val
-                            except Exception:
-                                pass
+    if car_dict.get("car_source_city_name"):
+        car_dict["city"] = car_dict.get("car_source_city_name")
+
+    mileage_raw = car_dict.get("car_mileage")
+    if isinstance(mileage_raw, str) and mileage_raw.strip():
+        match = re.search(r"[0-9]+(?:\.[0-9]+)?", mileage_raw)
+        if match:
+            try:
+                mileage = float(match.group(0))
+                car_dict["mileage"] = int(mileage * 10000 if "万" in mileage_raw else mileage)
+            except Exception:
+                pass
+
+    try:
+        if car_dict.get("car_id") is None:
+            raise ValueError("missing car_id")
+        car_dict["car_id"] = int(car_dict["car_id"])
+    except Exception:
+        link = car_dict.get("link") or ""
+        car_dict["car_id"] = _hash_car_id_from_link(link)
+
+    return car_dict
+
+
+def _normalize_detailed_items(source: str, parameters: Dict[str, Any]) -> list[dict[str, Any]]:
+    items = parameters.get("items") or []
+    if not items:
+        raise ValueError(f"parameters.items must contain at least one {source} detailed item")
+
+    normalized_items: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError(f"each {source} detailed item must be an object")
+
+        external_id = str(item.get("external_id", "")).strip()
+        secondary_id = str(item.get("secondary_id", "")).strip()
+        if not external_id:
+            raise ValueError(f"each {source} detailed item must include external_id")
+        if source == "che168" and not secondary_id:
+            raise ValueError("each che168 detailed item must include secondary_id")
+
+        normalized_items.append(
+            {
+                "external_id": external_id,
+                "secondary_id": secondary_id or None,
+                "force_update": bool(item.get("force_update", False)),
+            }
+        )
+
+    return normalized_items
+
+
+def build_task_service(source: str) -> TaskService:
+    if source == "dongchedi":
+        return TaskService(source=source, runners=_build_dongchedi_runners())
+    if source == "che168":
+        return TaskService(source=source, runners=_build_che168_runners())
+    raise ValueError(f"Unsupported source '{source}'")
+
+
+def _build_dongchedi_runners():
+    from api.dongchedi.parser import DongchediParser
+
+    async def full(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
+        parser = DongchediParser()
+        data = MemoryOptimizedList()
+        page = 1
+        pages_scanned = 0
+
+        await context.set_stage(TaskStage.LISTING, message="Collecting full dongchedi listing", progress_current=0, progress_total=100, progress_unit="page")
+
+        while True:
+            await context.check_cancelled()
+            response = await context.run_sync(parser.fetch_cars_by_page, page)
+            pages_scanned = page
+            cars_list = getattr(response.data, "search_sh_sku_info_list", None)
+            if not cars_list:
+                break
+
+            filtered = filter_cars_by_year(cars_list, min_year=2017)
+            total_filtered = len(filtered)
+            for index, car in enumerate(filtered):
+                car_dict = car.dict()
+                car_dict.update({"sort_number": total_filtered - index, "source": "dongchedi"})
+                if car_dict.get("sh_price"):
+                    car_dict["sh_price"] = decode_dongchedi_list_sh_price(car_dict["sh_price"])
+                if car_dict.get("car_id") is not None:
                     try:
-                        if 'car_id' in car_dict and car_dict['car_id'] is not None:
-                            car_dict['car_id'] = int(car_dict['car_id'])
-                        else:
-                            raise ValueError('missing car_id')
-                    except Exception:
-                        missing_id_count += 1
-                        link = car_dict.get('link') or ''
-                        import hashlib
-                        h = hashlib.md5(link.encode('utf-8')).digest()
-                        car_dict['car_id'] = int.from_bytes(h[:8], byteorder='big', signed=False)
-                    data.append(car_dict)
-                if not getattr(response.data, 'has_more', False):
-                    break
-            
-            logger.info(f"che168 full parsing: {len(data)} cars collected, {filtered_by_year} filtered by year < 2017, {missing_id_count} had no car_id")
-            if missing_id_count:
-                logger.info(f"che168: {missing_id_count} cars had no car_id; generated from link hash")
-            return data
-            
-        except Exception as e:
-            logger.error(f"Error parsing che168 full: {e}")
-            return []
+                        car_dict["car_id"] = int(car_dict["car_id"])
+                    except (ValueError, TypeError):
+                        car_dict["car_id"] = 0
+                data.append(car_dict)
 
-    async def _parse_che168_incremental(self, existing_ids: List[str], id_field: str) -> list:
-        """Инкрементальный парсинг che168 (первые страницы)"""
-        try:
-            parser = Che168Parser()
-            data = MemoryOptimizedList()
-            missing_id_count = 0
-            filtered_by_year = 0
-            limited_existing_ids = (str(x) for idx, x in enumerate(existing_ids) if x and idx < INCREMENTAL_EXISTING_LIMIT)
-            existing_set = set(limited_existing_ids)
-            del limited_existing_ids  # Освобождаем генератор
-            logger.info(f"che168 incremental: checking against {len(existing_set)} existing IDs")
+            await context.update(
+                message=f"Parsed dongchedi page {page}",
+                progress_current=page,
+                items_found=len(data),
+            )
 
-            loop = asyncio.get_event_loop()
-            for page in range(1, 101):
-                # Выполняем синхронный вызов парсера в отдельном потоке
-                response = await loop.run_in_executor(self._executor, parser.fetch_cars_by_page, page)
-                if not response.data or not response.data.search_sh_sku_info_list:
+            if not getattr(response.data, "has_more", False):
+                break
+            page += 1
+
+        summary = {"pages_scanned": pages_scanned, "items_found": len(data)}
+        await context.set_stage(TaskStage.FINALIZING, message="Finalizing full dongchedi result")
+        return TaskRunResult(result=list(data), summary=summary)
+
+    async def incremental(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
+        parser = DongchediParser()
+        data = MemoryOptimizedList()
+        existing_ids = parameters.get("existing_ids") or []
+        id_field = parameters.get("id_field") or "sku_id"
+        existing_set = {str(x) for idx, x in enumerate(existing_ids) if x and idx < INCREMENTAL_EXISTING_LIMIT}
+        pages_scanned = 0
+
+        await context.set_stage(TaskStage.LISTING, message="Collecting incremental dongchedi listing", progress_current=0, progress_total=100, progress_unit="page")
+
+        for page in range(1, 101):
+            await context.check_cancelled()
+            response = await context.run_sync(parser.fetch_cars_by_page, page)
+            pages_scanned = page
+            cars_list = getattr(response.data, "search_sh_sku_info_list", None)
+            if not cars_list:
+                break
+
+            filtered = filter_cars_by_year(cars_list, min_year=2017)
+            total_filtered = len(filtered)
+            found_existing = False
+            for index, car in enumerate(filtered):
+                car_dict = car.dict()
+                key_val = car_dict.get(id_field)
+                key_val = str(key_val) if key_val is not None else None
+                if key_val and key_val in existing_set:
+                    found_existing = True
                     break
-                cars_list = response.data.search_sh_sku_info_list
-                logger.info(f"che168 incremental page {page}: processing {len(cars_list)} cars")
-                found_existing = False
-                for i, car in enumerate(cars_list):
-                    car_dict = car.dict(exclude_none=False)
-                    # Убеждаемся, что link всегда есть, формируем на основе car_id если нужно
-                    if not car_dict.get('link') and car_dict.get('car_id'):
-                        car_dict['link'] = f'https://m.che168.com/cardetail/index?infoid={car_dict["car_id"]}'
-                    # Остановка при первом совпадении по нужному полю
-                    stop_id = car_dict.get(id_field)
-                    if stop_id is not None:
-                        try:
-                            stop_id = str(int(stop_id)) if isinstance(stop_id, (int, float, str)) else str(stop_id)
-                        except Exception:
-                            stop_id = str(stop_id)
-                    if stop_id and stop_id in existing_set:
-                        found_existing = True
-                        logger.info(f"che168 incremental: found existing car {stop_id} on page {page}, stopping")
-                        break
-                    car_dict.update({
-                        'sort_number': len(cars_list) - i,
-                        'source': 'che168'
-                    })
-                    # price должен быть float64, не строка!
-                    if car_dict.get('sh_price') is not None and car_dict.get('sh_price') != '':
-                        try:
-                            price_str = str(car_dict['sh_price']).strip()
-                            car_dict['price'] = float(price_str)
-                        except (ValueError, TypeError):
-                            pass
-                    year_val = car_dict.get('car_year')
-                    if year_val is not None:
-                        try:
-                            car_dict['year'] = int(year_val)
-                        except (ValueError, TypeError):
-                            car_dict['year'] = None
-                    if car_dict.get('year') in (None, 0):
-                        title_text = car_dict.get('title') or ''
-                        m = re.search(r'(19|20)\d{2}', title_text)
-                        if m:
-                            try:
-                                y = int(m.group(0))
-                                if 1990 <= y <= 2030:
-                                    car_dict['year'] = y
-                            except Exception:
-                                pass
-                    
-                    # Логируем фильтрацию по году
-                    if car_dict.get('year') is not None and car_dict.get('year') < 2017:
-                        filtered_by_year += 1
-                        logger.debug(f"che168 incremental: filtered car {car_dict.get('car_id')} - year {car_dict.get('year')} < 2017")
-                        continue  # Пропускаем машины старше 2017
-                    
-                    if car_dict.get('car_source_city_name'):
-                        car_dict['city'] = car_dict.get('car_source_city_name')
-                    mileage_raw = car_dict.get('car_mileage')
-                    if isinstance(mileage_raw, str) and mileage_raw.strip() != '':
-                        text = mileage_raw.strip()
-                        num_match = re.search(r"[0-9]+(?:\.[0-9]+)?", text)
-                        if num_match:
-                            num_str = num_match.group(0)
-                            try:
-                                if '万' in text:
-                                    km_val = int(float(num_str) * 10000.0)
-                                else:
-                                    km_val = int(float(num_str))
-                                if km_val >= 0:
-                                    car_dict['mileage'] = km_val
-                            except Exception:
-                                pass
+
+                car_dict.update({"sort_number": total_filtered - index, "source": "dongchedi"})
+                if car_dict.get("sh_price"):
+                    car_dict["sh_price"] = decode_dongchedi_list_sh_price(car_dict["sh_price"])
+                if car_dict.get("car_id") is not None:
                     try:
-                        if 'car_id' in car_dict and car_dict['car_id'] is not None:
-                            car_dict['car_id'] = int(car_dict['car_id'])
-                        else:
-                            raise ValueError('missing car_id')
-                    except Exception:
-                        missing_id_count += 1
-                        link = car_dict.get('link') or ''
-                        import hashlib
-                        h = hashlib.md5(link.encode('utf-8')).digest()
-                        car_dict['car_id'] = int.from_bytes(h[:8], byteorder='big', signed=False)
-                    data.append(car_dict)
-                if found_existing:
+                        car_dict["car_id"] = int(car_dict["car_id"])
+                    except (ValueError, TypeError):
+                        car_dict["car_id"] = 0
+                data.append(car_dict)
+
+            await context.update(
+                message=f"Parsed dongchedi page {page}",
+                progress_current=page,
+                items_found=len(data),
+            )
+
+            if found_existing or not getattr(response.data, "has_more", False):
+                break
+
+        summary = {"pages_scanned": pages_scanned, "items_found": len(data), "id_field": id_field}
+        await context.set_stage(TaskStage.FINALIZING, message="Finalizing incremental dongchedi result")
+        existing_set.clear()
+        gc.collect()
+        return TaskRunResult(result=list(data), summary=summary)
+
+    async def detailed(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
+        parser = DongchediParser()
+        normalized_items = _normalize_detailed_items("dongchedi", parameters)
+
+        await context.set_stage(
+            TaskStage.DETAILED,
+            message="Parsing dongchedi detailed cars",
+            progress_current=0,
+            progress_total=len(normalized_items),
+            progress_unit="car",
+        )
+
+        results = []
+        success_count = 0
+        for index, item in enumerate(normalized_items, start=1):
+            await context.check_cancelled()
+            external_id = item["external_id"]
+            secondary_id = item["secondary_id"]
+            car_obj, meta = await context.run_sync(parser.fetch_car_detail, external_id)
+            if car_obj is not None:
+                results.append({
+                    "status": meta.get("status", 200),
+                    "car": car_obj.dict(),
+                    "meta": meta,
+                })
+                success_count += 1
+            else:
+                results.append({
+                    "status": meta.get("status", 500),
+                    "car": {
+                        "car_id": secondary_id or external_id,
+                        "sku_id": external_id,
+                        "is_available": False,
+                        "source": "dongchedi",
+                        "error": meta.get("error"),
+                    },
+                    "meta": meta,
+                })
+
+            await context.update(
+                message=f"Processed dongchedi detailed car {index}/{len(normalized_items)}",
+                progress_current=index,
+                items_processed=index,
+            )
+
+        summary = {"requested": len(normalized_items), "successful": success_count, "failed": len(normalized_items) - success_count}
+        await context.set_stage(TaskStage.FINALIZING, message="Finalizing dongchedi detailed result")
+        return TaskRunResult(result=results, summary=summary)
+
+    return {
+        TaskType.FULL: full,
+        TaskType.INCREMENTAL: incremental,
+        TaskType.DETAILED: detailed,
+    }
+
+
+def _build_che168_runners():
+    from api.che168.detailed_api import CarDetailRequest, parse_car_details
+    from api.che168.parser import Che168Parser
+
+    async def full(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
+        parser = Che168Parser()
+        data = MemoryOptimizedList()
+        pages_scanned = 0
+        empty_pages = 0
+
+        await context.set_stage(TaskStage.LISTING, message="Collecting full che168 listing", progress_current=0, progress_total=100, progress_unit="page")
+
+        for page in range(1, 101):
+            await context.check_cancelled()
+            response = await context.run_sync(parser.fetch_cars_by_page, page)
+            pages_scanned = page
+            cars_list = getattr(response.data, "search_sh_sku_info_list", None)
+            if not cars_list:
+                empty_pages += 1
+                if empty_pages >= 3:
                     break
-            
-            logger.info(f"che168 incremental: {len(data)} cars collected, {filtered_by_year} filtered by year < 2017, {missing_id_count} had no car_id")
-            if missing_id_count:
-                logger.info(f"che168: {missing_id_count} cars had no car_id; generated from link hash")
-            # Очищаем existing_set для освобождения памяти
-            existing_set.clear()
-            del existing_set
-            gc.collect()
-            return data
-        except Exception as e:
-            logger.error(f"Error parsing che168 incremental: {e}")
-            return []
+                await context.update(message=f"che168 page {page} returned no cars", progress_current=page)
+                continue
 
-# Глобальный экземпляр сервиса
-task_service = TaskService()
+            empty_pages = 0
+            total_cars = len(cars_list)
+            for index, car in enumerate(cars_list):
+                normalized = _normalize_che168_listing_car(car.dict(exclude_none=False), index, total_cars)
+                if normalized is not None:
+                    data.append(normalized)
 
+            await context.update(
+                message=f"Parsed che168 page {page}",
+                progress_current=page,
+                items_found=len(data),
+            )
+
+            if not getattr(response.data, "has_more", False):
+                break
+
+        summary = {"pages_scanned": pages_scanned, "items_found": len(data)}
+        await context.set_stage(TaskStage.FINALIZING, message="Finalizing full che168 result")
+        return TaskRunResult(result=list(data), summary=summary)
+
+    async def incremental(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
+        parser = Che168Parser()
+        data = MemoryOptimizedList()
+        existing_ids = parameters.get("existing_ids") or []
+        id_field = parameters.get("id_field") or "car_id"
+        existing_set = {str(x) for idx, x in enumerate(existing_ids) if x and idx < INCREMENTAL_EXISTING_LIMIT}
+        pages_scanned = 0
+
+        await context.set_stage(TaskStage.LISTING, message="Collecting incremental che168 listing", progress_current=0, progress_total=100, progress_unit="page")
+
+        for page in range(1, 101):
+            await context.check_cancelled()
+            response = await context.run_sync(parser.fetch_cars_by_page, page)
+            pages_scanned = page
+            cars_list = getattr(response.data, "search_sh_sku_info_list", None)
+            if not cars_list:
+                break
+
+            total_cars = len(cars_list)
+            found_existing = False
+            for index, car in enumerate(cars_list):
+                car_dict = car.dict(exclude_none=False)
+                stop_id = car_dict.get(id_field)
+                if stop_id is not None:
+                    try:
+                        stop_id = str(int(stop_id))
+                    except Exception:
+                        stop_id = str(stop_id)
+                if stop_id and stop_id in existing_set:
+                    found_existing = True
+                    break
+
+                normalized = _normalize_che168_listing_car(car_dict, index, total_cars)
+                if normalized is not None:
+                    data.append(normalized)
+
+            await context.update(
+                message=f"Parsed che168 page {page}",
+                progress_current=page,
+                items_found=len(data),
+            )
+
+            if found_existing:
+                break
+
+        summary = {"pages_scanned": pages_scanned, "items_found": len(data), "id_field": id_field}
+        await context.set_stage(TaskStage.FINALIZING, message="Finalizing incremental che168 result")
+        existing_set.clear()
+        gc.collect()
+        return TaskRunResult(result=list(data), summary=summary)
+
+    async def detailed(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
+        normalized_items = _normalize_detailed_items("che168", parameters)
+
+        await context.set_stage(
+            TaskStage.DETAILED,
+            message="Parsing che168 detailed cars",
+            progress_current=0,
+            progress_total=len(normalized_items),
+            progress_unit="car",
+        )
+
+        results = []
+        success_count = 0
+        for index, item in enumerate(normalized_items, start=1):
+            await context.check_cancelled()
+            detail_request = CarDetailRequest(
+                car_id=int(item["external_id"]),
+                shop_id=int(item["secondary_id"]),
+                force_update=bool(item.get("force_update", False)),
+            )
+            detail = await parse_car_details(detail_request)
+            detail_payload = detail.model_dump() if hasattr(detail, "model_dump") else detail.dict()
+            results.append(detail_payload)
+            if detail_payload.get("success"):
+                success_count += 1
+
+            await context.update(
+                message=f"Processed che168 detailed car {index}/{len(normalized_items)}",
+                progress_current=index,
+                items_processed=index,
+            )
+
+        summary = {"requested": len(normalized_items), "successful": success_count, "failed": len(normalized_items) - success_count}
+        await context.set_stage(TaskStage.FINALIZING, message="Finalizing che168 detailed result")
+        return TaskRunResult(result=results, summary=summary)
+
+    return {
+        TaskType.FULL: full,
+        TaskType.INCREMENTAL: incremental,
+        TaskType.DETAILED: detailed,
+    }

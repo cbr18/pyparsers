@@ -29,9 +29,7 @@ from typing import List, Dict, Optional, Any
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from datetime import datetime, timezone
-from models import TaskCreateRequest, TaskCreateResponse, TaskType
 from source_probes import SourceProbe, probe_item_value, run_source_probe
-from task_service import task_service
 
 # Настройка логирования
 logging.basicConfig(
@@ -423,7 +421,13 @@ def _summarize_dongchedi_detail(detail_response: Any, details: Dict[str, Any]) -
     )
     details["detail_has_registration"] = int(bool(detail_data.get("first_registration_time")))
 
-    if detail_response.get("status") == 200:
+    has_meaningful_detail = bool(detail_data.get("title")) and (
+        bool(detail_data.get("image"))
+        or bool(detail_data.get("image_gallery"))
+        or bool(detail_data.get("image_count"))
+        or bool(detail_data.get("first_registration_time"))
+    )
+    if detail_response.get("status") == 200 and not bool(detail_data.get("is_banned")) and has_meaningful_detail:
         return True
 
     details["detail_error"] = detail_data.get("error") or "detailed_probe_failed"
@@ -448,9 +452,11 @@ def _summarize_che168_detail(detail_response: Any, details: Dict[str, Any]) -> b
 def _build_dongchedi_probe() -> SourceProbe:
     return SourceProbe(
         source="dongchedi",
-        candidate_fields=("car_id", "image"),
+        candidate_fields=("sku_id", "car_id", "image"),
         list_fetch=lambda: get_dongchedi_cars_by_page(1),
-        detail_fetch=lambda candidate: get_dongchedi_car_detail(str(probe_item_value(candidate, "car_id"))),
+        detail_fetch=lambda candidate: get_dongchedi_car_detail(
+            str(probe_item_value(candidate, "sku_id") or probe_item_value(candidate, "car_id"))
+        ),
         summarize_detail=_summarize_dongchedi_detail,
         list_timeout=60,
         detail_timeout=90,
@@ -790,14 +796,14 @@ async def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
     gc.collect()
     return response_payload
 
-async def get_dongchedi_car_detail(car_id: str):
+async def get_dongchedi_car_detail(sku_id: str):
     """
-    Получает детальную информацию о конкретной машине с dongchedi по ID.
+    Получает детальную информацию о конкретной машине с dongchedi по SKU ID.
 
     Использует асинхронный метод async_fetch_car_detail для получения данных.
     """
     # Получаем детальную информацию о машине
-    car_obj, meta = await dongchedi_parser.async_fetch_car_detail(car_id)
+    car_obj, meta = await dongchedi_parser.async_fetch_car_detail(sku_id)
 
     if car_obj is not None:
         return {
@@ -807,7 +813,7 @@ async def get_dongchedi_car_detail(car_id: str):
         }
     else:
         return {
-            "data": {"car_id": car_id, "is_available": False, "source": "dongchedi", "error": meta.get("error")},
+            "data": {"sku_id": sku_id, "is_available": False, "source": "dongchedi", "error": meta.get("error")},
             "message": f"Ошибка при парсинге: {meta.get('error')}",
             "status": meta.get("status", 500)
         }
@@ -1250,40 +1256,6 @@ async def update_che168_full():
             "message": str(e)
         }
 
-async def create_task(request: TaskCreateRequest):
-    """
-    Создать новую задачу парсинга
-    """
-    if request.source not in ["dongchedi", "che168"]:
-        return {"error": "Invalid source. Must be 'dongchedi' or 'che168'"}
-    
-    # Тип задачи: full / incremental (по умолчанию full)
-    task_type = getattr(request, 'task_type', TaskType.FULL)
-    id_field = getattr(request, 'id_field', None)
-    existing_ids = getattr(request, 'existing_ids', None)
-    task = task_service.create_task(request.source, task_type, id_field, existing_ids)
-    
-    # Запускаем обработку задачи в фоне
-    asyncio.create_task(task_service.process_task(task.id))
-    
-    return TaskCreateResponse(task_id=task.id)
-
-async def get_task_status(task_id: str):
-    """
-    Получить статус задачи
-    """
-    if task_id not in task_service.tasks:
-        return {"error": "Task not found"}
-    
-    task = task_service.tasks[task_id]
-    return {
-        "task_id": task.id,
-        "source": task.source,
-        "status": task.status,
-        "created_at": task.created_at,
-        "updated_at": task.updated_at
-    }
-
 async def enhance_dongchedi_car(sku_id: str, car_id: str = None):
     """
     Улучшает машину детальной информацией.
@@ -1448,7 +1420,6 @@ async def shutdown_event():
     """
     Закрыть HTTP сессию при завершении работы
     """
-    await task_service.close_session()
     # Закрываем глобальную HTTP сессию
     from api.http_client import http_client
     await http_client.close()

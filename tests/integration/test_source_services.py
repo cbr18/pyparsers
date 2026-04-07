@@ -1,6 +1,7 @@
 import json
 import os
 import socket
+import time
 import urllib.error
 import urllib.request
 
@@ -18,6 +19,17 @@ def _request_json(url: str, *, method: str = "GET", payload: dict | None = None,
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.load(response)
+
+
+def _poll_task(base_url: str, task_id: str, *, timeout: int = 120, interval: float = 1.0) -> dict:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        payload = _request_json(f"{base_url}/tasks/{task_id}", timeout=30)
+        task = payload["data"]
+        if task["status"] in ("succeeded", "failed", "cancelled"):
+            return task
+        time.sleep(interval)
+    raise TimeoutError(f"task {task_id} did not finish within {timeout}s")
 
 
 def _is_whitelist_forbidden(exc: Exception) -> bool:
@@ -109,11 +121,13 @@ def test_dongchedi_service_list_and_detailed():
 
     detailed_ok = 0
     for item in _pick_candidates(cars):
+        detail_identifier = item.get("sku_id") or item["car_id"]
         detail = _request_json(
-            f"{DONGCHEDI_BASE_URL}/cars/car/{item['car_id']}",
+            f"{DONGCHEDI_BASE_URL}/cars/car/{detail_identifier}",
             timeout=120,
         )
         assert detail["status"] == 200
+        assert detail["data"]["sku_id"] == str(detail_identifier)
         assert detail["data"]["car_id"] == item["car_id"]
         _assert_has_images(detail["data"], fallback_image=item.get("image"))
         detailed_ok += 1
@@ -180,7 +194,40 @@ def test_che168_service_list_and_detailed():
         return
 
 
+def test_dongchedi_task_lifecycle():
+    listing = _request_json(f"{DONGCHEDI_BASE_URL}/cars/page/1", timeout=120)
+    cars = listing["data"]["search_sh_sku_info_list"]
+    assert cars, "expected non-empty dongchedi listing for task smoke"
+
+    seed_id = cars[0]["car_id"]
+    created = _request_json(
+        f"{DONGCHEDI_BASE_URL}/tasks",
+        method="POST",
+        payload={
+            "task_type": "incremental",
+            "parameters": {
+                "id_field": "car_id",
+                "existing_ids": [str(seed_id)],
+            },
+        },
+        timeout=30,
+    )
+    assert created["status"] == 202
+    task = created["data"]
+    assert task["status"] == "queued"
+
+    final_task = _poll_task(DONGCHEDI_BASE_URL, task["id"], timeout=120)
+    assert final_task["status"] == "succeeded"
+    assert final_task["stage"] == "completed"
+
+    result_payload = _request_json(f"{DONGCHEDI_BASE_URL}/tasks/{task['id']}/result", timeout=30)
+    assert result_payload["status"] == 200
+    assert result_payload["data"]["task"]["id"] == task["id"]
+    assert isinstance(result_payload["data"]["result"], list)
+
+
 if __name__ == "__main__":
     test_dongchedi_service_list_and_detailed()
     test_che168_service_list_and_detailed()
+    test_dongchedi_task_lifecycle()
     print("integration checks passed")

@@ -1,5 +1,6 @@
 import re
 import logging
+import os
 import requests
 from typing import Optional, Tuple, Union, Dict, Any
 from .models.response import DongchediApiResponse, DongchediData
@@ -310,7 +311,11 @@ class DongchediParser(BaseCarParser):
             logger.info(f"[PLAYWRIGHT] Загружаем {url}")
             
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
+                launch_kwargs = {"headless": True}
+                chrome_bin = os.environ.get("CHROME_BIN") or "/usr/bin/chromium"
+                if chrome_bin:
+                    launch_kwargs["executable_path"] = chrome_bin
+                browser = p.chromium.launch(**launch_kwargs)
                 page = browser.new_page()
                 
                 try:
@@ -351,6 +356,119 @@ class DongchediParser(BaseCarParser):
         except Exception as e:
             logger.warning(f"[PLAYWRIGHT] Ошибка для car_id={car_id}: {e}")
             return None
+
+    def _fetch_detail_api(self, sku_id: str, city_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Получает детальные данные через внутренний JSON endpoint страницы detail.
+        Это основной и самый дешёвый путь для sku_id.
+        """
+        detail_url = "https://www.dongchedi.com/motor/pc/sh/detail/major"
+        params = {"sku_id": str(sku_id)}
+        if city_name:
+            params["city_name"] = city_name
+
+        headers = dict(self.headers)
+        headers.update(
+            {
+                "Accept": "application/json, text/plain, */*",
+                "Referer": f"https://www.dongchedi.com/usedcar/{sku_id}",
+            }
+        )
+
+        try:
+            response = requests.get(detail_url, params=params, headers=headers, timeout=20)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as e:
+            logger.debug(f"[DETAIL API] Ошибка запроса для sku_id={sku_id}: {e}")
+            return None
+
+        if payload.get("status") not in (0, 200):
+            logger.warning(f"[DETAIL API] Нестандартный status для sku_id={sku_id}: {payload.get('status')}")
+            return None
+
+        sku_detail = payload.get("data")
+        if not isinstance(sku_detail, dict):
+            logger.warning(f"[DETAIL API] Пустой data payload для sku_id={sku_id}")
+            return None
+
+        car_info = sku_detail.get("car_info") or {}
+        if not car_info.get("car_id"):
+            logger.warning(f"[DETAIL API] car_info.car_id отсутствует для sku_id={sku_id}")
+            return None
+
+        result = self._parse_sku_detail(sku_detail, str(sku_id))
+
+        power_block = sku_detail.get("car_config_overview", {}).get("power", {})
+        space_block = sku_detail.get("car_config_overview", {}).get("space", {})
+        manipulation_block = sku_detail.get("car_config_overview", {}).get("manipulation", {})
+
+        horsepower = normalize_power_value(power_block.get("horsepower"))
+        if horsepower is not None:
+            result["power"] = horsepower
+
+        acceleration = parse_float_value(power_block.get("acceleration_time"))
+        if acceleration is not None:
+            result["acceleration"] = acceleration
+
+        for field in ("length", "width", "height", "wheelbase"):
+            parsed_value = parse_int_value(space_block.get(field))
+            if parsed_value is not None:
+                result[field] = parsed_value
+
+        if not result.get("drive_type") and manipulation_block.get("driver_form"):
+            result["drive_type"] = manipulation_block.get("driver_form")
+
+        capacity = power_block.get("capacity")
+        if capacity:
+            result["engine_volume"] = str(capacity)
+
+        logger.info(
+            f"[DETAIL API] Успешно получены данные для sku_id={sku_id}: "
+            f"images={result.get('image_count', 0)}, reg={result.get('first_registration_time')}"
+        )
+        return result
+
+    def _finalize_detail_car_info(self, car_info: Dict[str, Any]) -> DongchediCar:
+        from converters import decode_dongchedi_detail
+
+        for key in ["title", "car_name", "sh_price"]:
+            if car_info.get(key):
+                car_info[key] = decode_dongchedi_detail(car_info[key])
+
+        if car_info.get("city"):
+            car_info["city"] = decode_dongchedi_detail(car_info["city"])
+        if car_info.get("car_source_city_name"):
+            car_info["car_source_city_name"] = decode_dongchedi_detail(car_info["car_source_city_name"])
+
+        for key in ["tags", "tags_v2"]:
+            if car_info.get(key) is not None and not isinstance(car_info[key], str):
+                import json
+                try:
+                    car_info[key] = json.dumps(car_info[key])
+                except Exception:
+                    car_info[key] = str(car_info[key])
+
+        if car_info.get("sh_price"):
+            price_value = parse_float_value(car_info["sh_price"])
+            if price_value is not None:
+                car_info["price"] = price_value
+
+        if car_info.get("shop_id"):
+            car_info["shop_id"] = parse_int_value(car_info["shop_id"])
+
+        if "car_mileage" in car_info and car_info["car_mileage"] is not None:
+            mileage_km, m_meta = normalize_mileage(
+                car_info["car_mileage"],
+                year_hint=car_info.get("car_year"),
+                source="dongchedi:detail",
+            )
+            if mileage_km is not None:
+                car_info["mileage"] = mileage_km
+            if m_meta.get("warnings"):
+                logger.debug(f"mileage warnings(detail) raw={car_info.get('car_mileage')} meta={m_meta}")
+
+        return DongchediCar(**{k: v for k, v in car_info.items() if k in DongchediCar.__fields__})
 
     def _build_url(self, page: int = 1) -> str:
         print(page)
@@ -576,14 +694,43 @@ class DongchediParser(BaseCarParser):
 
     def fetch_car_detail(self, car_id: str):
         """
-        Парсит детальную информацию о машине по car_id через selenium/beautifulsoup.
+        Парсит детальную информацию о машине по sku_id.
+        Сначала пробует внутренний detail JSON API, затем браузерные fallback.
         Возвращает (DongchediCar | None, meta: dict)
         """
         logger.info(f"fetch_car_detail: ВХОД в функцию для car_id={car_id}")
+        import datetime
+        import uuid
+
+        api_data = self._fetch_detail_api(car_id)
+        if api_data:
+            current_time = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            car_info = {
+                "uuid": str(uuid.uuid4()),
+                "link": f"https://www.dongchedi.com/usedcar/{car_id}",
+                "car_id": car_id,
+                "sku_id": car_id,
+                "source": "dongchedi",
+                "is_available": True,
+                "created_at": current_time,
+                "updated_at": current_time,
+                "has_details": bool(
+                    api_data.get("power")
+                    or api_data.get("image_gallery")
+                    or api_data.get("first_registration_time")
+                ),
+                "is_banned": False,
+            }
+            car_info.update(api_data)
+            try:
+                car_obj = self._finalize_detail_car_info(car_info)
+            except Exception as e:
+                return None, {"is_available": False, "error": str(e), "status": 500}
+            return car_obj, {"is_available": True, "status": 200}
+
         import time
         import random
         import json
-        import os
         import shutil
         import tempfile
         from selenium import webdriver
@@ -1392,49 +1539,7 @@ class DongchediParser(BaseCarParser):
                 return None, {"is_available": False, "error": "Failed to load or parse page", "status": 500}
         
         try:
-            # Применяем декодер к нужным полям
-            from converters import decode_dongchedi_detail
-            for key in ["title", "car_name", "sh_price"]:
-                if car_info.get(key):
-                    car_info[key] = decode_dongchedi_detail(car_info[key])
-                # Декодируем город
-                if car_info.get("city"):
-                    car_info["city"] = decode_dongchedi_detail(car_info["city"])
-                if car_info.get("car_source_city_name"):
-                    car_info["car_source_city_name"] = decode_dongchedi_detail(car_info["car_source_city_name"])
-
-            # Преобразуем списки в строки для полей tags и tags_v2
-            for key in ["tags", "tags_v2"]:
-                if car_info.get(key) is not None and not isinstance(car_info[key], str):
-                    import json
-                    try:
-                        car_info[key] = json.dumps(car_info[key])
-                    except:
-                        car_info[key] = str(car_info[key])
-
-            # Ensure price is properly set from sh_price (convert to float)
-            if car_info.get('sh_price'):
-                price_value = parse_float_value(car_info['sh_price'])
-                if price_value is not None:
-                    car_info['price'] = price_value
-            
-            # Convert shop_id to int
-            if car_info.get('shop_id'):
-                car_info['shop_id'] = parse_int_value(car_info['shop_id'])
-
-            # Преобразуем car_mileage в mileage (числовое значение в км)
-            if 'car_mileage' in car_info and car_info['car_mileage'] is not None:
-                mileage_km, m_meta = normalize_mileage(
-                    car_info['car_mileage'],
-                    year_hint=car_info.get('car_year'),
-                    source="dongchedi:detail",
-                )
-                if mileage_km is not None:
-                    car_info['mileage'] = mileage_km
-                if m_meta.get('warnings'):
-                    logger.debug(f"mileage warnings(detail) raw={car_info.get('car_mileage')} meta={m_meta}")
-
-            car_obj = DongchediCar(**{k: v for k, v in car_info.items() if k in DongchediCar.__fields__})
+            car_obj = self._finalize_detail_car_info(car_info)
         except Exception as e:
             # Освобождаем память перед возвратом ошибки
             if 'soup' in locals() and soup:

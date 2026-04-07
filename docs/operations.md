@@ -89,18 +89,27 @@ docker run --rm -it \
 **Troubleshooting:**  
 `force VERSION_NUMBER` fixes a dirty state, `version` prints the current head, and `.down.sql` files allow safe rollbacks.
 
-## Task API (Async Updates)
+## Parser Task API
 
-The Go `datahub` service exposes async endpoints so scraping runs in background workers:
+Each parser service now exposes its own execution job API:
 
 | Endpoint | Description |
 | --- | --- |
-| `GET /update/{source}/full` | Create a full refresh task (`source` = `dongchedi` \| `che168`). |
-| `POST /update/{source}` | Create incremental update tasks with payload-specific filters. |
-| `GET /tasks` | List every task with status, timestamps, and counters. |
-| `GET /tasks/{id}` | Inspect a specific task (`pending`, `in_progress`, `done`, `failed`). |
+| `POST /tasks` | Create a parser job (`full`, `incremental`, `detailed`). |
+| `GET /tasks` | List recent jobs for that parser service. |
+| `GET /tasks/{id}` | Inspect one job snapshot with heartbeat and progress. |
+| `GET /tasks/{id}/result` | Fetch the final payload after success. |
+| `POST /tasks/{id}/cancel` | Request cancellation. |
 
-All tasks live in memory (LRU map) with mutex protection. Failures record the error message; success payloads include item counts so you can surface metrics or send notifications.
+Task statuses:
+
+- `queued`
+- `running`
+- `succeeded`
+- `failed`
+- `cancelled`
+
+This parser-side task state is execution state, not the system-of-record. The recommended orchestration contract for `datahub` lives in [`docs/datahub-task-contract.md`](datahub-task-contract.md).
 
 ## Backups & Recovery
 

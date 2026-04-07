@@ -19,6 +19,8 @@ Useful URLs:
 - Che168 docs: http://localhost:5002/docs
 - Dongchedi blocked probe: http://localhost:5001/blocked
 - Che168 blocked probe: http://localhost:5002/blocked
+- Dongchedi tasks: http://localhost:5001/tasks
+- Che168 tasks: http://localhost:5002/tasks
 
 ## Documentation
 
@@ -28,6 +30,9 @@ All markdown guides now live in `docs/`.
 - [`docs/operations.md`](docs/operations.md) – deployment, migrations, task API, backups
 - [`docs/parsers.md`](docs/parsers.md) – parser pipeline, enhancement worker, HTTP client tooling
 - [`docs/api-documentation.md`](docs/api-documentation.md) / [`docs/api-examples.md`](docs/api-examples.md) – REST reference
+- [`docs/data-structure.md`](docs/data-structure.md) – task snapshot/result schema and parser payload shape
+- [`docs/datahub-task-contract.md`](docs/datahub-task-contract.md) – how datahub should orchestrate parser jobs
+- [`pyparsers-detailed-task-contract.md`](pyparsers-detailed-task-contract.md) – final unified `detailed` task envelope for `datahub -> pyparsers`
 - [`docs/telegram-app.md`](docs/telegram-app.md) – React/Angular UIs and image proxy
 - [`docs/services.md`](docs/services.md) – translator and admin bot details
 - [`docs/testing.md`](docs/testing.md) – smoke and integration checks for the split parser services

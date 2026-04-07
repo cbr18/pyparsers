@@ -14,6 +14,7 @@ It verifies:
 - blocked probe endpoint for each source
 - dongchedi list parsing
 - dongchedi detailed parsing for two cars
+- dongchedi task lifecycle for a short incremental task
 - che168 list parsing
 - che168 detailed parsing for two cars when the upstream source responds
 - presence of image data in parsed responses
@@ -21,14 +22,19 @@ It verifies:
 ## Run the Smoke Test
 
 ```bash
+python -m unittest tests/unit/test_task_service.py
 python tests/integration/test_source_services.py
 ```
 
 Expected behavior:
 
 - `GET /blocked` runs a short live probe: page 1 list + one detailed car
+- `POST /tasks` creates a queued parser job
+- `GET /tasks/{task_id}` exposes status, stage, progress, heartbeat, and summary counters
+- `GET /tasks/{task_id}/result` returns the final payload only after success
 - `blocked=0` means the same list and detailed code paths used by the public endpoints completed successfully
 - `blocked=1` means one of those two public parsing stages did not complete successfully
+- parser tasks use one lifecycle for every task type: `queued`, `running`, `succeeded`, `failed`, `cancelled`
 - dongchedi should pass on live data
 - che168 may be skipped when the external site times out or triggers anti-bot protection
 - a non-zero exit code indicates a local regression
@@ -42,6 +48,7 @@ curl -s http://localhost:5001/blocked
 curl -s http://localhost:5002/blocked
 curl -s http://localhost:5001/cars/page/1
 curl -s http://localhost:5002/cars/page/1
+curl -s http://localhost:5001/tasks
 curl -s -X POST http://localhost:5002/detailed/parse \
   -H "Content-Type: application/json" \
   -d '{"car_id":56481576,"force_update":true}'
@@ -52,5 +59,6 @@ curl -s -X POST http://localhost:5002/detailed/parse \
 - blocked endpoints are public like `/health`, so external monitoring can call them without adding the monitor IP to `ALLOWED_IPS`
 - for local Docker access to `localhost:5001/5002`, the app may see the client as the bridge gateway IP rather than `127.0.0.1`; in this setup that means adding `172.30.0.1` to `ALLOWED_IPS`
 - the response includes `checks.list`, `checks.detailed`, and probe details for quick diagnostics
+- `heartbeat_at` on `/tasks/{task_id}` is the parser-side liveness signal for long-running jobs
 - `che168` remains externally unstable; timeouts there are not automatically a local bug.
 - The smoke test is stdlib-only, so it can run without setting up a separate pytest environment on the host.

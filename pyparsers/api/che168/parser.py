@@ -3,7 +3,10 @@ import time
 import random
 import re
 import logging
+import hashlib
 from typing import Optional, Tuple, Union
+
+import requests
 from .models.car import Che168Car
 from .models.response import Che168ApiResponse, Che168Data
 from ..base_parser import BaseCarParser
@@ -84,15 +87,243 @@ except ImportError:
 class Che168Parser(BaseCarParser):
     """Selenium парсер для сайта Che168"""
 
+    _SEARCH_API_URL = "https://api2scsou.che168.com/api/v11/search"
+    _SEARCH_API_SECRET = "com.rnw.www"
+    _SEARCH_API_APP_ID = "2sc.m"
+    _SEARCH_API_VERSION = "11.41.5"
+    _SERIES_BRAND_ALIASES = {
+        "Cayenne": "保时捷",
+        "Macan": "保时捷",
+        "Panamera": "保时捷",
+        "718": "保时捷",
+        "911": "保时捷",
+        "卡宴": "保时捷",
+        "雅阁": "本田",
+    }
+
     def __init__(self, headless: bool = True):
         self.headless = headless
         self.driver = None
+        self._temp_dir = None
 
     def _build_url(self, page: int = 1) -> str:
         """Строит URL с номером страницы для che168"""
         # Базовая ссылка: https://www.che168.com/china/a0_0msdgscncgpi1lto8csp{pagenumber}exx0/
         logger.info(f"Формирование URL для страницы {page}")
         return f'https://www.che168.com/china/a0_0msdgscncgpi1lto8csp{page}exx0/?pvareaid=102179'
+
+    def _search_api_headers(self) -> dict[str, str]:
+        return {
+            "User-Agent": (
+                "Mozilla/5.0 (Linux; Android 12; Pixel 5) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/123.0.0.0 Mobile Safari/537.36"
+            ),
+            "Accept": "application/json, text/plain, */*",
+            "Referer": "https://m.che168.com/",
+        }
+
+    def _build_search_api_params(self, page: int) -> dict[str, str]:
+        params = {
+            "pageindex": str(page),
+            "pagesize": "10",
+            "cid": "0",
+            "pid": "0",
+            "pageid": str(int(time.time() * 1000)),
+            "scene_no": "0",
+            "ssnew": "1",
+            "_appid": self._SEARCH_API_APP_ID,
+            "v": self._SEARCH_API_VERSION,
+            "_subappid": "",
+        }
+        params["_sign"] = self._build_search_api_sign(params)
+        return params
+
+    def _build_search_api_sign(self, params: dict[str, str]) -> str:
+        signature_base = "".join(f"{key}{params[key]}" for key in sorted(params))
+        payload = f"{self._SEARCH_API_SECRET}{signature_base}{self._SEARCH_API_SECRET}"
+        return hashlib.md5(payload.encode("utf-8")).hexdigest()
+
+    def _extract_title_parts(self, title: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+        if not title:
+            return None, None
+
+        title_parts = re.split(r"[\s\-_]+", title)
+        brand_keywords = [
+            '奔驰', '宝马', '奥迪', '大众', '丰田', '本田', '日产', '现代', '起亚', '福特', '雪佛兰', '别克',
+            '凯迪拉克', '林肯', '雷克萨斯', '英菲尼迪', '讴歌', '沃尔沃', '路虎', '捷豹', '保时捷', '玛莎拉蒂',
+            '法拉利', '兰博基尼', '宾利', '劳斯莱斯', 'MINI', 'Smart', 'DS', '标致', '雪铁龙', '雷诺', '菲亚特',
+            '阿尔法·罗密欧', 'Jeep', '道奇', 'RAM', 'GMC', '特斯拉', '比亚迪', '吉利', '长城', '奇瑞', '长安',
+            '上汽', '一汽', '东风', '广汽', '北汽', '江淮', '众泰', '海马', '力帆', '华晨', '东南', '陆风',
+            '猎豹', '野马', '金杯', '五菱', '宝骏', '启辰', '理念', '思铭', '开瑞', '威麟', '瑞麒', '观致',
+            '纳智捷', '华泰', '永源', '青年', '黄海', '中兴', '双环', '中顺', '新凯', '天马', '大迪',
+            '新大地', '奥克斯', '万丰', '通田', '美鹿', '飞碟', '新雅途', '跃进', '南汽', '昌河', '哈飞',
+            '松花江', '昌河铃木', '哈飞赛豹', '哈飞路宝', '哈飞民意', '哈飞中意', '松花江中意', '松花江民意',
+            '松花江路宝', '松花江赛豹', 'Audi', 'BMW', 'Mercedes', 'Benz', 'Volkswagen', 'Toyota', 'Honda',
+            'Nissan', 'Hyundai', 'Kia', 'Ford', 'Chevrolet', 'Buick', 'Cadillac', 'Lincoln', 'Lexus',
+            'Infiniti', 'Acura', 'Volvo', 'Land Rover', 'Jaguar', 'Porsche', 'Maserati', 'Ferrari',
+            'Lamborghini', 'Bentley', 'Rolls-Royce'
+        ]
+
+        brand_name = None
+        matched_keyword = None
+        matched_part = None
+        for part in title_parts:
+            for keyword in brand_keywords:
+                if keyword in part or part == keyword:
+                    brand_name = keyword
+                    matched_keyword = keyword
+                    matched_part = part
+                    break
+            if brand_name:
+                break
+
+        if not brand_name:
+            for part in title_parts:
+                if (
+                    part
+                    and len(part) > 1
+                    and not any(char in part for char in ['【', '】', '年', '款', 'km', '万'])
+                    and not re.fullmatch(r"\d+(\.\d+)?T?", part)
+                ):
+                    return None, part
+            return None, None
+
+        brand_index = -1
+        for i, part in enumerate(title_parts):
+            if matched_part and part == matched_part:
+                brand_index = i
+                break
+
+        series_name = None
+        series_part = None
+        if matched_part and matched_keyword and matched_keyword in matched_part:
+            remainder = matched_part.replace(matched_keyword, "", 1).strip()
+            if remainder and not remainder.isdigit():
+                series_part = remainder
+
+        if series_part and (
+            len(series_part) > 1
+            and not any(char in series_part for char in ['【', '】', '年', '款', 'km', '万'])
+            and not series_part.isdigit()
+        ):
+            series_name = series_part
+
+        if not series_name and brand_index >= 0 and brand_index + 1 < len(title_parts):
+            series_part = title_parts[brand_index + 1]
+            if (
+                len(series_part) > 1
+                and not any(char in series_part for char in ['【', '】', '年', '款', 'km', '万'])
+                and not series_part.isdigit()
+            ):
+                series_name = series_part
+                if brand_index + 2 < len(title_parts):
+                    next_part = title_parts[brand_index + 2]
+                    if (
+                        len(next_part) > 1
+                        and not any(char in next_part for char in ['【', '】', '年', '款', 'km', '万'])
+                        and not next_part.isdigit()
+                    ):
+                        series_name = f"{series_part} {next_part}"
+
+        return brand_name, series_name
+
+    def _tags_from_api_car(self, car: dict) -> Optional[str]:
+        tags = []
+        cartags = car.get("cartags") or {}
+        for bucket in ("p1", "p2", "p3", "p4"):
+            for item in cartags.get(bucket) or []:
+                title = (item or {}).get("title")
+                if title:
+                    tags.append(title)
+        return ", ".join(tags) if tags else None
+
+    def _parse_api_car(self, car: dict) -> Che168Car:
+        title = car.get("carname")
+        brand_name = car.get("sname")
+        series_name = car.get("syname")
+        if not brand_name and not series_name:
+            brand_name, series_name = self._extract_title_parts(title)
+        if not brand_name and series_name:
+            brand_name = self._SERIES_BRAND_ALIASES.get(series_name)
+
+        first_registration_time = normalize_first_registration_date(car.get("firstregyear"))
+        image = car.get("imageurl")
+        if image and image.startswith("//"):
+            image = f"https:{image}"
+        mileage_raw = car.get("mileage")
+        mileage = None
+        if mileage_raw not in (None, ""):
+            mileage = _normalize_mileage(f"{mileage_raw}万公里")
+
+        car_id = parse_int_value(car.get("infoid"))
+        car_year = None
+        if first_registration_time:
+            try:
+                car_year = int(first_registration_time.split("-", 1)[0])
+            except (TypeError, ValueError, IndexError):
+                car_year = None
+
+        return Che168Car(
+            title=title,
+            sh_price=car.get("price"),
+            image=image,
+            link=f"https://m.che168.com/cardetail/index?infoid={car_id}" if car_id else None,
+            car_name=title,
+            car_year=car_year,
+            car_mileage=mileage,
+            car_source_city_name=car.get("cname"),
+            brand_name=brand_name,
+            series_name=series_name,
+            brand_id=parse_int_value(car.get("brandid")),
+            series_id=parse_int_value(car.get("seriesid")),
+            shop_id=parse_int_value(car.get("dealerid")),
+            car_id=car_id,
+            tags_v2=self._tags_from_api_car(car),
+            is_available=True,
+            first_registration_time=first_registration_time,
+            power=normalize_power_value(car.get("power")) if car.get("power") else None,
+        )
+
+    def _fetch_cars_via_api(self, page: int) -> Optional[Che168ApiResponse]:
+        params = self._build_search_api_params(page)
+        response = requests.get(
+            self._SEARCH_API_URL,
+            params=params,
+            headers=self._search_api_headers(),
+            timeout=25,
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+        if payload.get("returncode") != 0:
+            raise ValueError(
+                f"search api failed: returncode={payload.get('returncode')} message={payload.get('message')}"
+            )
+
+        result = payload.get("result") or {}
+        carlist = result.get("carlist") or []
+        if not carlist:
+            return Che168ApiResponse(
+                data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
+                message="Страница не содержит машин (API)",
+                status=404,
+            )
+
+        cars = [self._parse_api_car(item) for item in carlist]
+        page_index = parse_int_value(result.get("pageindex")) or page
+        page_count = parse_int_value(result.get("pagecount")) or page_index
+        has_more = page_index < page_count
+
+        return Che168ApiResponse(
+            data=Che168Data(
+                has_more=has_more,
+                search_sh_sku_info_list=cars,
+                total=len(cars),
+            ),
+            message="Success (signed API)",
+            status=200,
+        )
 
     def _setup_driver(self):
         """Настройка Chrome драйвера"""
@@ -201,16 +432,16 @@ class Che168Parser(BaseCarParser):
         # Небольшая пауза, чтобы crashpad успел завершиться
         time.sleep(0.2)
         self.driver = None
+        temp_dir = getattr(self, "_temp_dir", None)
+        self._temp_dir = None
         # Удаляем временный user-data-dir, если создавали
-        if hasattr(self, "_temp_dir") and getattr(self, "_temp_dir"):
+        if temp_dir:
             try:
                 import shutil
-                if os.path.exists(self._temp_dir):
-                    shutil.rmtree(self._temp_dir, ignore_errors=True)
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir, ignore_errors=True)
             except Exception:
                 pass
-            finally:
-                delattr(self, "_temp_dir")
 
     def _wait_for_page_load(self, timeout: int = 20):  # Уменьшаем timeout с 30 до 20
         """Ожидание загрузки страницы"""
@@ -266,6 +497,16 @@ class Che168Parser(BaseCarParser):
             )
         if source == 'url':
             try:
+                api_result = self._fetch_cars_via_api(page)
+                if api_result and api_result.status == 200:
+                    logger.info(
+                        f"Страница {page}: получено {api_result.data.total} автомобилей через signed API"
+                    )
+                    return api_result
+            except Exception as api_error:
+                logger.warning(f"Che168 signed API fallback to browser for page {page}: {api_error}")
+
+            try:
                 self._setup_driver()
 
                 if self.driver is None:
@@ -306,11 +547,7 @@ class Che168Parser(BaseCarParser):
                     except:
                         soup = BeautifulSoup(page_source, 'html.parser')
 
-                    cars_elements = soup.select('div.content.card-wrap ul.viewlist_ul li.cards-li')
-                    cars = [self._parse_li_to_car(li) for li in cars_elements]
-
-                    # Фильтруем рекламные блоки (car_id == None)
-                    cars = [car for car in cars if car.car_id is not None]
+                    cars = self._extract_cars_from_soup(soup)
 
                     # Если данных нет - возможно блокировка, retry + Playwright fallback
                     if not cars:
@@ -342,9 +579,7 @@ class Che168Parser(BaseCarParser):
                                 except Exception:
                                     soup_f = BeautifulSoup(fallback_html, 'html.parser')
                                 
-                                cars_elements_f = soup_f.select('div.content.card-wrap ul.viewlist_ul li.cards-li')
-                                cars_f = [self._parse_li_to_car(li) for li in cars_elements_f]
-                                cars_f = [car for car in cars_f if car.car_id is not None]
+                                cars_f = self._extract_cars_from_soup(soup_f)
 
                                 if cars_f:
                                     has_more = self._check_has_more_pages(soup_f, page)
@@ -361,7 +596,7 @@ class Che168Parser(BaseCarParser):
                             except Exception as e:
                                 logger.warning(f"Playwright fallback parse error: {e}")
 
-                        logger.warning(f"Страница {page}: не найдено машин (элементов: {len(cars_elements)})")
+                        logger.warning(f"Страница {page}: не найдено машин после Selenium/Playwright fallback")
                         return Che168ApiResponse(
                             data=Che168Data(has_more=False, search_sh_sku_info_list=[], total=0),
                             message=f"Страница {page} не содержит машин",
@@ -414,16 +649,25 @@ class Che168Parser(BaseCarParser):
             except Exception as e:
                 logger.error(f"Ошибка при парсинге страницы {page}: {e}")
                 try:
+                    fallback_html = self._fetch_with_playwright(page)
+                    if fallback_html:
+                        from bs4 import BeautifulSoup
+                        try:
+                            soup_f = BeautifulSoup(fallback_html, 'lxml')
+                        except Exception:
+                            soup_f = BeautifulSoup(fallback_html, 'html.parser')
+                        cars_f = self._extract_cars_from_soup(soup_f)
+                        if cars_f:
+                            has_more = self._check_has_more_pages(soup_f, page)
+                            return Che168ApiResponse(
+                                data=Che168Data(has_more=has_more, search_sh_sku_info_list=cars_f, total=len(cars_f)),
+                                message=f"Success (Playwright fallback after Selenium error: {e})",
+                                status=200
+                            )
+
                     # Если успели распарсить хотя бы часть данных, вернем их
                     # Проверяем, что soup был создан и доступен
-                    cars_elements = []
-                    if soup is not None:
-                        try:
-                            cars_elements = soup.select('div.content.card-wrap ul.viewlist_ul li.cards-li')
-                        except:
-                            pass
-                    cars = [self._parse_li_to_car(li) for li in cars_elements] if cars_elements else []
-                    cars = [car for car in cars if getattr(car, 'car_id', None) is not None]
+                    cars = self._extract_cars_from_soup(soup)
                     return Che168ApiResponse(
                         data=Che168Data(has_more=False, search_sh_sku_info_list=cars, total=len(cars)),
                         message=f"Partial success on page {page}: returned {len(cars)} cars; error: {e}",
@@ -503,28 +747,43 @@ class Che168Parser(BaseCarParser):
             return None
 
         url = self._build_url(page)
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=self.headless)
-                context = browser.new_context(
-                    viewport={"width": 1920, "height": 1080},
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    locale="zh-CN",
-                )
-                context.set_extra_http_headers({"Accept-Language": "zh-CN,zh;q=0.9"})
+        last_error = None
+        for attempt in range(1, 3):
+            try:
+                with sync_playwright() as p:
+                    launch_kwargs = {"headless": self.headless}
+                    chrome_bin = os.environ.get("CHROME_BIN") or "/usr/bin/chromium"
+                    if chrome_bin:
+                        launch_kwargs["executable_path"] = chrome_bin
+                    browser = p.chromium.launch(**launch_kwargs)
+                    context = browser.new_context(
+                        viewport={"width": 1920, "height": 1080},
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        locale="zh-CN",
+                    )
+                    context.set_extra_http_headers({"Accept-Language": "zh-CN,zh;q=0.9"})
 
-                page_obj = context.new_page()
-                page_obj.goto(url, wait_until="networkidle", timeout=30000)
-                page_obj.wait_for_timeout(2000)
-                page_obj.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-                page_obj.wait_for_timeout(1000)
+                    page_obj = context.new_page()
+                    page_obj.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    try:
+                        page_obj.wait_for_selector("li.cards-li", timeout=15000)
+                    except Exception:
+                        pass
+                    page_obj.wait_for_timeout(1500)
+                    page_obj.evaluate("window.scrollTo(0, document.body.scrollHeight);")
+                    page_obj.wait_for_timeout(800)
 
-                html = page_obj.content()
-                browser.close()
-                return html
-        except Exception as e:
-            logger.warning(f"Playwright fallback failed for page {page}: {e}")
-            return None
+                    html = page_obj.content()
+                    browser.close()
+                    return html
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Playwright fallback attempt {attempt}/2 failed for page {page}: {e}")
+                if attempt < 2:
+                    time.sleep(2)
+
+        logger.warning(f"Playwright fallback failed for page {page}: {last_error}")
+        return None
 
     def _check_has_more_pages(self, soup, current_page: int = 1) -> bool:
         """Проверяет, есть ли еще страницы"""
@@ -562,6 +821,14 @@ class Che168Parser(BaseCarParser):
         except Exception as e:
             logger.warning(f"Ошибка при проверке пагинации: {e}")
             return current_page < 100  # Fallback: продолжаем до 100
+
+    def _extract_cars_from_soup(self, soup) -> list[Che168Car]:
+        """Извлекает список машин из HTML soup."""
+        if soup is None:
+            return []
+        cars_elements = soup.select('div.content.card-wrap ul.viewlist_ul li.cards-li')
+        cars = [self._parse_li_to_car(li) for li in cars_elements]
+        return [car for car in cars if car.car_id is not None]
 
     def _parse_li_to_car(self, li) -> Che168Car:
         """Приватный метод для парсинга элемента li в объект Che168Car"""

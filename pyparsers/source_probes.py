@@ -51,6 +51,7 @@ class SourceProbe:
     summarize_detail: Callable[[Any, Dict[str, Any]], bool]
     list_timeout: int = 60
     detail_timeout: int = 120
+    max_candidates: int = 5
 
 
 async def run_source_probe(probe: SourceProbe) -> dict:
@@ -74,22 +75,38 @@ async def run_source_probe(probe: SourceProbe) -> dict:
             details["list_message"] = listing.get("message")
         return build_blocked_payload(probe.source, 1, checks, details)
 
-    candidate = pick_probe_candidate(cars, probe.candidate_fields)
-    if candidate is None:
+    candidate_pool = [item for item in cars if all(probe_item_value(item, field) for field in probe.candidate_fields)]
+    if not candidate_pool:
         details["detail_reason"] = "no_probe_candidate"
         return build_blocked_payload(probe.source, 1, checks, details)
 
-    for field in probe.candidate_fields:
-        details[f"probe_{field}"] = probe_item_value(candidate, field)
+    skipped_candidates = 0
+    last_details: Dict[str, Any] = {}
 
-    try:
-        detail_response = await asyncio.wait_for(probe.detail_fetch(candidate), timeout=probe.detail_timeout)
-    except Exception as exc:
-        details["detail_error"] = probe_error_message(exc)
-        return build_blocked_payload(probe.source, 1, checks, details)
+    for candidate in candidate_pool[:probe.max_candidates]:
+        candidate_details: Dict[str, Any] = {}
+        for field in probe.candidate_fields:
+            candidate_details[f"probe_{field}"] = probe_item_value(candidate, field)
 
-    if probe.summarize_detail(detail_response, details):
-        checks["detailed"] = 1
-        return build_blocked_payload(probe.source, 0, checks, details)
+        try:
+            detail_response = await asyncio.wait_for(probe.detail_fetch(candidate), timeout=probe.detail_timeout)
+        except Exception as exc:
+            candidate_details["detail_error"] = probe_error_message(exc)
+            last_details = candidate_details
+            skipped_candidates += 1
+            continue
+
+        if probe.summarize_detail(detail_response, candidate_details):
+            candidate_details["skipped_candidates"] = skipped_candidates
+            checks["detailed"] = 1
+            details.update(candidate_details)
+            return build_blocked_payload(probe.source, 0, checks, details)
+
+        last_details = candidate_details
+        skipped_candidates += 1
+
+    if last_details:
+        last_details["skipped_candidates"] = skipped_candidates
+        details.update(last_details)
 
     return build_blocked_payload(probe.source, 1, checks, details)

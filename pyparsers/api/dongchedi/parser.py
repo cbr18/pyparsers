@@ -399,9 +399,10 @@ class DongchediParser(BaseCarParser):
 
         result = self._parse_sku_detail(sku_detail, str(sku_id))
 
-        power_block = sku_detail.get("car_config_overview", {}).get("power", {})
-        space_block = sku_detail.get("car_config_overview", {}).get("space", {})
-        manipulation_block = sku_detail.get("car_config_overview", {}).get("manipulation", {})
+        config_overview = sku_detail.get("car_config_overview") or {}
+        power_block = config_overview.get("power") or {}
+        space_block = config_overview.get("space") or {}
+        manipulation_block = config_overview.get("manipulation") or {}
 
         horsepower = normalize_power_value(power_block.get("horsepower"))
         if horsepower is not None:

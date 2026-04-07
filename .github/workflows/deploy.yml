@@ -2,9 +2,11 @@ name: Deploy
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
 
 concurrency:
   group: production-deploy
@@ -12,7 +14,14 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -25,6 +34,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Prepare CI env file
         shell: bash
@@ -84,8 +95,14 @@ jobs:
           ssh -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" '
             set -euxo pipefail
             DEPLOY_PATH="'"${DEPLOY_PATH_VALUE}"'"
+            RELEASE_DIR="${DEPLOY_PATH}.incoming"
             mkdir -p "${DEPLOY_PATH}"
-            tar -xzf /tmp/pyparsers-release.tar.gz -C "${DEPLOY_PATH}"
+            rm -rf "${RELEASE_DIR}"
+            mkdir -p "${RELEASE_DIR}"
+            tar -xzf /tmp/pyparsers-release.tar.gz -C "${RELEASE_DIR}"
+            find "${DEPLOY_PATH}" -mindepth 1 -maxdepth 1 ! -name ".env" -exec rm -rf {} +
+            cp -a "${RELEASE_DIR}/." "${DEPLOY_PATH}/"
+            rm -rf "${RELEASE_DIR}"
             cd "${DEPLOY_PATH}"
             pwd
             ls -la
@@ -94,5 +111,7 @@ jobs:
             docker compose version
             docker compose config -q
             docker compose up -d --build --remove-orphans
+            curl -fsS http://127.0.0.1:5001/health >/dev/null
+            curl -fsS http://127.0.0.1:5002/health >/dev/null
             docker compose ps
           '

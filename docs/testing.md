@@ -50,6 +50,7 @@ curl -s -X POST http://localhost:5002/che168/detailed/parse \
 ## Notes
 
 - blocked endpoints are public like `/health`, so external monitoring can call them without adding the monitor IP to `ALLOWED_IPS`
+- for local Docker access to `localhost:5001/5002`, the app may see the client as the bridge gateway IP rather than `127.0.0.1`; in this setup that means adding `172.30.0.1` to `ALLOWED_IPS`
 - the response includes `checks.list`, `checks.detailed`, and probe details for quick diagnostics
 - `che168` remains externally unstable; timeouts there are not automatically a local bug.
 - The smoke test is stdlib-only, so it can run without setting up a separate pytest environment on the host.

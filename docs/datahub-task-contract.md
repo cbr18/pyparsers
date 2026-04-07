@@ -144,7 +144,12 @@ Behavior:
   - `parameters.id_field`, default `sku_id`
   - `parameters.existing_ids`
 - `detailed`
-  - `parameters.car_ids`
+  - `parameters.items`
+  - each item may contain:
+    - `external_id`
+    - optional `secondary_id`
+    - optional `force_update`
+  - `external_id` is used as the detail lookup id
 
 ### Che168
 
@@ -154,11 +159,13 @@ Behavior:
   - `parameters.id_field`, default `car_id`
   - `parameters.existing_ids`
 - `detailed`
-  - `parameters.requests`
+  - `parameters.items`
   - each item must contain:
-    - `car_id`
-    - `shop_id`
+    - `external_id`
+    - `secondary_id`
     - optional `force_update`
+  - `external_id` maps to `car_id`
+  - `secondary_id` maps to `shop_id`
 
 ## Why This Contract
 

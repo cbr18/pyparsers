@@ -446,6 +446,34 @@ def _normalize_che168_listing_car(car_dict: dict, index: int, total: int) -> Opt
     return car_dict
 
 
+def _normalize_detailed_items(source: str, parameters: Dict[str, Any]) -> list[dict[str, Any]]:
+    items = parameters.get("items") or []
+    if not items:
+        raise ValueError(f"parameters.items must contain at least one {source} detailed item")
+
+    normalized_items: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError(f"each {source} detailed item must be an object")
+
+        external_id = str(item.get("external_id", "")).strip()
+        secondary_id = str(item.get("secondary_id", "")).strip()
+        if not external_id:
+            raise ValueError(f"each {source} detailed item must include external_id")
+        if source == "che168" and not secondary_id:
+            raise ValueError("each che168 detailed item must include secondary_id")
+
+        normalized_items.append(
+            {
+                "external_id": external_id,
+                "secondary_id": secondary_id or None,
+                "force_update": bool(item.get("force_update", False)),
+            }
+        )
+
+    return normalized_items
+
+
 def build_task_service(source: str) -> TaskService:
     if source == "dongchedi":
         return TaskService(source=source, runners=_build_dongchedi_runners())
@@ -557,23 +585,23 @@ def _build_dongchedi_runners():
 
     async def detailed(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
         parser = DongchediParser()
-        car_ids = [str(car_id) for car_id in parameters.get("car_ids", []) if car_id]
-        if not car_ids:
-            raise ValueError("parameters.car_ids must contain at least one dongchedi car id")
+        normalized_items = _normalize_detailed_items("dongchedi", parameters)
 
         await context.set_stage(
             TaskStage.DETAILED,
             message="Parsing dongchedi detailed cars",
             progress_current=0,
-            progress_total=len(car_ids),
+            progress_total=len(normalized_items),
             progress_unit="car",
         )
 
         results = []
         success_count = 0
-        for index, car_id in enumerate(car_ids, start=1):
+        for index, item in enumerate(normalized_items, start=1):
             await context.check_cancelled()
-            car_obj, meta = await context.run_sync(parser.fetch_car_detail, car_id)
+            external_id = item["external_id"]
+            secondary_id = item["secondary_id"]
+            car_obj, meta = await context.run_sync(parser.fetch_car_detail, external_id)
             if car_obj is not None:
                 results.append({
                     "status": meta.get("status", 200),
@@ -584,17 +612,23 @@ def _build_dongchedi_runners():
             else:
                 results.append({
                     "status": meta.get("status", 500),
-                    "car": {"car_id": car_id, "is_available": False, "source": "dongchedi", "error": meta.get("error")},
+                    "car": {
+                        "car_id": secondary_id or external_id,
+                        "sku_id": external_id,
+                        "is_available": False,
+                        "source": "dongchedi",
+                        "error": meta.get("error"),
+                    },
                     "meta": meta,
                 })
 
             await context.update(
-                message=f"Processed dongchedi detailed car {index}/{len(car_ids)}",
+                message=f"Processed dongchedi detailed car {index}/{len(normalized_items)}",
                 progress_current=index,
                 items_processed=index,
             )
 
-        summary = {"requested": len(car_ids), "successful": success_count, "failed": len(car_ids) - success_count}
+        summary = {"requested": len(normalized_items), "successful": success_count, "failed": len(normalized_items) - success_count}
         await context.set_stage(TaskStage.FINALIZING, message="Finalizing dongchedi detailed result")
         return TaskRunResult(result=results, summary=summary)
 
@@ -701,26 +735,24 @@ def _build_che168_runners():
         return TaskRunResult(result=list(data), summary=summary)
 
     async def detailed(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
-        requests = parameters.get("requests") or []
-        if not requests:
-            raise ValueError("parameters.requests must contain at least one che168 detailed request")
+        normalized_items = _normalize_detailed_items("che168", parameters)
 
         await context.set_stage(
             TaskStage.DETAILED,
             message="Parsing che168 detailed cars",
             progress_current=0,
-            progress_total=len(requests),
+            progress_total=len(normalized_items),
             progress_unit="car",
         )
 
         results = []
         success_count = 0
-        for index, raw_request in enumerate(requests, start=1):
+        for index, item in enumerate(normalized_items, start=1):
             await context.check_cancelled()
             detail_request = CarDetailRequest(
-                car_id=int(raw_request["car_id"]),
-                shop_id=int(raw_request["shop_id"]),
-                force_update=bool(raw_request.get("force_update", False)),
+                car_id=int(item["external_id"]),
+                shop_id=int(item["secondary_id"]),
+                force_update=bool(item.get("force_update", False)),
             )
             detail = await parse_car_details(detail_request)
             detail_payload = detail.model_dump() if hasattr(detail, "model_dump") else detail.dict()
@@ -729,12 +761,12 @@ def _build_che168_runners():
                 success_count += 1
 
             await context.update(
-                message=f"Processed che168 detailed car {index}/{len(requests)}",
+                message=f"Processed che168 detailed car {index}/{len(normalized_items)}",
                 progress_current=index,
                 items_processed=index,
             )
 
-        summary = {"requested": len(requests), "successful": success_count, "failed": len(requests) - success_count}
+        summary = {"requested": len(normalized_items), "successful": success_count, "failed": len(normalized_items) - success_count}
         await context.set_stage(TaskStage.FINALIZING, message="Finalizing che168 detailed result")
         return TaskRunResult(result=results, summary=summary)
 

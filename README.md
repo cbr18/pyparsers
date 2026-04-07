@@ -32,6 +32,7 @@ All markdown guides now live in `docs/`.
 - [`docs/api-documentation.md`](docs/api-documentation.md) / [`docs/api-examples.md`](docs/api-examples.md) – REST reference
 - [`docs/data-structure.md`](docs/data-structure.md) – task snapshot/result schema and parser payload shape
 - [`docs/datahub-task-contract.md`](docs/datahub-task-contract.md) – how datahub should orchestrate parser jobs
+- [`pyparsers-detailed-task-contract.md`](pyparsers-detailed-task-contract.md) – final unified `detailed` task envelope for `datahub -> pyparsers`
 - [`docs/telegram-app.md`](docs/telegram-app.md) – React/Angular UIs and image proxy
 - [`docs/services.md`](docs/services.md) – translator and admin bot details
 - [`docs/testing.md`](docs/testing.md) – smoke and integration checks for the split parser services

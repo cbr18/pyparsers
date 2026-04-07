@@ -108,7 +108,7 @@
   - `existing_ids: string[]`
   - `id_field: "sku_id" | "car_id"`; по умолчанию `sku_id`
 - `detailed`
-  - `car_ids: string[]`
+  - `items: [{ "external_id": string, "secondary_id"?: string, "force_update"?: boolean }]`
 
 ### `che168`
 
@@ -118,7 +118,7 @@
   - `existing_ids: string[]`
   - `id_field: string`; по умолчанию `car_id`
 - `detailed`
-  - `requests: [{ "car_id": number, "shop_id": number, "force_update"?: boolean }]`
+  - `items: [{ "external_id": string, "secondary_id": string, "force_update"?: boolean }]`
 
 ## Получение результата
 

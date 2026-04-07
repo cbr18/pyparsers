@@ -171,7 +171,10 @@ Additional endpoints:
   - `parameters.id_field` default: `sku_id`
   - `parameters.existing_ids` list
 - `detailed`
-  - `parameters.car_ids` list of dongchedi car IDs
+  - `parameters.items` list of:
+    - `external_id`
+    - optional `secondary_id`
+    - optional `force_update`
 
 ## Che168 Service
 
@@ -193,9 +196,9 @@ Additional endpoints:
   - `parameters.id_field` default: `car_id`
   - `parameters.existing_ids` list
 - `detailed`
-  - `parameters.requests` list of:
-    - `car_id`
-    - `shop_id`
+  - `parameters.items` list of:
+    - `external_id`
+    - `secondary_id`
     - optional `force_update`
 
 ## Blocked Probe

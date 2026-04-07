@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pyparsers"))
 
 from models import TaskCreateRequest, TaskStage, TaskStatus, TaskType
-from task_service import TaskCancelledError, TaskRunResult, TaskService
+from task_service import TaskRunResult, TaskService, _normalize_detailed_items
 
 
 class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -84,6 +84,49 @@ class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.status, TaskStatus.FAILED)
         self.assertEqual(snapshot.stage, TaskStage.FAILED)
         self.assertEqual(snapshot.error_message, "boom")
+
+    def test_normalize_detailed_items_for_dongchedi(self):
+        items = _normalize_detailed_items(
+            "dongchedi",
+            {
+                "items": [
+                    {"external_id": "39813", "secondary_id": "dc-car-1", "force_update": True},
+                    {"external_id": 39814},
+                ]
+            },
+        )
+
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["external_id"], "39813")
+        self.assertEqual(items[0]["secondary_id"], "dc-car-1")
+        self.assertTrue(items[0]["force_update"])
+        self.assertEqual(items[1]["external_id"], "39814")
+        self.assertIsNone(items[1]["secondary_id"])
+
+    def test_normalize_detailed_items_for_che168_requires_secondary_id(self):
+        with self.assertRaisesRegex(ValueError, "secondary_id"):
+            _normalize_detailed_items(
+                "che168",
+                {"items": [{"external_id": "57885738"}]},
+            )
+
+        items = _normalize_detailed_items(
+            "che168",
+            {"items": [{"external_id": "57885738", "secondary_id": "629891", "force_update": False}]},
+        )
+        self.assertEqual(items[0]["external_id"], "57885738")
+        self.assertEqual(items[0]["secondary_id"], "629891")
+        self.assertFalse(items[0]["force_update"])
+
+    def test_normalize_detailed_items_rejects_legacy_parameter_shapes(self):
+        with self.assertRaisesRegex(ValueError, "parameters.items"):
+            _normalize_detailed_items("dongchedi", {"car_ids": ["39813"]})
+
+        with self.assertRaisesRegex(ValueError, "parameters.items"):
+            _normalize_detailed_items(
+                "che168",
+                {"requests": [{"car_id": 57885738, "shop_id": 629891}]},
+            )
 
 
 if __name__ == "__main__":

@@ -65,7 +65,10 @@ curl -X POST http://localhost:5001/tasks \
   -d '{
     "task_type": "detailed",
     "parameters": {
-      "car_ids": ["39813","39814"]
+      "items": [
+        {"external_id": "39813", "secondary_id": "dc-car-1", "force_update": false},
+        {"external_id": "39814", "force_update": true}
+      ]
     }
   }'
 ```
@@ -78,8 +81,8 @@ curl -X POST http://localhost:5002/tasks \
   -d '{
     "task_type": "detailed",
     "parameters": {
-      "requests": [
-        {"car_id": 57885738, "shop_id": 629891, "force_update": false}
+      "items": [
+        {"external_id": "57885738", "secondary_id": "629891", "force_update": false}
       ]
     }
   }'

@@ -5,22 +5,82 @@
     "version": "1"
   },
   "servers": [
-    { "url": "https://car-catch.ru" }
+    {
+      "url": "https://car-catch.ru"
+    }
   ],
   "paths": {
     "/cars": {
       "get": {
         "summary": "Получить список машин",
         "description": "Список машин с фильтрами и пагинацией",
-        "tags": ["cars"],
+        "tags": [
+          "cars"
+        ],
         "parameters": [
-          { "name": "page", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 1} },
-          { "name": "limit", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 1} },
-          { "name": "source", "in": "query", "required": false, "schema": {"type": "string", "enum": ["dongchedi", "che168", "encar"]} },
-          { "name": "brand", "in": "query", "required": false, "schema": {"type": "string"} },
-          { "name": "city", "in": "query", "required": false, "schema": {"type": "string"} },
-          { "name": "year", "in": "query", "required": false, "schema": {"type": "string"} },
-          { "name": "search", "in": "query", "required": false, "schema": {"type": "string"} }
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "dongchedi",
+                "che168",
+                "encar"
+              ]
+            }
+          },
+          {
+            "name": "brand",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "city",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -32,11 +92,18 @@
                   "properties": {
                     "data": {
                       "type": "array",
-                      "items": { "$ref": "#/components/schemas/Car" }
+                      "items": {
+                        "$ref": "#/components/schemas/Car"
+                      }
                     },
-                    "total": { "type": "integer" }
+                    "total": {
+                      "type": "integer"
+                    }
                   },
-                  "required": ["data", "total"]
+                  "required": [
+                    "data",
+                    "total"
+                  ]
                 }
               }
             }
@@ -48,7 +115,9 @@
       "post": {
         "summary": "Проверить машину по источнику и id/url",
         "description": "Проверяет наличие и детали машины по источнику (dongchedi/che168/encar) и id/url",
-        "tags": ["cars"],
+        "tags": [
+          "cars"
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -56,11 +125,25 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "source": { "type": "string", "enum": ["dongchedi", "che168", "encar"] },
-                  "car_id": { "type": "string" },
-                  "car_url": { "type": "string", "format": "uri" }
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "dongchedi",
+                      "che168",
+                      "encar"
+                    ]
+                  },
+                  "car_id": {
+                    "type": "string"
+                  },
+                  "car_url": {
+                    "type": "string",
+                    "format": "uri"
+                  }
                 },
-                "required": ["source"]
+                "required": [
+                  "source"
+                ]
               }
             }
           }
@@ -68,33 +151,77 @@
         "responses": {
           "200": {
             "description": "OK",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Car" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Car"
+                }
+              }
+            }
           },
-          "400": { "description": "Bad Request" },
-          "500": { "description": "Internal Server Error" }
+          "400": {
+            "description": "Bad Request"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
         }
       }
     },
     "/update/{source}/full": {
       "get": {
         "summary": "Полное обновление источника",
-        "tags": ["update"],
+        "tags": [
+          "update"
+        ],
         "parameters": [
-          { "name": "source", "in": "path", "required": true, "schema": {"type": "string", "enum": ["dongchedi", "che168", "encar"]} }
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "dongchedi",
+                "che168",
+                "encar"
+              ]
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "OK" },
-          "400": { "description": "Bad Request" },
-          "500": { "description": "Internal Server Error" }
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
         }
       }
     },
     "/update/{source}": {
       "post": {
         "summary": "Инкрементальное обновление источника",
-        "tags": ["update"],
+        "tags": [
+          "update"
+        ],
         "parameters": [
-          { "name": "source", "in": "path", "required": true, "schema": {"type": "string", "enum": ["dongchedi", "che168", "encar"]} }
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "dongchedi",
+                "che168",
+                "encar"
+              ]
+            }
+          }
         ],
         "requestBody": {
           "required": true,
@@ -102,22 +229,35 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "properties": { "last_n": { "type": "integer", "minimum": 1 } }
+                "properties": {
+                  "last_n": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "OK" },
-          "400": { "description": "Bad Request" },
-          "500": { "description": "Internal Server Error" }
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
         }
       }
     },
     "/brands": {
       "get": {
         "summary": "Получить список брендов",
-        "tags": ["brands"],
+        "tags": [
+          "brands"
+        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -128,10 +268,14 @@
                   "properties": {
                     "data": {
                       "type": "array",
-                      "items": { "$ref": "#/components/schemas/Brand" }
+                      "items": {
+                        "$ref": "#/components/schemas/Brand"
+                      }
                     }
                   },
-                  "required": ["data"]
+                  "required": [
+                    "data"
+                  ]
                 }
               }
             }
@@ -142,9 +286,18 @@
     "/api/tasks/{id}/complete": {
       "post": {
         "summary": "Завершить задачу парсинга (callback из pyparsers)",
-        "tags": ["tasks"],
+        "tags": [
+          "tasks"
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": {"type": "string"} }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
@@ -153,93 +306,375 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "task_id": { "type": "string" },
-                  "source": { "type": "string", "enum": ["dongchedi", "che168", "encar"] },
-                  "task_type": { "type": "string", "enum": ["full", "incremental"] },
-                  "status": { "type": "string" },
-                  "data": { "type": "array", "items": { "$ref": "#/components/schemas/Car" } }
+                  "task_id": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "dongchedi",
+                      "che168",
+                      "encar"
+                    ]
+                  },
+                  "task_type": {
+                    "type": "string",
+                    "enum": [
+                      "full",
+                      "incremental"
+                    ]
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Car"
+                    }
+                  }
                 },
-                "required": ["task_id", "source", "task_type", "status", "data"]
+                "required": [
+                  "task_id",
+                  "source",
+                  "task_type",
+                  "status",
+                  "data"
+                ]
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "OK" },
-          "400": { "description": "Bad Request" },
-          "422": { "description": "Unprocessable Entity" },
-          "500": { "description": "Internal Server Error" }
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "422": {
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
         }
       }
     },
-    "/api/cars": { "$ref": "#/x-proxy/alias#/cars" },
-    "/api/checkcar": { "$ref": "#/x-proxy/alias#/checkcar" },
-    "/api/update/{source}/full": { "$ref": "#/x-proxy/alias#/update/{source}/full" },
-    "/api/update/{source}": { "$ref": "#/x-proxy/alias#/update/{source}" },
-    "/api/brands": { "$ref": "#/x-proxy/alias#/brands" }
+    "/api/cars": {
+      "$ref": "#/x-proxy/alias#/cars"
+    },
+    "/api/checkcar": {
+      "$ref": "#/x-proxy/alias#/checkcar"
+    },
+    "/api/update/{source}/full": {
+      "$ref": "#/x-proxy/alias#/update/{source}/full"
+    },
+    "/api/update/{source}": {
+      "$ref": "#/x-proxy/alias#/update/{source}"
+    },
+    "/api/brands": {
+      "$ref": "#/x-proxy/alias#/brands"
+    },
+    "/parser/batches": {
+      "post": {
+        "summary": "Accept parser listing batch",
+        "description": "Idempotently accepts listing rows pushed by pyparsers while a full/incremental task is running. DataHub must upsert cars by source identity and preserve existing detailed fields.",
+        "tags": [
+          "parser-ingestion"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParserBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Batch accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParserBatchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "409": {
+            "description": "Batch currently processing"
+          },
+          "422": {
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    }
   },
   "components": {
     "schemas": {
       "Car": {
         "type": "object",
         "properties": {
-          "uuid": { "type": "string" },
-          "source": { "type": "string" },
-          "car_id": { "type": "integer", "format": "int64" },
-          "sku_id": { "type": "string" },
-          "title": { "type": "string" },
-          "car_name": { "type": "string" },
-          "year": { "type": "integer" },
-          "mileage": { "type": "integer" },
-          "price": { "type": "string" },
-          "image": { "type": "string" },
-          "link": { "type": "string" },
-          "brand_name": { "type": "string" },
-          "series_name": { "type": "string" },
-          "city": { "type": "string" },
-          "shop_id": { "type": "string" },
-          "tags": { "type": "string" },
-          "is_available": { "type": "boolean" },
-          "sort_number": { "type": "integer" },
-          "brand_id": { "type": "integer" },
-          "series_id": { "type": "integer" },
-          "car_source_city_name": { "type": "string" },
-          "tags_v2": { "type": "string" },
-          "description": { "type": "string" },
-          "color": { "type": "string" },
-          "transmission": { "type": "string" },
-          "fuel_type": { "type": "string" },
-          "engine_volume": { "type": "string" },
-          "body_type": { "type": "string" },
-          "drive_type": { "type": "string" },
-          "condition": { "type": "string" },
-          "mybrand_id": { "type": "string", "nullable": true },
-          "created_at": { "type": "string", "format": "date-time" },
-          "updated_at": { "type": "string", "format": "date-time" }
+          "uuid": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "car_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sku_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "car_name": {
+            "type": "string"
+          },
+          "year": {
+            "type": "integer"
+          },
+          "mileage": {
+            "type": "integer"
+          },
+          "price": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "link": {
+            "type": "string"
+          },
+          "brand_name": {
+            "type": "string"
+          },
+          "series_name": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "shop_id": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "string"
+          },
+          "is_available": {
+            "type": "boolean"
+          },
+          "sort_number": {
+            "type": "integer"
+          },
+          "brand_id": {
+            "type": "integer"
+          },
+          "series_id": {
+            "type": "integer"
+          },
+          "car_source_city_name": {
+            "type": "string"
+          },
+          "tags_v2": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          },
+          "transmission": {
+            "type": "string"
+          },
+          "fuel_type": {
+            "type": "string"
+          },
+          "engine_volume": {
+            "type": "string"
+          },
+          "body_type": {
+            "type": "string"
+          },
+          "drive_type": {
+            "type": "string"
+          },
+          "condition": {
+            "type": "string"
+          },
+          "mybrand_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "Brand": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "name": { "type": "string", "nullable": true },
-          "orig_name": { "type": "string", "nullable": true },
-          "created_at": { "type": "string", "format": "date-time" },
-          "updated_at": { "type": "string", "format": "date-time" },
-          "deleted_at": { "type": "string", "format": "date-time", "nullable": true }
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "orig_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deleted_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "ParserBatchRequest": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "dongchedi",
+              "che168",
+              "encar"
+            ]
+          },
+          "task_type": {
+            "type": "string",
+            "enum": [
+              "full",
+              "incremental"
+            ]
+          },
+          "batch_id": {
+            "type": "string"
+          },
+          "batch_sequence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "is_final": {
+            "type": "boolean"
+          },
+          "item_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Car"
+            }
+          }
+        },
+        "required": [
+          "task_id",
+          "source",
+          "task_type",
+          "batch_id",
+          "batch_sequence",
+          "item_count",
+          "items"
+        ]
+      },
+      "ParserBatchResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "batch_id": {
+                "type": "string"
+              },
+              "received": {
+                "type": "integer"
+              },
+              "inserted": {
+                "type": "integer"
+              },
+              "updated": {
+                "type": "integer"
+              },
+              "duplicates_in_batch": {
+                "type": "integer"
+              },
+              "duplicates_existing": {
+                "type": "integer"
+              }
+            }
+          },
+          "message": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer"
+          }
         }
       }
     }
   },
   "x-proxy": {
     "alias": {
-      "/cars": { "$ref": "#/paths/~1cars" },
-      "/checkcar": { "$ref": "#/paths/~1checkcar" },
-      "/update/{source}/full": { "$ref": "#/paths/~1update~1{source}~1full" },
-      "/update/{source}": { "$ref": "#/paths/~1update~1{source}" },
-      "/brands": { "$ref": "#/paths/~1brands" }
+      "/cars": {
+        "$ref": "#/paths/~1cars"
+      },
+      "/checkcar": {
+        "$ref": "#/paths/~1checkcar"
+      },
+      "/update/{source}/full": {
+        "$ref": "#/paths/~1update~1{source}~1full"
+      },
+      "/update/{source}": {
+        "$ref": "#/paths/~1update~1{source}"
+      },
+      "/brands": {
+        "$ref": "#/paths/~1brands"
+      },
+      "/parser/batches": {
+        "$ref": "#/paths/~1parser~1batches"
+      }
     }
   }
 }
-
-

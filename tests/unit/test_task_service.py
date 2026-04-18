@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from unittest import mock
 
 import sys
 from pathlib import Path
@@ -7,7 +8,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pyparsers"))
 
 from models import TaskCreateRequest, TaskStage, TaskStatus, TaskType
-from task_service import TaskRunResult, TaskService, _normalize_detailed_items
+from task_service import (
+    BatchDeliveryState,
+    TaskRunResult,
+    TaskService,
+    _append_unique_listing,
+    _build_batch_delivery_state,
+    _delivery_summary,
+    _flush_listing_batch,
+    _normalize_detailed_items,
+    _post_parser_batch,
+)
 
 
 class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -127,6 +138,95 @@ class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
                 "che168",
                 {"requests": [{"car_id": 57885738, "shop_id": 629891}]},
             )
+
+    def test_batch_delivery_state_requires_endpoint_for_push_mode(self):
+        with mock.patch.dict("os.environ", {"DATAHUB_URL": "", "DATAHUB_BATCH_ENDPOINT": ""}, clear=False):
+            with self.assertRaisesRegex(ValueError, "batch_endpoint"):
+                _build_batch_delivery_state({"delivery_mode": "push_batches"})
+
+        state = _build_batch_delivery_state(
+            {
+                "delivery_mode": "push_batches",
+                "batch_endpoint": "http://datahub/parser/batches",
+                "batch_size": 2,
+            }
+        )
+
+        self.assertEqual(state.endpoint, "http://datahub/parser/batches")
+        self.assertEqual(state.batch_size, 2)
+        self.assertEqual(_delivery_summary(state)["delivery_mode"], "push_batches")
+
+    def test_append_unique_listing_deduplicates_within_task(self):
+        seen = set()
+        self.assertTrue(_append_unique_listing(seen, "encar", {"car_id": 1, "sku_id": "1"}))
+        self.assertFalse(_append_unique_listing(seen, "encar", {"car_id": 1, "sku_id": "1"}))
+        self.assertTrue(_append_unique_listing(seen, "encar", {"car_id": 2, "sku_id": "2"}))
+        self.assertEqual(len(seen), 2)
+
+    def test_post_parser_batch_sends_idempotency_headers(self):
+        fake_response = mock.Mock()
+        fake_response.content = b'{"status":202}'
+        fake_response.json.return_value = {"status": 202}
+        fake_response.raise_for_status.return_value = None
+
+        payload = {
+            "task_id": "task-1",
+            "batch_id": "task-1:1",
+            "items": [{"car_id": 1}],
+        }
+
+        with mock.patch("task_service.requests.post", return_value=fake_response) as mocked_post:
+            result = _post_parser_batch(
+                endpoint="http://datahub/parser/batches",
+                payload=payload,
+                timeout_seconds=10,
+                auth_token="secret",
+            )
+
+        self.assertEqual(result, {"status": 202})
+        kwargs = mocked_post.call_args.kwargs
+        self.assertEqual(kwargs["json"], payload)
+        self.assertEqual(kwargs["headers"]["Idempotency-Key"], "task-1:1")
+        self.assertEqual(kwargs["headers"]["X-Parser-Task-Id"], "task-1")
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer secret")
+
+    async def test_final_batch_marker_is_sent_when_buffer_is_empty(self):
+        class Context:
+            task_id = "task-1"
+
+            async def run_sync(self, func, *args, **kwargs):
+                return func(*args, **kwargs)
+
+            async def update(self, **kwargs):
+                self.last_update = kwargs
+
+        delivery = BatchDeliveryState(
+            endpoint="http://datahub/parser/batches",
+            batch_size=2,
+            timeout_seconds=10,
+            max_retries=1,
+        )
+
+        with mock.patch("task_service.requests.post") as mocked_post:
+            fake_response = mock.Mock()
+            fake_response.content = b""
+            fake_response.raise_for_status.return_value = None
+            mocked_post.return_value = fake_response
+
+            await _flush_listing_batch(
+                Context(),
+                delivery,
+                source="encar",
+                task_type=TaskType.FULL,
+                page=2,
+                final=True,
+            )
+
+        payload = mocked_post.call_args.kwargs["json"]
+        self.assertEqual(payload["batch_id"], "task-1:1")
+        self.assertEqual(payload["items"], [])
+        self.assertEqual(payload["item_count"], 0)
+        self.assertTrue(payload["is_final"])
 
 
 if __name__ == "__main__":

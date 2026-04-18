@@ -45,6 +45,7 @@ Useful URLs after compose finishes:
 - `api-examples.md` – practical cURL/Postman snippets
 - `data-structure.md` – parser task snapshots, result envelopes, and payload shape
 - `datahub-task-contract.md` – parser task lifecycle and the expected datahub interaction pattern
+- `datahub-batch-ingestion-contract.md` – push-batch parser ingestion contract, integrity rules, and datahub technical assignment
 - `../pyparsers-detailed-task-contract.md` – final unified `detailed` task request shape
 - `operations.md` – deployment, migrations, task API, troubleshooting, backups
 - `database-schema.md` – tables, indexes, and field glossary

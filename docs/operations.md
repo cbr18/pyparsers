@@ -110,6 +110,7 @@ Task statuses:
 - `cancelled`
 
 This parser-side task state is execution state, not the system-of-record. The recommended orchestration contract for `datahub` lives in [`docs/datahub-task-contract.md`](datahub-task-contract.md).
+For large source ingestion, use the push-batch contract in [`docs/datahub-batch-ingestion-contract.md`](datahub-batch-ingestion-contract.md).
 
 ## Backups & Recovery
 

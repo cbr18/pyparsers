@@ -124,6 +124,8 @@ The parser returns:
 
 `result` is the actual parser payload that `datahub` should persist and post-process.
 
+For large or production ingestion jobs, prefer `parameters.delivery_mode="push_batches"`. In that mode pyparsers sends listing rows to datahub while the task is running and the final task result contains only a summary. The detailed batch contract and datahub implementation requirements live in [`datahub-batch-ingestion-contract.md`](datahub-batch-ingestion-contract.md).
+
 ## Cancellation
 
 If `datahub` decides a parser task should stop:

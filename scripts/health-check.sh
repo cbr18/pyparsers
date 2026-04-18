@@ -52,20 +52,24 @@ echo "🐳 Docker Containers:"
 echo "--------------------"
 check_container "PyParsers Dongchedi" "carcatch-pyparsers-dongchedi"
 check_container "PyParsers Che168" "carcatch-pyparsers-che168"
+check_container "PyParsers Encar" "carcatch-pyparsers-encar"
 
 echo ""
 echo "🌐 HTTP Endpoints:"
 echo "------------------"
 check_http "PyParsers Dongchedi API" "http://localhost:5001/health"
 check_http "PyParsers Che168 API" "http://localhost:5002/health"
+check_http "PyParsers Encar API" "http://localhost:5003/health"
 check_http "Dongchedi Blocked Probe" "http://localhost:5001/blocked" 200 120
 check_http "Che168 Blocked Probe" "http://localhost:5002/blocked" 200 180
+check_http "Encar Blocked Probe" "http://localhost:5003/blocked" 200 120
 
 echo ""
 echo "📊 Parser Endpoints:"
 echo "-------------"
 check_http "Dongchedi List" "http://localhost:5001/cars/page/1"
 check_http "Che168 List" "http://localhost:5002/cars/page/1" 200 60
+check_http "Encar List" "http://localhost:5003/cars/page/1" 200 60
 
 echo ""
 echo "📈 Service Statistics:"
@@ -88,3 +92,4 @@ echo ""
 echo "🔗 Quick Links:"
 echo "  Dongchedi Docs: http://localhost:5001/docs"
 echo "  Che168 Docs: http://localhost:5002/docs"
+echo "  Encar Docs: http://localhost:5003/docs"

@@ -12,6 +12,13 @@ This note condenses every parser-related document (structure, requirements, impr
 
 `enhance_car_with_details()` orchestrates stages 2 and 3, merges the data, and sets `has_details` / `last_detail_update`.
 
+Encar uses the same public list/detail/task contract but has a simpler upstream flow:
+
+- listing: `http://api.encar.com/search/car/list/premium`
+- detail: `http://api.encar.com/v1/readside/vehicle/{car_id}`
+- implementation: direct JSON API calls via `requests`, without Selenium or Playwright
+- service: `pyparsers-encar` on `:5003`, independent from the other parser containers
+
 ## Modes & Requirements
 
 - **Full mode**: iterate every page, skip previously-seen IDs, batch persist results (50‑100 per commit).
@@ -47,7 +54,7 @@ The Go `EnhancementWorker` inside datahub continuously enriches cars:
 
 ## Parser Refactor Summary
 
-- Che168 now uses the same clients, services, workers, and HTTP handlers as dongchedi. Legacy `car_detail_service.go`, `car_detail_worker.go`, and standalone handlers were removed.
+- Che168 and Encar now use the same clients, services, workers, and HTTP handlers as dongchedi. Legacy `car_detail_service.go`, `car_detail_worker.go`, and standalone handlers were removed.
 - `EnhanceCar` and `BatchEnhanceCars` live on both `DongchediClient` and `Che168Client`.
 - The enhancement worker automatically detects `car.Source` instead of branching per service, making future sources plug-and-play.
 

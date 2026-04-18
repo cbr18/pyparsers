@@ -2,7 +2,7 @@
 
 ## Overview
 
-CarCatch is a microservice platform that scrapes dongchedi.com and che168.com, enriches the data, stores it in PostgreSQL, and serves it through multiple APIs and UIs (web, Angular, Telegram, admin tools).  
+CarCatch is a microservice platform that scrapes dongchedi.com, che168.com, and encar.com, enriches the data, stores it in PostgreSQL, and serves it through multiple APIs and UIs (web, Angular, Telegram, admin tools).  
 This folder aggregates every Markdown reference so you no longer have to guess where a document lives.
 
 ## Quick Start
@@ -19,10 +19,13 @@ Useful URLs after compose finishes:
 
 - Dongchedi parser: http://localhost:5001
 - Che168 parser: http://localhost:5002
+- Encar parser: http://localhost:5003
 - Dongchedi Swagger / ReDoc: http://localhost:5001/docs
 - Che168 Swagger / ReDoc: http://localhost:5002/docs
+- Encar Swagger / ReDoc: http://localhost:5003/docs
 - Dongchedi tasks: http://localhost:5001/tasks
 - Che168 tasks: http://localhost:5002/tasks
+- Encar tasks: http://localhost:5003/tasks
 
 ## Service Map
 
@@ -30,6 +33,7 @@ Useful URLs after compose finishes:
 - `datahub` – Go API, enhancement worker, task orchestration
 - `pyparsers-dongchedi` – FastAPI service on `:5001` with direct routes like `/blocked`, `/cars/page/{page}`, `/cars/car/{car_id}`
 - `pyparsers-che168` – FastAPI service on `:5002` with direct routes like `/blocked`, `/cars/page/{page}`, `/detailed/parse`
+- `pyparsers-encar` – FastAPI service on `:5003` with direct routes like `/blocked`, `/cars/page/{page}`, `/cars/car/{car_id}`; independent from the other parser containers
 - `translator` & `redis` – async translation microservice with caching
 - `telegrambot`, `telegramapp`, `telegramngapp` – user‑facing entry points
 - `adminbot`, `adminservice`, `adminweb` – internal tooling

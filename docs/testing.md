@@ -2,10 +2,11 @@
 
 ## Split Parser Smoke Test
 
-The parser layer is split into two services:
+The parser layer is split into per-source services:
 
 - `pyparsers-dongchedi` on `http://localhost:5001`
 - `pyparsers-che168` on `http://localhost:5002`
+- `pyparsers-encar` on `http://localhost:5003`
 
 The main live smoke test is [`tests/integration/test_source_services.py`](../tests/integration/test_source_services.py).
 
@@ -17,6 +18,7 @@ It verifies:
 - dongchedi task lifecycle for a short incremental task
 - che168 list parsing
 - che168 detailed parsing for two cars when the upstream source responds
+- encar list parsing and detailed parsing can be checked manually on `:5003`
 - presence of image data in parsed responses
 
 ## Run the Smoke Test
@@ -44,10 +46,14 @@ Expected behavior:
 ```bash
 curl -s http://localhost:5001/health
 curl -s http://localhost:5002/health
+curl -s http://localhost:5003/health
 curl -s http://localhost:5001/blocked
 curl -s http://localhost:5002/blocked
+curl -s http://localhost:5003/blocked
 curl -s http://localhost:5001/cars/page/1
 curl -s http://localhost:5002/cars/page/1
+curl -s http://localhost:5003/cars/page/1
+curl -s http://localhost:5003/cars/car/40814033
 curl -s http://localhost:5001/tasks
 curl -s -X POST http://localhost:5002/detailed/parse \
   -H "Content-Type: application/json" \
@@ -57,7 +63,7 @@ curl -s -X POST http://localhost:5002/detailed/parse \
 ## Notes
 
 - blocked endpoints are public like `/health`, so external monitoring can call them without adding the monitor IP to `ALLOWED_IPS`
-- for local Docker access to `localhost:5001/5002`, the app may see the client as the bridge gateway IP rather than `127.0.0.1`; in this setup that means adding `172.30.0.1` to `ALLOWED_IPS`
+- for local Docker access to `localhost:5001/5002/5003`, the app may see the client as the bridge gateway IP rather than `127.0.0.1`; in this setup that means adding `172.30.0.1` to `ALLOWED_IPS`
 - the response includes `checks.list`, `checks.detailed`, and probe details for quick diagnostics
 - `heartbeat_at` on `/tasks/{task_id}` is the parser-side liveness signal for long-running jobs
 - `che168` remains externally unstable; timeouts there are not automatically a local bug.

@@ -37,7 +37,8 @@ Every parser task also exposes a finer-grained `stage`:
 `datahub` calls:
 
 - `POST http://localhost:5001/tasks`
-- or `POST http://localhost:5002/tasks`
+- `POST http://localhost:5002/tasks`
+- `POST http://localhost:5003/tasks`
 
 with:
 
@@ -166,6 +167,24 @@ Behavior:
     - optional `force_update`
   - `external_id` maps to `car_id`
   - `secondary_id` maps to `shop_id`
+
+### Encar
+
+- `full`
+  - no required parameters
+  - operational note: Encar has a much larger live inventory than the current Chinese sources, so full jobs can scan thousands of pages unless an orchestrator imposes a source-specific cap
+  - do not use the legacy synchronous `/update/full` path for Encar; use `/tasks` so datahub can poll heartbeat/progress and cancel if needed
+- `incremental`
+  - `parameters.id_field`, default `car_id`
+  - `parameters.existing_ids`
+- `detailed`
+  - `parameters.items`
+  - each item may contain:
+    - `external_id`
+    - optional `secondary_id`
+    - optional `force_update`
+  - `external_id` maps to Encar `car_id`
+  - `secondary_id` is not required for detail lookup
 
 ## Why This Contract
 

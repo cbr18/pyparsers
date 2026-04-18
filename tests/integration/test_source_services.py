@@ -7,6 +7,7 @@ import urllib.request
 
 DONGCHEDI_BASE_URL = os.getenv("DONGCHEDI_BASE_URL", "http://127.0.0.1:5001")
 CHE168_BASE_URL = os.getenv("CHE168_BASE_URL", "http://127.0.0.1:5002")
+ENCAR_BASE_URL = os.getenv("ENCAR_BASE_URL", "http://127.0.0.1:5003")
 
 
 def _request_json(url: str, *, method: str = "GET", payload: dict | None = None, timeout: int = 180):
@@ -94,11 +95,14 @@ def _get_block_status(base_url: str, source: str, *, allow_transport_errors: boo
 def test_blocked_endpoints_return_schema():
     dongchedi = _get_block_status(DONGCHEDI_BASE_URL, "dongchedi")
     che168 = _get_block_status(CHE168_BASE_URL, "che168", allow_transport_errors=True)
+    encar = _get_block_status(ENCAR_BASE_URL, "encar")
 
     assert dongchedi["checks"]["list"] in (0, 1)
     assert dongchedi["checks"]["detailed"] in (0, 1)
     assert che168["checks"]["list"] in (0, 1)
     assert che168["checks"]["detailed"] in (0, 1)
+    assert encar["checks"]["list"] in (0, 1)
+    assert encar["checks"]["detailed"] in (0, 1)
 
 
 def test_dongchedi_service_list_and_detailed():
@@ -194,6 +198,70 @@ def test_che168_service_list_and_detailed():
         return
 
 
+def test_encar_service_list_and_detailed():
+    block_status = _get_block_status(ENCAR_BASE_URL, "encar")
+    if block_status["blocked"] == 1:
+        print(f"encar live parsing skipped: blocked probe returned {block_status}")
+        return
+
+    listing = _request_json(f"{ENCAR_BASE_URL}/cars/page/1", timeout=90)
+    cars = listing["data"]["search_sh_sku_info_list"]
+
+    assert listing["data"]["current_page"] == 1
+    assert cars, "expected non-empty encar listing"
+
+    detailed_ok = 0
+    for item in _pick_candidates(cars):
+        detail_identifier = item.get("sku_id") or item["car_id"]
+        detail = _request_json(
+            f"{ENCAR_BASE_URL}/cars/car/{detail_identifier}",
+            timeout=90,
+        )
+        assert detail["status"] == 200
+        assert detail["data"]["source"] == "encar"
+        assert detail["data"]["sku_id"] == str(detail_identifier)
+        assert detail["data"]["car_id"] == item["car_id"]
+        _assert_has_images(detail["data"], fallback_image=item.get("image"))
+        detailed_ok += 1
+        if detailed_ok == 2:
+            break
+
+    assert detailed_ok == 2, "expected two successful encar detailed parses"
+
+
+def test_encar_task_lifecycle():
+    listing = _request_json(f"{ENCAR_BASE_URL}/cars/page/1", timeout=90)
+    cars = listing["data"]["search_sh_sku_info_list"]
+    assert cars, "expected non-empty encar listing for task smoke"
+
+    seed_id = cars[0]["car_id"]
+    created = _request_json(
+        f"{ENCAR_BASE_URL}/tasks",
+        method="POST",
+        payload={
+            "task_type": "incremental",
+            "parameters": {
+                "id_field": "car_id",
+                "existing_ids": [str(seed_id)],
+            },
+        },
+        timeout=30,
+    )
+    assert created["status"] == 202
+    task = created["data"]
+    assert task["source"] == "encar"
+    assert task["status"] == "queued"
+
+    final_task = _poll_task(ENCAR_BASE_URL, task["id"], timeout=120)
+    assert final_task["status"] == "succeeded"
+    assert final_task["stage"] == "completed"
+
+    result_payload = _request_json(f"{ENCAR_BASE_URL}/tasks/{task['id']}/result", timeout=30)
+    assert result_payload["status"] == 200
+    assert result_payload["data"]["task"]["id"] == task["id"]
+    assert isinstance(result_payload["data"]["result"], list)
+
+
 def test_dongchedi_task_lifecycle():
     listing = _request_json(f"{DONGCHEDI_BASE_URL}/cars/page/1", timeout=120)
     cars = listing["data"]["search_sh_sku_info_list"]
@@ -229,5 +297,7 @@ def test_dongchedi_task_lifecycle():
 if __name__ == "__main__":
     test_dongchedi_service_list_and_detailed()
     test_che168_service_list_and_detailed()
+    test_encar_service_list_and_detailed()
     test_dongchedi_task_lifecycle()
+    test_encar_task_lifecycle()
     print("integration checks passed")

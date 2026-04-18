@@ -202,9 +202,38 @@ def _build_che168_app() -> FastAPI:
     return app
 
 
+def _build_encar_app() -> FastAPI:
+    endpoints = {
+        "blocked": "/blocked",
+        "cars": "/cars",
+        "cars_page": "/cars/page/{page}",
+        "cars_all": "/cars/all",
+        "cars_incremental": "/cars/incremental",
+        "cars_detail": "/cars/car/{car_id}",
+        "update_full": "/update/full",
+        "tasks": "/tasks",
+        "task": "/tasks/{task_id}",
+        "task_result": "/tasks/{task_id}/result",
+        "task_cancel": "/tasks/{task_id}/cancel",
+        "docs": "/docs",
+        "redoc": "/redoc",
+    }
+    app = _build_base_app("encar", endpoints)
+    app.add_api_route("/blocked", async_api_server.get_encar_blocked_status, methods=["GET"])
+    app.add_api_route("/cars", async_api_server.get_encar_cars, methods=["GET"])
+    app.add_api_route("/cars/page/{page}", async_api_server.get_encar_cars_by_page, methods=["GET"])
+    app.add_api_route("/cars/all", async_api_server.get_encar_all_cars, methods=["GET"])
+    app.add_api_route("/cars/incremental", async_api_server.get_encar_incremental_cars, methods=["POST"])
+    app.add_api_route("/cars/car/{car_id}", async_api_server.get_encar_car_detail, methods=["GET"])
+    app.add_api_route("/update/full", async_api_server.update_encar_full, methods=["GET"])
+    return app
+
+
 def build_source_app(source: str):
     if source == "dongchedi":
         return _build_dongchedi_app()
     if source == "che168":
         return _build_che168_app()
+    if source == "encar":
+        return _build_encar_app()
     raise ValueError(f"Unsupported source: {source}")

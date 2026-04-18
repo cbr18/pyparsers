@@ -1,6 +1,6 @@
 # CarCatch
 
-CarCatch is a microservice platform that scrapes dongchedi.com and che168.com, enriches the data set, and exposes it through multiple APIs, bots, and web clients.
+CarCatch is a microservice platform that scrapes dongchedi.com, che168.com, and encar.com, enriches the data set, and exposes it through multiple APIs, bots, and web clients.
 
 ## Quick Start
 
@@ -15,12 +15,16 @@ docker compose up -d --build
 Useful URLs:
 - Dongchedi parser: http://localhost:5001
 - Che168 parser: http://localhost:5002
+- Encar parser: http://localhost:5003
 - Dongchedi docs: http://localhost:5001/docs
 - Che168 docs: http://localhost:5002/docs
+- Encar docs: http://localhost:5003/docs
 - Dongchedi blocked probe: http://localhost:5001/blocked
 - Che168 blocked probe: http://localhost:5002/blocked
+- Encar blocked probe: http://localhost:5003/blocked
 - Dongchedi tasks: http://localhost:5001/tasks
 - Che168 tasks: http://localhost:5002/tasks
+- Encar tasks: http://localhost:5003/tasks
 
 ## Documentation
 

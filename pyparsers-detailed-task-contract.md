@@ -54,6 +54,11 @@ Only the meaning of identifiers may differ by source.
 - `external_id` -> `car_id`
 - `secondary_id` -> `shop_id`
 
+### Encar
+
+- `external_id` -> Encar `car_id`
+- `secondary_id` -> optional diagnostic/persistence value; not required for Encar detail lookup
+
 ## What Must Stay Unified
 
 - `POST /tasks`

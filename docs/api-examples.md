@@ -5,6 +5,7 @@
 ```bash
 curl http://localhost:5001/health
 curl http://localhost:5002/health
+curl http://localhost:5003/health
 ```
 
 ## Blocked Probe
@@ -12,6 +13,7 @@ curl http://localhost:5002/health
 ```bash
 curl http://localhost:5001/blocked
 curl http://localhost:5002/blocked
+curl http://localhost:5003/blocked
 ```
 
 ## Dongchedi Parsing
@@ -36,6 +38,14 @@ curl -X POST http://localhost:5002/cars/car \
 curl -X POST http://localhost:5002/detailed/parse \
   -H "Content-Type: application/json" \
   -d '{"car_id":57885738,"shop_id":629891,"force_update":false}'
+```
+
+## Encar Parsing
+
+```bash
+curl http://localhost:5003/cars/page/1
+curl http://localhost:5003/cars/all
+curl http://localhost:5003/cars/car/40814033
 ```
 
 ## Create Parser Tasks
@@ -83,6 +93,21 @@ curl -X POST http://localhost:5002/tasks \
     "parameters": {
       "items": [
         {"external_id": "57885738", "secondary_id": "629891", "force_update": false}
+      ]
+    }
+  }'
+```
+
+Encar detailed:
+
+```bash
+curl -X POST http://localhost:5003/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task_type": "detailed",
+    "parameters": {
+      "items": [
+        {"external_id": "40814033", "force_update": false}
       ]
     }
   }'

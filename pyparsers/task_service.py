@@ -446,6 +446,35 @@ def _normalize_che168_listing_car(car_dict: dict, index: int, total: int) -> Opt
     return car_dict
 
 
+def _normalize_encar_listing_car(car_dict: dict, index: int, total: int) -> Optional[dict]:
+    year_val = car_dict.get("year") or car_dict.get("car_year")
+    if year_val is not None:
+        try:
+            if int(year_val) < 2017:
+                return None
+        except (ValueError, TypeError):
+            pass
+
+    car_dict.update({
+        "sort_number": total - index,
+        "source": "encar",
+    })
+
+    if car_dict.get("car_id") is not None:
+        try:
+            car_dict["car_id"] = int(car_dict["car_id"])
+        except (ValueError, TypeError):
+            car_dict["car_id"] = 0
+
+    if not car_dict.get("sku_id") and car_dict.get("car_id") is not None:
+        car_dict["sku_id"] = str(car_dict["car_id"])
+
+    if not car_dict.get("city") and car_dict.get("car_source_city_name"):
+        car_dict["city"] = car_dict["car_source_city_name"]
+
+    return car_dict
+
+
 def _normalize_detailed_items(source: str, parameters: Dict[str, Any]) -> list[dict[str, Any]]:
     items = parameters.get("items") or []
     if not items:
@@ -479,6 +508,8 @@ def build_task_service(source: str) -> TaskService:
         return TaskService(source=source, runners=_build_dongchedi_runners())
     if source == "che168":
         return TaskService(source=source, runners=_build_che168_runners())
+    if source == "encar":
+        return TaskService(source=source, runners=_build_encar_runners())
     raise ValueError(f"Unsupported source '{source}'")
 
 
@@ -768,6 +799,149 @@ def _build_che168_runners():
 
         summary = {"requested": len(normalized_items), "successful": success_count, "failed": len(normalized_items) - success_count}
         await context.set_stage(TaskStage.FINALIZING, message="Finalizing che168 detailed result")
+        return TaskRunResult(result=results, summary=summary)
+
+    return {
+        TaskType.FULL: full,
+        TaskType.INCREMENTAL: incremental,
+        TaskType.DETAILED: detailed,
+    }
+
+
+def _build_encar_runners():
+    from api.encar.parser import EncarParser
+
+    async def full(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
+        parser = EncarParser()
+        data = MemoryOptimizedList()
+        page = 1
+        pages_scanned = 0
+
+        await context.set_stage(TaskStage.LISTING, message="Collecting full encar listing", progress_current=0, progress_total=100, progress_unit="page")
+
+        while True:
+            await context.check_cancelled()
+            response = await context.run_sync(parser.fetch_cars_by_page, page)
+            pages_scanned = page
+            cars_list = getattr(response.data, "search_sh_sku_info_list", None)
+            if not cars_list:
+                break
+
+            total_cars = len(cars_list)
+            for index, car in enumerate(cars_list):
+                normalized = _normalize_encar_listing_car(car.dict(exclude_none=False), index, total_cars)
+                if normalized is not None:
+                    data.append(normalized)
+
+            await context.update(
+                message=f"Parsed encar page {page}",
+                progress_current=page,
+                items_found=len(data),
+            )
+
+            if not getattr(response.data, "has_more", False):
+                break
+            page += 1
+
+        summary = {"pages_scanned": pages_scanned, "items_found": len(data)}
+        await context.set_stage(TaskStage.FINALIZING, message="Finalizing full encar result")
+        return TaskRunResult(result=list(data), summary=summary)
+
+    async def incremental(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
+        parser = EncarParser()
+        data = MemoryOptimizedList()
+        existing_ids = parameters.get("existing_ids") or []
+        id_field = parameters.get("id_field") or "car_id"
+        existing_set = {str(x) for idx, x in enumerate(existing_ids) if x and idx < INCREMENTAL_EXISTING_LIMIT}
+        page = 1
+        pages_scanned = 0
+
+        await context.set_stage(TaskStage.LISTING, message="Collecting incremental encar listing", progress_current=0, progress_total=100, progress_unit="page")
+
+        while True:
+            await context.check_cancelled()
+            response = await context.run_sync(parser.fetch_cars_by_page, page)
+            pages_scanned = page
+            cars_list = getattr(response.data, "search_sh_sku_info_list", None)
+            if not cars_list:
+                break
+
+            found_existing = False
+            total_cars = len(cars_list)
+            for index, car in enumerate(cars_list):
+                car_dict = car.dict(exclude_none=False)
+                stop_id = car_dict.get(id_field)
+                stop_id = str(stop_id) if stop_id is not None else None
+                if stop_id and stop_id in existing_set:
+                    found_existing = True
+                    break
+
+                normalized = _normalize_encar_listing_car(car_dict, index, total_cars)
+                if normalized is not None:
+                    data.append(normalized)
+
+            await context.update(
+                message=f"Parsed encar page {page}",
+                progress_current=page,
+                items_found=len(data),
+            )
+
+            if found_existing or not getattr(response.data, "has_more", False):
+                break
+            page += 1
+
+        summary = {"pages_scanned": pages_scanned, "items_found": len(data), "id_field": id_field}
+        await context.set_stage(TaskStage.FINALIZING, message="Finalizing incremental encar result")
+        existing_set.clear()
+        gc.collect()
+        return TaskRunResult(result=list(data), summary=summary)
+
+    async def detailed(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
+        parser = EncarParser()
+        normalized_items = _normalize_detailed_items("encar", parameters)
+
+        await context.set_stage(
+            TaskStage.DETAILED,
+            message="Parsing encar detailed cars",
+            progress_current=0,
+            progress_total=len(normalized_items),
+            progress_unit="car",
+        )
+
+        results = []
+        success_count = 0
+        for index, item in enumerate(normalized_items, start=1):
+            await context.check_cancelled()
+            external_id = item["external_id"]
+            car_obj, meta = await context.run_sync(parser.fetch_car_detail, external_id)
+            if car_obj is not None:
+                results.append({
+                    "status": meta.get("status", 200),
+                    "car": car_obj.dict(),
+                    "meta": meta,
+                })
+                success_count += 1
+            else:
+                results.append({
+                    "status": meta.get("status", 500),
+                    "car": {
+                        "car_id": external_id,
+                        "sku_id": external_id,
+                        "is_available": False,
+                        "source": "encar",
+                        "error": meta.get("error"),
+                    },
+                    "meta": meta,
+                })
+
+            await context.update(
+                message=f"Processed encar detailed car {index}/{len(normalized_items)}",
+                progress_current=index,
+                items_processed=index,
+            )
+
+        summary = {"requested": len(normalized_items), "successful": success_count, "failed": len(normalized_items) - success_count}
+        await context.set_stage(TaskStage.FINALIZING, message="Finalizing encar detailed result")
         return TaskRunResult(result=results, summary=summary)
 
     return {

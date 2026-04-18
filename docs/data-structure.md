@@ -120,6 +120,19 @@
 - `detailed`
   - `items: [{ "external_id": string, "secondary_id": string, "force_update"?: boolean }]`
 
+### `encar`
+
+- `full`
+  - специальных параметров не требует
+  - operational note: источник большой, поэтому полная задача может пройти тысячи страниц; для production-оркестрации лучше задавать source-specific лимиты/окна
+  - legacy `/update/full` для Encar не запускает синхронный полный сбор; используйте `/tasks`
+- `incremental`
+  - `existing_ids: string[]`
+  - `id_field: string`; по умолчанию `car_id`
+- `detailed`
+  - `items: [{ "external_id": string, "secondary_id"?: string, "force_update"?: boolean }]`
+  - `external_id` соответствует Encar `car_id`
+
 ## Получение результата
 
 После `status=succeeded` результат забирается отдельно через `GET /tasks/{task_id}/result`.
@@ -228,5 +241,25 @@
   "city": "Shanghai",
   "source": "dongchedi",
   "sort_number": 62
+}
+```
+
+### ENCAR
+
+```json
+{
+  "car_id": 40814033,
+  "sku_id": "40814033",
+  "title": "기아 더 뉴 쏘렌토 4세대 HEV 1.6 2WD 그래비티",
+  "price": 4250.0,
+  "image": "https://ci.encar.com/carpicture/example_001.jpg",
+  "link": "https://fem.encar.com/cars/detail/40814033",
+  "brand_name": "기아",
+  "series_name": "더 뉴 쏘렌토 4세대",
+  "year": 2024,
+  "mileage": 14928,
+  "city": "울산",
+  "source": "encar",
+  "sort_number": 50
 }
 ```

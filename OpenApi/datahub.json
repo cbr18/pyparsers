@@ -16,7 +16,7 @@
         "parameters": [
           { "name": "page", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 1} },
           { "name": "limit", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 1} },
-          { "name": "source", "in": "query", "required": false, "schema": {"type": "string", "enum": ["dongchedi", "che168"]} },
+          { "name": "source", "in": "query", "required": false, "schema": {"type": "string", "enum": ["dongchedi", "che168", "encar"]} },
           { "name": "brand", "in": "query", "required": false, "schema": {"type": "string"} },
           { "name": "city", "in": "query", "required": false, "schema": {"type": "string"} },
           { "name": "year", "in": "query", "required": false, "schema": {"type": "string"} },
@@ -47,7 +47,7 @@
     "/checkcar": {
       "post": {
         "summary": "Проверить машину по источнику и id/url",
-        "description": "Проверяет наличие и детали машины по источнику (dongchedi/che168) и id/url",
+        "description": "Проверяет наличие и детали машины по источнику (dongchedi/che168/encar) и id/url",
         "tags": ["cars"],
         "requestBody": {
           "required": true,
@@ -56,7 +56,7 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "source": { "type": "string", "enum": ["dongchedi", "che168"] },
+                  "source": { "type": "string", "enum": ["dongchedi", "che168", "encar"] },
                   "car_id": { "type": "string" },
                   "car_url": { "type": "string", "format": "uri" }
                 },
@@ -80,7 +80,7 @@
         "summary": "Полное обновление источника",
         "tags": ["update"],
         "parameters": [
-          { "name": "source", "in": "path", "required": true, "schema": {"type": "string", "enum": ["dongchedi", "che168"]} }
+          { "name": "source", "in": "path", "required": true, "schema": {"type": "string", "enum": ["dongchedi", "che168", "encar"]} }
         ],
         "responses": {
           "200": { "description": "OK" },
@@ -94,7 +94,7 @@
         "summary": "Инкрементальное обновление источника",
         "tags": ["update"],
         "parameters": [
-          { "name": "source", "in": "path", "required": true, "schema": {"type": "string", "enum": ["dongchedi", "che168"]} }
+          { "name": "source", "in": "path", "required": true, "schema": {"type": "string", "enum": ["dongchedi", "che168", "encar"]} }
         ],
         "requestBody": {
           "required": true,
@@ -154,7 +154,7 @@
                 "type": "object",
                 "properties": {
                   "task_id": { "type": "string" },
-                  "source": { "type": "string", "enum": ["dongchedi", "che168"] },
+                  "source": { "type": "string", "enum": ["dongchedi", "che168", "encar"] },
                   "task_type": { "type": "string", "enum": ["full", "incremental"] },
                   "status": { "type": "string" },
                   "data": { "type": "array", "items": { "$ref": "#/components/schemas/Car" } }

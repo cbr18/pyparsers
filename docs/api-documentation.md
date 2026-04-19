@@ -120,8 +120,10 @@ Important fields:
 - `progress_current` / `progress_total` / `progress_unit`: shared progress model for `full`, `incremental`, and `detailed`
 - `items_found`: how many items are already collected
 - `items_processed`: useful for `detailed` jobs
-- `items_sent`: set when the final result payload is ready
+- `items_sent`: in pull-result mode, set when the final result payload is ready; in `delivery_mode=push_batches`, increments as listing batches are accepted by the configured batch endpoint
 - `result_available`: `true` only after terminal success
+
+For large `full` or production `incremental` jobs, prefer `POST /tasks` with `parameters.delivery_mode="push_batches"`. This mode is supported by all listing parsers: `dongchedi`, `che168`, and `encar`. The parser sends rows to `parameters.batch_endpoint` while running, then stores an empty final task result with delivery counters in `result_summary`.
 
 ### `GET /tasks/{task_id}/result`
 

@@ -24,6 +24,7 @@ Encar uses the same public list/detail/task contract but has a simpler upstream 
 - **Full mode**: iterate every page, skip previously-seen IDs, batch persist results (50‑100 per commit).
 - **Incremental mode**: walk pages until the first known ID is found, then stop (only new entries are processed).
 - **Task execution**: long-running parser jobs now expose a shared task lifecycle (`queued`, `running`, `succeeded`, `failed`, `cancelled`) with heartbeat and progress over `/tasks/*`.
+- **Batch delivery**: all listing parsers (`dongchedi`, `che168`, `encar`) support `parameters.delivery_mode="push_batches"` for `full` and `incremental` tasks. In this mode the task posts listing batches to `parameters.batch_endpoint`, deduplicates within the parser task by source identity, updates `items_sent` as batches are accepted, and leaves `GET /tasks/{task_id}/result` as an empty list plus summary counters.
 - **Filtering**: listings with year < 2017 are discarded before the expensive detail fetch.
 - **Error handling**: failed detail/spec parsing skips the record but logs category + context. No partially-filled cars are stored.
 - **Validation worker**: (future) dedicated worker in `datahub` can re-check availability and mark `is_available=false` when sources remove a listing.

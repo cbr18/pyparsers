@@ -18,8 +18,17 @@ It verifies:
 - dongchedi task lifecycle for a short incremental task
 - che168 list parsing
 - che168 detailed parsing for two cars when the upstream source responds
-- encar list parsing and detailed parsing can be checked manually on `:5003`
+- encar list parsing and detailed parsing
+- encar task lifecycle for a short incremental task
 - presence of image data in parsed responses
+
+The unit suite also verifies `delivery_mode=push_batches` through the real `TaskService` runner map for every listing source:
+
+- `dongchedi` `full` and `incremental`
+- `che168` `full` and `incremental`
+- `encar` `full` and `incremental`
+
+That test covers batch POST payloads, final empty `is_final=true` batches, deduplication across shifted pages, and parser task counters (`items_found`, `items_sent`, `result_summary.items_sent`).
 
 ## Run the Smoke Test
 
@@ -34,6 +43,7 @@ Expected behavior:
 - `POST /tasks` creates a queued parser job
 - `GET /tasks/{task_id}` exposes status, stage, progress, heartbeat, and summary counters
 - `GET /tasks/{task_id}/result` returns the final payload only after success
+- with `delivery_mode=push_batches`, parser tasks push listing rows to `parameters.batch_endpoint` while running and the final task result contains only a small summary
 - `blocked=0` means the same list and detailed code paths used by the public endpoints completed successfully
 - `blocked=1` means one of those two public parsing stages did not complete successfully
 - parser tasks use one lifecycle for every task type: `queued`, `running`, `succeeded`, `failed`, `cancelled`
@@ -59,6 +69,33 @@ curl -s -X POST http://localhost:5002/detailed/parse \
   -H "Content-Type: application/json" \
   -d '{"car_id":56481576,"force_update":true}'
 ```
+
+## Push Batch Live Check
+
+For an end-to-end local check, run a temporary batch receiver in the same Docker network as the parser containers and create incremental parser tasks with `delivery_mode=push_batches`.
+
+Example receiver:
+
+```bash
+docker run -d --rm --name pyparsers-batch-receiver \
+  --network pyparsers_default \
+  -v /tmp/pyparsers_batch_receiver.py:/batch_receiver.py:ro \
+  pyparsers-app:latest python -u /batch_receiver.py
+```
+
+Use this endpoint in parser task parameters:
+
+```json
+{
+  "delivery_mode": "push_batches",
+  "batch_endpoint": "http://pyparsers-batch-receiver:8088/parser/batches",
+  "batch_size": 2,
+  "batch_timeout_seconds": 3,
+  "batch_max_retries": 1
+}
+```
+
+The callback endpoint must be reachable from inside the parser container. A host-only `localhost` receiver will not work from Docker services.
 
 ## Notes
 

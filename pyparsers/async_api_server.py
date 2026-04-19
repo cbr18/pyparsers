@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 import ipaddress
 from api.che168.parser import Che168Parser
+from api.encar.parser import EncarParser
 from api.che168.detailed_api import (
     router as che168_detailed_router,
     CarDetailRequest,
@@ -321,6 +322,7 @@ from api.dongchedi.parser import DongchediParser
 # Создаем экземпляры парсеров
 dongchedi_parser_instance = DongchediParser()
 che168_parser_instance = Che168Parser()
+encar_parser_instance = EncarParser()
 
 # Асинхронные обертки для методов парсеров
 class AsyncDongchediWrapper:
@@ -362,9 +364,24 @@ class AsyncChe168Wrapper:
     async def async_fetch_car_detail(self, car_url):
         return await asyncio.get_event_loop().run_in_executor(None, self.parser.fetch_car_detail, car_url)
 
+
+class AsyncEncarWrapper:
+    def __init__(self, parser):
+        self.parser = parser
+
+    async def async_fetch_cars(self):
+        return await asyncio.get_event_loop().run_in_executor(None, self.parser.fetch_cars)
+
+    async def async_fetch_cars_by_page(self, page):
+        return await asyncio.get_event_loop().run_in_executor(None, self.parser.fetch_cars_by_page, page)
+
+    async def async_fetch_car_detail(self, car_id):
+        return await asyncio.get_event_loop().run_in_executor(None, self.parser.fetch_car_detail, car_id)
+
 # Оборачиваем синхронные парсеры в асинхронные обертки
 dongchedi_parser = AsyncDongchediWrapper(dongchedi_parser_instance)
 che168_parser = AsyncChe168Wrapper(che168_parser_instance)
+encar_parser = AsyncEncarWrapper(encar_parser_instance)
 
 async def root():
     """
@@ -400,7 +417,8 @@ async def health_check():
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.%fZ", time.gmtime()),
             "services": {
                 "dongchedi_parser": "available",
-                "che168_parser": "available"
+                "che168_parser": "available",
+                "encar_parser": "available"
             }
         },
         "message": "Service is healthy",
@@ -449,6 +467,24 @@ def _summarize_che168_detail(detail_response: Any, details: Dict[str, Any]) -> b
     return False
 
 
+def _summarize_encar_detail(detail_response: Any, details: Dict[str, Any]) -> bool:
+    detail_data = detail_response.get("data") if isinstance(detail_response, dict) else None
+    details["detail_status"] = detail_response.get("status") if isinstance(detail_response, dict) else None
+    if not isinstance(detail_data, dict):
+        details["detail_error"] = "detail_unavailable"
+        return False
+
+    details["detail_has_images"] = int(
+        bool(detail_data.get("image")) or bool(detail_data.get("image_gallery")) or bool(detail_data.get("image_count"))
+    )
+    details["detail_has_registration"] = int(bool(detail_data.get("first_registration_time")))
+    if detail_response.get("status") == 200 and bool(detail_data.get("title")):
+        return True
+
+    details["detail_error"] = detail_data.get("error") or "detailed_probe_failed"
+    return False
+
+
 def _build_dongchedi_probe() -> SourceProbe:
     return SourceProbe(
         source="dongchedi",
@@ -481,6 +517,20 @@ def _build_che168_probe() -> SourceProbe:
     )
 
 
+def _build_encar_probe() -> SourceProbe:
+    return SourceProbe(
+        source="encar",
+        candidate_fields=("car_id", "sku_id", "image"),
+        list_fetch=lambda: get_encar_cars_by_page(1),
+        detail_fetch=lambda candidate: get_encar_car_detail(
+            str(probe_item_value(candidate, "sku_id") or probe_item_value(candidate, "car_id"))
+        ),
+        summarize_detail=_summarize_encar_detail,
+        list_timeout=60,
+        detail_timeout=90,
+    )
+
+
 async def get_dongchedi_blocked_status():
     """Короткий probe по dongchedi: list page 1 + one detailed."""
     return await run_source_probe(_build_dongchedi_probe())
@@ -489,6 +539,215 @@ async def get_dongchedi_blocked_status():
 async def get_che168_blocked_status():
     """Короткий probe по che168: list page 1 + one detailed."""
     return await run_source_probe(_build_che168_probe())
+
+
+async def get_encar_blocked_status():
+    """Короткий probe по encar: list page 1 + one detailed."""
+    return await run_source_probe(_build_encar_probe())
+
+
+def _normalize_encar_car_dict(car_dict: Dict[str, Any], index: int, total: int) -> Optional[Dict[str, Any]]:
+    year = car_dict.get("year") or car_dict.get("car_year")
+    if year is not None:
+        try:
+            if int(year) < 2017:
+                return None
+        except (ValueError, TypeError):
+            pass
+
+    car_dict.update({
+        "sort_number": total - index,
+        "source": "encar",
+    })
+
+    if car_dict.get("car_id") is not None:
+        try:
+            car_dict["car_id"] = int(car_dict["car_id"])
+        except (ValueError, TypeError):
+            car_dict["car_id"] = 0
+
+    if car_dict.get("sku_id") is None and car_dict.get("car_id") is not None:
+        car_dict["sku_id"] = str(car_dict["car_id"])
+
+    if car_dict.get("city") is None and car_dict.get("car_source_city_name"):
+        car_dict["city"] = car_dict["car_source_city_name"]
+
+    return car_dict
+
+
+async def get_encar_cars():
+    response = await encar_parser.async_fetch_cars()
+    cars = []
+    total_cars = len(response.data.search_sh_sku_info_list)
+    for index, car in enumerate(response.data.search_sh_sku_info_list):
+        normalized = _normalize_encar_car_dict(car.dict(), index, total_cars)
+        if normalized is not None:
+            cars.append(normalized)
+
+    return {
+        "data": {
+            "has_more": response.data.has_more,
+            "search_sh_sku_info_list": cars,
+            "total": response.data.total,
+        },
+        "message": response.message,
+        "status": response.status,
+    }
+
+
+async def get_encar_cars_by_page(page: int):
+    response = await encar_parser.async_fetch_cars_by_page(page)
+    cars = []
+    total_cars = len(response.data.search_sh_sku_info_list)
+    for index, car in enumerate(response.data.search_sh_sku_info_list):
+        normalized = _normalize_encar_car_dict(car.dict(), index, total_cars)
+        if normalized is not None:
+            cars.append(normalized)
+
+    return {
+        "data": {
+            "has_more": response.data.has_more,
+            "search_sh_sku_info_list": cars,
+            "total": response.data.total,
+            "current_page": page,
+        },
+        "message": response.message,
+        "status": response.status,
+    }
+
+
+async def _collect_encar_all_cars() -> Dict[str, Any]:
+    all_cars = MemoryOptimizedList()
+    seen_ids = set()
+    page = 1
+
+    while True:
+        response = await encar_parser.async_fetch_cars_by_page(page)
+        cars_list = getattr(response.data, "search_sh_sku_info_list", None)
+        if not cars_list:
+            break
+
+        total_cars = len(cars_list)
+        for index, car in enumerate(cars_list):
+            car_dict = car.dict()
+            car_id = car_dict.get("car_id") or car_dict.get("sku_id") or car_dict.get("link")
+            if not car_id or str(car_id) in seen_ids:
+                continue
+
+            normalized = _normalize_encar_car_dict(car_dict, index, total_cars)
+            if normalized is not None:
+                all_cars.append(normalized)
+                seen_ids.add(str(car_id))
+
+        if not getattr(response.data, "has_more", False):
+            break
+        page += 1
+
+    total = len(all_cars)
+    for index, car in enumerate(all_cars):
+        car["sort_number"] = total - index
+        car["source"] = "encar"
+
+    seen_ids.clear()
+    gc.collect()
+    return {
+        "data": {
+            "search_sh_sku_info_list": all_cars,
+            "total": total,
+        },
+        "message": f"Загружено {total} машин со всех страниц.",
+        "status": 200,
+    }
+
+
+async def get_encar_all_cars():
+    lock = _get_full_fetch_lock("encar_all")
+    async with lock:
+        return await _collect_encar_all_cars()
+
+
+async def get_encar_incremental_cars(existing_cars: List[Dict]):
+    new_cars = MemoryOptimizedList()
+    existing_ids = set()
+    for car in existing_cars:
+        if len(existing_ids) >= INCREMENTAL_EXISTING_LIMIT:
+            break
+        car_id = car.get("car_id") or car.get("sku_id") or car.get("link")
+        if car_id:
+            existing_ids.add(str(car_id))
+
+    next_sort_number = _get_next_sort_number(existing_cars, "encar")
+    page = 1
+    found_existing = False
+
+    while True:
+        response = await encar_parser.async_fetch_cars_by_page(page)
+        cars_list = getattr(response.data, "search_sh_sku_info_list", None)
+        if not cars_list:
+            break
+
+        total_cars = len(cars_list)
+        for index, car in enumerate(cars_list):
+            car_dict = car.dict()
+            car_id = car_dict.get("car_id") or car_dict.get("sku_id") or car_dict.get("link")
+            if car_id and str(car_id) in existing_ids:
+                found_existing = True
+                break
+
+            normalized = _normalize_encar_car_dict(car_dict, index, total_cars)
+            if normalized is not None:
+                new_cars.append(normalized)
+
+        if found_existing or page == 10 or not getattr(response.data, "has_more", False):
+            break
+        page += 1
+
+    total_new_cars = len(new_cars)
+    for index, car in enumerate(new_cars):
+        car["sort_number"] = next_sort_number + total_new_cars - index - 1
+        car["source"] = "encar"
+
+    existing_ids.clear()
+    gc.collect()
+    return {
+        "data": {
+            "search_sh_sku_info_list": new_cars,
+            "total": total_new_cars,
+            "pages_checked": page,
+        },
+        "message": f"Найдено {total_new_cars} новых машин на {page} страницах.",
+        "status": 200,
+    }
+
+
+async def get_encar_car_detail(car_id: str):
+    car_obj, meta = await encar_parser.async_fetch_car_detail(car_id)
+    if car_obj is not None:
+        return {
+            "data": car_obj.dict(),
+            "message": "Success",
+            "status": meta.get("status", 200),
+        }
+
+    return {
+        "data": {"car_id": car_id, "sku_id": car_id, "is_available": False, "source": "encar", "error": meta.get("error")},
+        "message": f"Ошибка при парсинге: {meta.get('error')}",
+        "status": meta.get("status", 500),
+    }
+
+
+async def update_encar_full():
+    """
+    Эндпоинт для полного обновления данных encar.
+    Encar имеет большой live-каталог, поэтому синхронный legacy full endpoint
+    намеренно не запускает полный сбор. Используйте /tasks для управляемого
+    full/incremental запуска с heartbeat, progress и cancel.
+    """
+    return {
+        "count": 0,
+        "status": "unsupported",
+        "message": "Use POST /tasks with task_type=full or task_type=incremental for encar",
+    }
 
 async def get_dongchedi_cars():
     """

@@ -7,7 +7,7 @@
 | Поле | Тип PostgreSQL | Тип Go | Описание | Пример |
 |------|----------------|--------|----------|--------|
 | uuid | VARCHAR(36) | string | Уникальный идентификатор (PK) | "550e8400-e29b-41d4-a716-446655440000" |
-| source | VARCHAR(255) | string | Источник данных | "dongchedi", "che168" |
+| source | VARCHAR(255) | string | Источник данных | "dongchedi", "che168", "encar" |
 | car_id | BIGINT | int64 | ID автомобиля из источника | 123456, 55406760 |
 | sku_id | VARCHAR(255) | string | SKU идентификатор | "abc123def456" |
 
@@ -277,7 +277,6 @@
 ### Таблица `brands`
 - `id` (PRIMARY KEY)
 - `deleted_at` (для soft delete)
-
 
 
 

@@ -12,11 +12,19 @@ This note condenses every parser-related document (structure, requirements, impr
 
 `enhance_car_with_details()` orchestrates stages 2 and 3, merges the data, and sets `has_details` / `last_detail_update`.
 
+Encar uses the same public list/detail/task contract but has a simpler upstream flow:
+
+- listing: `http://api.encar.com/search/car/list/premium`
+- detail: `http://api.encar.com/v1/readside/vehicle/{car_id}`
+- implementation: direct JSON API calls via `requests`, without Selenium or Playwright
+- service: `pyparsers-encar` on `:5003`, independent from the other parser containers
+
 ## Modes & Requirements
 
 - **Full mode**: iterate every page, skip previously-seen IDs, batch persist results (50‑100 per commit).
 - **Incremental mode**: walk pages until the first known ID is found, then stop (only new entries are processed).
 - **Task execution**: long-running parser jobs now expose a shared task lifecycle (`queued`, `running`, `succeeded`, `failed`, `cancelled`) with heartbeat and progress over `/tasks/*`.
+- **Batch delivery**: all listing parsers (`dongchedi`, `che168`, `encar`) support `parameters.delivery_mode="push_batches"` for `full` and `incremental` tasks. In this mode the task posts listing batches to `parameters.batch_endpoint`, deduplicates within the parser task by source identity, updates `items_sent` as batches are accepted, and leaves `GET /tasks/{task_id}/result` as an empty list plus summary counters.
 - **Filtering**: listings with year < 2017 are discarded before the expensive detail fetch.
 - **Error handling**: failed detail/spec parsing skips the record but logs category + context. No partially-filled cars are stored.
 - **Validation worker**: (future) dedicated worker in `datahub` can re-check availability and mark `is_available=false` when sources remove a listing.
@@ -47,7 +55,7 @@ The Go `EnhancementWorker` inside datahub continuously enriches cars:
 
 ## Parser Refactor Summary
 
-- Che168 now uses the same clients, services, workers, and HTTP handlers as dongchedi. Legacy `car_detail_service.go`, `car_detail_worker.go`, and standalone handlers were removed.
+- Che168 and Encar now use the same clients, services, workers, and HTTP handlers as dongchedi. Legacy `car_detail_service.go`, `car_detail_worker.go`, and standalone handlers were removed.
 - `EnhanceCar` and `BatchEnhanceCars` live on both `DongchediClient` and `Che168Client`.
 - The enhancement worker automatically detects `car.Source` instead of branching per service, making future sources plug-and-play.
 

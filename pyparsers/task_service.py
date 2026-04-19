@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import gc
 import hashlib
 import logging
@@ -13,6 +14,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 
+import requests
+
 from api.memory_optimized import MemoryOptimizedList
 from car_filter import filter_cars_by_year
 from converters import decode_dongchedi_list_sh_price
@@ -24,6 +27,9 @@ INCREMENTAL_EXISTING_LIMIT = int(os.getenv("INCREMENTAL_EXISTING_LIMIT", "15000"
 TASK_TTL_HOURS = int(os.getenv("TASK_TTL_HOURS", "24"))
 TASK_RESULT_TTL_MINUTES = int(os.getenv("TASK_RESULT_TTL_MINUTES", "30"))
 MAX_TASKS = int(os.getenv("MAX_TASKS", "1000"))
+BATCH_DELIVERY_DEFAULT_SIZE = int(os.getenv("BATCH_DELIVERY_DEFAULT_SIZE", "500"))
+BATCH_DELIVERY_TIMEOUT_SECONDS = int(os.getenv("BATCH_DELIVERY_TIMEOUT_SECONDS", "30"))
+BATCH_DELIVERY_MAX_RETRIES = int(os.getenv("BATCH_DELIVERY_MAX_RETRIES", "3"))
 
 
 class TaskCancelledError(Exception):
@@ -92,6 +98,19 @@ class TaskRunResult:
     summary: Dict[str, Any]
 
 
+@dataclass
+class BatchDeliveryState:
+    endpoint: str
+    batch_size: int
+    timeout_seconds: int
+    max_retries: int
+    auth_token: Optional[str] = None
+    buffer: list[dict[str, Any]] = field(default_factory=list)
+    batches_sent: int = 0
+    items_sent: int = 0
+    failed_batches: int = 0
+
+
 class TaskContext:
     def __init__(self, service: "TaskService", task_id: str):
         self._service = service
@@ -144,8 +163,10 @@ class TaskContext:
         if task and task.cancel_requested:
             raise TaskCancelledError(f"Task {self.task_id} was cancelled")
 
-    async def run_sync(self, func: Callable[..., Any], *args: Any) -> Any:
+    async def run_sync(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         loop = asyncio.get_running_loop()
+        if kwargs:
+            return await loop.run_in_executor(self._service._executor, functools.partial(func, *args, **kwargs))
         return await loop.run_in_executor(self._service._executor, func, *args)
 
 
@@ -271,12 +292,29 @@ class TaskService:
 
         try:
             result = await runner(context, task.parameters)
+            result_items_sent = task.items_sent
+            if result.summary.get("delivery_mode") == "push_batches":
+                try:
+                    result_items_sent = int(result.summary.get("items_sent", task.items_sent))
+                except (TypeError, ValueError):
+                    result_items_sent = task.items_sent
+            elif isinstance(result.result, Iterable) and not isinstance(result.result, (dict, str, bytes)):
+                result_items_sent = len(result.result)
+
+            result_items_found = None
+            if "items_found" in result.summary:
+                try:
+                    result_items_found = int(result.summary["items_found"])
+                except (TypeError, ValueError):
+                    result_items_found = None
+
             await self._update_task(
                 task_id,
                 status=TaskStatus.SUCCEEDED,
                 stage=TaskStage.COMPLETED,
                 message="Task completed successfully",
-                items_sent=len(result.result) if isinstance(result.result, Iterable) and not isinstance(result.result, (dict, str, bytes)) else task.items_sent,
+                items_found=result_items_found,
+                items_sent=result_items_sent,
                 result_summary=result.summary,
                 finished_at=datetime.now(timezone.utc),
                 result_available=True,
@@ -386,6 +424,195 @@ def _hash_car_id_from_link(link: str) -> int:
     return int.from_bytes(digest[:8], byteorder="big", signed=False)
 
 
+def _build_batch_delivery_state(parameters: Dict[str, Any]) -> Optional[BatchDeliveryState]:
+    delivery_mode = str(parameters.get("delivery_mode") or "result").strip().lower()
+    if delivery_mode in ("", "result", "pull_result"):
+        return None
+    if delivery_mode != "push_batches":
+        raise ValueError(f"Unsupported delivery_mode '{delivery_mode}'")
+
+    endpoint = (
+        parameters.get("batch_endpoint")
+        or parameters.get("datahub_batch_endpoint")
+        or os.getenv("DATAHUB_BATCH_ENDPOINT")
+    )
+    if not endpoint:
+        datahub_url = os.getenv("DATAHUB_URL", "").rstrip("/")
+        if datahub_url:
+            endpoint = f"{datahub_url}/parser/batches"
+    if not endpoint:
+        raise ValueError("delivery_mode=push_batches requires parameters.batch_endpoint or DATAHUB_BATCH_ENDPOINT")
+
+    batch_size = parameters.get("batch_size") or parameters.get("batch_items") or BATCH_DELIVERY_DEFAULT_SIZE
+    try:
+        batch_size = max(1, int(batch_size))
+    except (TypeError, ValueError):
+        raise ValueError("parameters.batch_size must be a positive integer") from None
+
+    timeout_seconds = parameters.get("batch_timeout_seconds") or BATCH_DELIVERY_TIMEOUT_SECONDS
+    max_retries = parameters.get("batch_max_retries") or BATCH_DELIVERY_MAX_RETRIES
+
+    return BatchDeliveryState(
+        endpoint=str(endpoint),
+        batch_size=batch_size,
+        timeout_seconds=max(1, int(timeout_seconds)),
+        max_retries=max(1, int(max_retries)),
+        auth_token=parameters.get("batch_auth_token") or os.getenv("DATAHUB_BATCH_TOKEN"),
+    )
+
+
+def _batch_item_key(source: str, car_dict: dict[str, Any]) -> Optional[str]:
+    for field_name in ("car_id", "sku_id", "link"):
+        value = car_dict.get(field_name)
+        if value not in (None, ""):
+            return f"{source}:{field_name}:{value}"
+    return None
+
+
+def _append_unique_listing(seen_keys: set[str], source: str, car_dict: dict[str, Any]) -> bool:
+    key = _batch_item_key(source, car_dict)
+    if key is None:
+        return True
+    if key in seen_keys:
+        return False
+    seen_keys.add(key)
+    return True
+
+
+def _post_parser_batch(
+    *,
+    endpoint: str,
+    payload: dict[str, Any],
+    timeout_seconds: int,
+    auth_token: Optional[str],
+) -> dict[str, Any]:
+    headers = {
+        "Content-Type": "application/json",
+        "X-Parser-Task-Id": str(payload["task_id"]),
+        "X-Parser-Batch-Id": str(payload["batch_id"]),
+        "Idempotency-Key": str(payload["batch_id"]),
+    }
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
+
+    response = requests.post(endpoint, json=payload, headers=headers, timeout=timeout_seconds)
+    response.raise_for_status()
+    if not response.content:
+        return {}
+    try:
+        return response.json()
+    except ValueError:
+        return {"raw_response": response.text}
+
+
+async def _flush_listing_batch(
+    context: TaskContext,
+    delivery: Optional[BatchDeliveryState],
+    *,
+    source: str,
+    task_type: TaskType,
+    page: int,
+    final: bool = False,
+) -> None:
+    if delivery is None:
+        return
+    if not delivery.buffer and not final:
+        return
+
+    batch_items = delivery.buffer
+    delivery.buffer = []
+    batch_sequence = delivery.batches_sent + delivery.failed_batches + 1
+    batch_id = f"{context.task_id}:{batch_sequence}"
+    payload = {
+        "task_id": context.task_id,
+        "source": source,
+        "task_type": task_type.value,
+        "batch_id": batch_id,
+        "batch_sequence": batch_sequence,
+        "page": page,
+        "is_final": final,
+        "items": batch_items,
+        "item_count": len(batch_items),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    last_error: Optional[Exception] = None
+    for attempt in range(1, delivery.max_retries + 1):
+        try:
+            await context.run_sync(
+                _post_parser_batch,
+                endpoint=delivery.endpoint,
+                payload=payload,
+                timeout_seconds=delivery.timeout_seconds,
+                auth_token=delivery.auth_token,
+            )
+            delivery.batches_sent += 1
+            delivery.items_sent += len(batch_items)
+            await context.update(
+                message=f"Delivered {source} batch {batch_sequence}",
+                items_sent=delivery.items_sent,
+                result_summary={
+                    "delivery_mode": "push_batches",
+                    "batches_sent": delivery.batches_sent,
+                    "items_sent": delivery.items_sent,
+                    "failed_batches": delivery.failed_batches,
+                },
+            )
+            return
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Failed to deliver %s batch %s attempt %s/%s: %s",
+                source,
+                batch_id,
+                attempt,
+                delivery.max_retries,
+                exc,
+            )
+            if attempt < delivery.max_retries:
+                await asyncio.sleep(min(2 ** (attempt - 1), 10))
+
+    delivery.failed_batches += 1
+    raise RuntimeError(f"Failed to deliver parser batch {batch_id}: {last_error}") from last_error
+
+
+async def _emit_or_collect_listing(
+    context: TaskContext,
+    delivery: Optional[BatchDeliveryState],
+    data: MemoryOptimizedList,
+    car_dict: dict[str, Any],
+    *,
+    source: str,
+    task_type: TaskType,
+    page: int,
+) -> None:
+    if delivery is None:
+        data.append(car_dict)
+        return
+
+    delivery.buffer.append(car_dict)
+    if len(delivery.buffer) >= delivery.batch_size:
+        await _flush_listing_batch(
+            context,
+            delivery,
+            source=source,
+            task_type=task_type,
+            page=page,
+        )
+
+
+def _delivery_summary(delivery: Optional[BatchDeliveryState]) -> dict[str, Any]:
+    if delivery is None:
+        return {"delivery_mode": "result"}
+    return {
+        "delivery_mode": "push_batches",
+        "batches_sent": delivery.batches_sent,
+        "items_sent": delivery.items_sent,
+        "failed_batches": delivery.failed_batches,
+        "batch_size": delivery.batch_size,
+    }
+
+
 def _normalize_che168_listing_car(car_dict: dict, index: int, total: int) -> Optional[dict]:
     if not car_dict.get("link") and car_dict.get("car_id"):
         car_dict["link"] = f'https://m.che168.com/cardetail/index?infoid={car_dict["car_id"]}'
@@ -446,6 +673,35 @@ def _normalize_che168_listing_car(car_dict: dict, index: int, total: int) -> Opt
     return car_dict
 
 
+def _normalize_encar_listing_car(car_dict: dict, index: int, total: int) -> Optional[dict]:
+    year_val = car_dict.get("year") or car_dict.get("car_year")
+    if year_val is not None:
+        try:
+            if int(year_val) < 2017:
+                return None
+        except (ValueError, TypeError):
+            pass
+
+    car_dict.update({
+        "sort_number": total - index,
+        "source": "encar",
+    })
+
+    if car_dict.get("car_id") is not None:
+        try:
+            car_dict["car_id"] = int(car_dict["car_id"])
+        except (ValueError, TypeError):
+            car_dict["car_id"] = 0
+
+    if not car_dict.get("sku_id") and car_dict.get("car_id") is not None:
+        car_dict["sku_id"] = str(car_dict["car_id"])
+
+    if not car_dict.get("city") and car_dict.get("car_source_city_name"):
+        car_dict["city"] = car_dict["car_source_city_name"]
+
+    return car_dict
+
+
 def _normalize_detailed_items(source: str, parameters: Dict[str, Any]) -> list[dict[str, Any]]:
     items = parameters.get("items") or []
     if not items:
@@ -479,6 +735,8 @@ def build_task_service(source: str) -> TaskService:
         return TaskService(source=source, runners=_build_dongchedi_runners())
     if source == "che168":
         return TaskService(source=source, runners=_build_che168_runners())
+    if source == "encar":
+        return TaskService(source=source, runners=_build_encar_runners())
     raise ValueError(f"Unsupported source '{source}'")
 
 
@@ -488,6 +746,8 @@ def _build_dongchedi_runners():
     async def full(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
         parser = DongchediParser()
         data = MemoryOptimizedList()
+        delivery = _build_batch_delivery_state(parameters)
+        seen_keys: set[str] = set()
         page = 1
         pages_scanned = 0
 
@@ -513,25 +773,50 @@ def _build_dongchedi_runners():
                         car_dict["car_id"] = int(car_dict["car_id"])
                     except (ValueError, TypeError):
                         car_dict["car_id"] = 0
-                data.append(car_dict)
+                if not _append_unique_listing(seen_keys, "dongchedi", car_dict):
+                    continue
+                await _emit_or_collect_listing(
+                    context,
+                    delivery,
+                    data,
+                    car_dict,
+                    source="dongchedi",
+                    task_type=TaskType.FULL,
+                    page=page,
+                )
 
             await context.update(
                 message=f"Parsed dongchedi page {page}",
                 progress_current=page,
-                items_found=len(data),
+                items_found=len(seen_keys) if delivery is not None else len(data),
             )
 
             if not getattr(response.data, "has_more", False):
                 break
             page += 1
 
-        summary = {"pages_scanned": pages_scanned, "items_found": len(data)}
+        await _flush_listing_batch(
+            context,
+            delivery,
+            source="dongchedi",
+            task_type=TaskType.FULL,
+            page=pages_scanned,
+            final=True,
+        )
+
+        summary = {
+            "pages_scanned": pages_scanned,
+            "items_found": len(seen_keys) if delivery is not None else len(data),
+            **_delivery_summary(delivery),
+        }
         await context.set_stage(TaskStage.FINALIZING, message="Finalizing full dongchedi result")
-        return TaskRunResult(result=list(data), summary=summary)
+        return TaskRunResult(result=[] if delivery is not None else list(data), summary=summary)
 
     async def incremental(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
         parser = DongchediParser()
         data = MemoryOptimizedList()
+        delivery = _build_batch_delivery_state(parameters)
+        seen_keys: set[str] = set()
         existing_ids = parameters.get("existing_ids") or []
         id_field = parameters.get("id_field") or "sku_id"
         existing_set = {str(x) for idx, x in enumerate(existing_ids) if x and idx < INCREMENTAL_EXISTING_LIMIT}
@@ -566,22 +851,46 @@ def _build_dongchedi_runners():
                         car_dict["car_id"] = int(car_dict["car_id"])
                     except (ValueError, TypeError):
                         car_dict["car_id"] = 0
-                data.append(car_dict)
+                if not _append_unique_listing(seen_keys, "dongchedi", car_dict):
+                    continue
+                await _emit_or_collect_listing(
+                    context,
+                    delivery,
+                    data,
+                    car_dict,
+                    source="dongchedi",
+                    task_type=TaskType.INCREMENTAL,
+                    page=page,
+                )
 
             await context.update(
                 message=f"Parsed dongchedi page {page}",
                 progress_current=page,
-                items_found=len(data),
+                items_found=len(seen_keys) if delivery is not None else len(data),
             )
 
             if found_existing or not getattr(response.data, "has_more", False):
                 break
 
-        summary = {"pages_scanned": pages_scanned, "items_found": len(data), "id_field": id_field}
+        await _flush_listing_batch(
+            context,
+            delivery,
+            source="dongchedi",
+            task_type=TaskType.INCREMENTAL,
+            page=pages_scanned,
+            final=True,
+        )
+
+        summary = {
+            "pages_scanned": pages_scanned,
+            "items_found": len(seen_keys) if delivery is not None else len(data),
+            "id_field": id_field,
+            **_delivery_summary(delivery),
+        }
         await context.set_stage(TaskStage.FINALIZING, message="Finalizing incremental dongchedi result")
         existing_set.clear()
         gc.collect()
-        return TaskRunResult(result=list(data), summary=summary)
+        return TaskRunResult(result=[] if delivery is not None else list(data), summary=summary)
 
     async def detailed(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
         parser = DongchediParser()
@@ -640,12 +949,13 @@ def _build_dongchedi_runners():
 
 
 def _build_che168_runners():
-    from api.che168.detailed_api import CarDetailRequest, parse_car_details
     from api.che168.parser import Che168Parser
 
     async def full(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
         parser = Che168Parser()
         data = MemoryOptimizedList()
+        delivery = _build_batch_delivery_state(parameters)
+        seen_keys: set[str] = set()
         pages_scanned = 0
         empty_pages = 0
 
@@ -668,24 +978,49 @@ def _build_che168_runners():
             for index, car in enumerate(cars_list):
                 normalized = _normalize_che168_listing_car(car.dict(exclude_none=False), index, total_cars)
                 if normalized is not None:
-                    data.append(normalized)
+                    if not _append_unique_listing(seen_keys, "che168", normalized):
+                        continue
+                    await _emit_or_collect_listing(
+                        context,
+                        delivery,
+                        data,
+                        normalized,
+                        source="che168",
+                        task_type=TaskType.FULL,
+                        page=page,
+                    )
 
             await context.update(
                 message=f"Parsed che168 page {page}",
                 progress_current=page,
-                items_found=len(data),
+                items_found=len(seen_keys) if delivery is not None else len(data),
             )
 
             if not getattr(response.data, "has_more", False):
                 break
 
-        summary = {"pages_scanned": pages_scanned, "items_found": len(data)}
+        await _flush_listing_batch(
+            context,
+            delivery,
+            source="che168",
+            task_type=TaskType.FULL,
+            page=pages_scanned,
+            final=True,
+        )
+
+        summary = {
+            "pages_scanned": pages_scanned,
+            "items_found": len(seen_keys) if delivery is not None else len(data),
+            **_delivery_summary(delivery),
+        }
         await context.set_stage(TaskStage.FINALIZING, message="Finalizing full che168 result")
-        return TaskRunResult(result=list(data), summary=summary)
+        return TaskRunResult(result=[] if delivery is not None else list(data), summary=summary)
 
     async def incremental(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
         parser = Che168Parser()
         data = MemoryOptimizedList()
+        delivery = _build_batch_delivery_state(parameters)
+        seen_keys: set[str] = set()
         existing_ids = parameters.get("existing_ids") or []
         id_field = parameters.get("id_field") or "car_id"
         existing_set = {str(x) for idx, x in enumerate(existing_ids) if x and idx < INCREMENTAL_EXISTING_LIMIT}
@@ -717,24 +1052,50 @@ def _build_che168_runners():
 
                 normalized = _normalize_che168_listing_car(car_dict, index, total_cars)
                 if normalized is not None:
-                    data.append(normalized)
+                    if not _append_unique_listing(seen_keys, "che168", normalized):
+                        continue
+                    await _emit_or_collect_listing(
+                        context,
+                        delivery,
+                        data,
+                        normalized,
+                        source="che168",
+                        task_type=TaskType.INCREMENTAL,
+                        page=page,
+                    )
 
             await context.update(
                 message=f"Parsed che168 page {page}",
                 progress_current=page,
-                items_found=len(data),
+                items_found=len(seen_keys) if delivery is not None else len(data),
             )
 
             if found_existing:
                 break
 
-        summary = {"pages_scanned": pages_scanned, "items_found": len(data), "id_field": id_field}
+        await _flush_listing_batch(
+            context,
+            delivery,
+            source="che168",
+            task_type=TaskType.INCREMENTAL,
+            page=pages_scanned,
+            final=True,
+        )
+
+        summary = {
+            "pages_scanned": pages_scanned,
+            "items_found": len(seen_keys) if delivery is not None else len(data),
+            "id_field": id_field,
+            **_delivery_summary(delivery),
+        }
         await context.set_stage(TaskStage.FINALIZING, message="Finalizing incremental che168 result")
         existing_set.clear()
         gc.collect()
-        return TaskRunResult(result=list(data), summary=summary)
+        return TaskRunResult(result=[] if delivery is not None else list(data), summary=summary)
 
     async def detailed(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
+        from api.che168.detailed_api import CarDetailRequest, parse_car_details
+
         normalized_items = _normalize_detailed_items("che168", parameters)
 
         await context.set_stage(
@@ -768,6 +1129,200 @@ def _build_che168_runners():
 
         summary = {"requested": len(normalized_items), "successful": success_count, "failed": len(normalized_items) - success_count}
         await context.set_stage(TaskStage.FINALIZING, message="Finalizing che168 detailed result")
+        return TaskRunResult(result=results, summary=summary)
+
+    return {
+        TaskType.FULL: full,
+        TaskType.INCREMENTAL: incremental,
+        TaskType.DETAILED: detailed,
+    }
+
+
+def _build_encar_runners():
+    from api.encar.parser import EncarParser
+
+    async def full(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
+        parser = EncarParser()
+        data = MemoryOptimizedList()
+        delivery = _build_batch_delivery_state(parameters)
+        seen_keys: set[str] = set()
+        page = 1
+        pages_scanned = 0
+
+        await context.set_stage(TaskStage.LISTING, message="Collecting full encar listing", progress_current=0, progress_total=100, progress_unit="page")
+
+        while True:
+            await context.check_cancelled()
+            response = await context.run_sync(parser.fetch_cars_by_page, page)
+            pages_scanned = page
+            cars_list = getattr(response.data, "search_sh_sku_info_list", None)
+            if not cars_list:
+                break
+
+            total_cars = len(cars_list)
+            for index, car in enumerate(cars_list):
+                normalized = _normalize_encar_listing_car(car.dict(exclude_none=False), index, total_cars)
+                if normalized is not None:
+                    if not _append_unique_listing(seen_keys, "encar", normalized):
+                        continue
+                    await _emit_or_collect_listing(
+                        context,
+                        delivery,
+                        data,
+                        normalized,
+                        source="encar",
+                        task_type=TaskType.FULL,
+                        page=page,
+                    )
+
+            await context.update(
+                message=f"Parsed encar page {page}",
+                progress_current=page,
+                items_found=len(seen_keys) if delivery is not None else len(data),
+            )
+
+            if not getattr(response.data, "has_more", False):
+                break
+            page += 1
+
+        await _flush_listing_batch(
+            context,
+            delivery,
+            source="encar",
+            task_type=TaskType.FULL,
+            page=pages_scanned,
+            final=True,
+        )
+
+        summary = {
+            "pages_scanned": pages_scanned,
+            "items_found": len(seen_keys) if delivery is not None else len(data),
+            **_delivery_summary(delivery),
+        }
+        await context.set_stage(TaskStage.FINALIZING, message="Finalizing full encar result")
+        return TaskRunResult(result=[] if delivery is not None else list(data), summary=summary)
+
+    async def incremental(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
+        parser = EncarParser()
+        data = MemoryOptimizedList()
+        delivery = _build_batch_delivery_state(parameters)
+        seen_keys: set[str] = set()
+        existing_ids = parameters.get("existing_ids") or []
+        id_field = parameters.get("id_field") or "car_id"
+        existing_set = {str(x) for idx, x in enumerate(existing_ids) if x and idx < INCREMENTAL_EXISTING_LIMIT}
+        page = 1
+        pages_scanned = 0
+
+        await context.set_stage(TaskStage.LISTING, message="Collecting incremental encar listing", progress_current=0, progress_total=100, progress_unit="page")
+
+        while True:
+            await context.check_cancelled()
+            response = await context.run_sync(parser.fetch_cars_by_page, page)
+            pages_scanned = page
+            cars_list = getattr(response.data, "search_sh_sku_info_list", None)
+            if not cars_list:
+                break
+
+            found_existing = False
+            total_cars = len(cars_list)
+            for index, car in enumerate(cars_list):
+                car_dict = car.dict(exclude_none=False)
+                stop_id = car_dict.get(id_field)
+                stop_id = str(stop_id) if stop_id is not None else None
+                if stop_id and stop_id in existing_set:
+                    found_existing = True
+                    break
+
+                normalized = _normalize_encar_listing_car(car_dict, index, total_cars)
+                if normalized is not None:
+                    if not _append_unique_listing(seen_keys, "encar", normalized):
+                        continue
+                    await _emit_or_collect_listing(
+                        context,
+                        delivery,
+                        data,
+                        normalized,
+                        source="encar",
+                        task_type=TaskType.INCREMENTAL,
+                        page=page,
+                    )
+
+            await context.update(
+                message=f"Parsed encar page {page}",
+                progress_current=page,
+                items_found=len(seen_keys) if delivery is not None else len(data),
+            )
+
+            if found_existing or not getattr(response.data, "has_more", False):
+                break
+            page += 1
+
+        await _flush_listing_batch(
+            context,
+            delivery,
+            source="encar",
+            task_type=TaskType.INCREMENTAL,
+            page=pages_scanned,
+            final=True,
+        )
+
+        summary = {
+            "pages_scanned": pages_scanned,
+            "items_found": len(seen_keys) if delivery is not None else len(data),
+            "id_field": id_field,
+            **_delivery_summary(delivery),
+        }
+        await context.set_stage(TaskStage.FINALIZING, message="Finalizing incremental encar result")
+        existing_set.clear()
+        gc.collect()
+        return TaskRunResult(result=[] if delivery is not None else list(data), summary=summary)
+
+    async def detailed(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
+        parser = EncarParser()
+        normalized_items = _normalize_detailed_items("encar", parameters)
+
+        await context.set_stage(
+            TaskStage.DETAILED,
+            message="Parsing encar detailed cars",
+            progress_current=0,
+            progress_total=len(normalized_items),
+            progress_unit="car",
+        )
+
+        results = []
+        success_count = 0
+        for index, item in enumerate(normalized_items, start=1):
+            await context.check_cancelled()
+            external_id = item["external_id"]
+            car_obj, meta = await context.run_sync(parser.fetch_car_detail, external_id)
+            if car_obj is not None:
+                results.append({
+                    "status": meta.get("status", 200),
+                    "car": car_obj.dict(),
+                    "meta": meta,
+                })
+                success_count += 1
+            else:
+                results.append({
+                    "status": meta.get("status", 500),
+                    "car": {
+                        "car_id": external_id,
+                        "sku_id": external_id,
+                        "is_available": False,
+                        "source": "encar",
+                        "error": meta.get("error"),
+                    },
+                    "meta": meta,
+                })
+
+            await context.update(
+                message=f"Processed encar detailed car {index}/{len(normalized_items)}",
+                progress_current=index,
+                items_processed=index,
+            )
+
+        summary = {"requested": len(normalized_items), "successful": success_count, "failed": len(normalized_items) - success_count}
+        await context.set_stage(TaskStage.FINALIZING, message="Finalizing encar detailed result")
         return TaskRunResult(result=results, summary=summary)
 
     return {

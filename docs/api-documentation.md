@@ -1,15 +1,16 @@
 # Parser API Reference
 
-The parser layer is split into two direct services:
+The parser layer is split into direct per-source services:
 
 - `pyparsers-dongchedi` on `http://localhost:5001`
 - `pyparsers-che168` on `http://localhost:5002`
+- `pyparsers-encar` on `http://localhost:5003`
 
 There is no shared nginx entrypoint for the parser contract. Use these service ports directly.
 
 ## Common Endpoints
 
-Both services expose:
+All parser services expose:
 
 - `GET /`
 - `GET /health`
@@ -119,8 +120,10 @@ Important fields:
 - `progress_current` / `progress_total` / `progress_unit`: shared progress model for `full`, `incremental`, and `detailed`
 - `items_found`: how many items are already collected
 - `items_processed`: useful for `detailed` jobs
-- `items_sent`: set when the final result payload is ready
+- `items_sent`: in pull-result mode, set when the final result payload is ready; in `delivery_mode=push_batches`, increments as listing batches are accepted by the configured batch endpoint
 - `result_available`: `true` only after terminal success
+
+For large `full` or production `incremental` jobs, prefer `POST /tasks` with `parameters.delivery_mode="push_batches"`. This mode is supported by all listing parsers: `dongchedi`, `che168`, and `encar`. The parser sends rows to `parameters.batch_endpoint` while running, then stores an empty final task result with delivery counters in `result_summary`.
 
 ### `GET /tasks/{task_id}/result`
 
@@ -156,6 +159,7 @@ Base URL: `http://localhost:5001`
 Additional endpoints:
 
 - `GET /cars/car/{car_id}`
+- `GET /update/full` exists for route compatibility, but returns `status="unsupported"` for Encar. Use `POST /tasks` for managed `full`/`incremental` runs.
 - `POST /cars/cars`
 - `GET /cars/stats`
 - `GET /cars/enhance/{sku_id}`
@@ -201,6 +205,75 @@ Additional endpoints:
     - `secondary_id`
     - optional `force_update`
 
+## Encar Service
+
+Base URL: `http://localhost:5003`
+
+Encar is fully independent from the other parser containers. It reuses the same Docker image and shared API/task framework, but it has no runtime `depends_on` relationship with `pyparsers-dongchedi` or `pyparsers-che168`.
+
+Source access:
+
+- listing API: `http://api.encar.com/search/car/list/premium`
+- detail API: `http://api.encar.com/v1/readside/vehicle/{car_id}`
+
+No Selenium or Playwright browser flow is used for Encar; the parser reads JSON APIs directly with `requests`.
+
+Additional endpoints:
+
+- `GET /cars/car/{car_id}`
+
+### Response Shape
+
+The response envelope is the same as the other parser list endpoints:
+
+```json
+{
+  "data": {
+    "has_more": true,
+    "search_sh_sku_info_list": [],
+    "total": 161701
+  },
+  "message": "Success",
+  "status": 200
+}
+```
+
+`search_sh_sku_info_list[]` uses the same broad car payload shape as the existing sources, with `source="encar"`.
+
+### Parsed Fields
+
+List parsing fills the primary listing fields:
+
+- IDs and routing: `car_id`, `sku_id`, `uuid`, `source`, `link`
+- title and catalog: `title`, `car_name`, `brand_name`, `series_name`, `car_year`, `year`, `first_registration_time`
+- price and usage: `sh_price`, `price`, `car_mileage`, `mileage`
+- media: `image`, `image_gallery`, `image_count`
+- location and sale metadata: `city`, `car_source_city_name`, `dealer_info`, `tags`, `tags_v2`, `condition`, `certification`, `is_available`, `sort_number`
+- basic specs: `transmission`, `fuel_type`
+
+Detailed parsing adds or improves:
+
+- catalog IDs: `brand_id`, `series_id`, `shop_id`
+- full gallery from `photos[]`
+- `description`
+- `color`, `exterior_color`
+- `engine_volume_ml`, `body_type`, `seat_count`
+- `view_count`, `favorite_count`
+- `contact_info`, expanded `dealer_info`, `warranty_info`
+
+### Task Types
+
+- `full`
+  - no required parameters
+- `incremental`
+  - `parameters.id_field` default: `car_id`
+  - `parameters.existing_ids` list
+- `detailed`
+  - `parameters.items` list of:
+    - `external_id` (`car_id` from Encar)
+    - optional `secondary_id`
+    - optional `force_update`
+
 ## Blocked Probe
 
 `GET /blocked` runs:
@@ -218,6 +291,8 @@ Interpretation:
 The authoritative OpenAPI documents are served by the running services:
 
 - `http://localhost:5001/openapi.json`
+- `http://localhost:5002/openapi.json`
+- `http://localhost:5003/openapi.json`
 - `http://localhost:5002/openapi.json`
 
 Repository snapshots:

@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "e74fdb0a-3cb9-4d60-8c42-9c565443e7c1",
     "name": "CarCatch Direct Parsers",
-    "description": "Current local parser setup with split direct services: dongchedi on :5001 and che168 on :5002.",
+    "description": "Current local parser setup with split direct services: dongchedi on :5001, che168 on :5002, and encar on :5003.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -140,10 +140,54 @@
           "request": { "method": "GET", "url": { "raw": "{{che168BaseUrl}}/tasks", "host": ["{{che168BaseUrl}}"], "path": ["tasks"] } }
         }
       ]
+    },
+    {
+      "name": "Encar",
+      "item": [
+        {
+          "name": "GET /blocked",
+          "request": { "method": "GET", "url": { "raw": "{{encarBaseUrl}}/blocked", "host": ["{{encarBaseUrl}}"], "path": ["blocked"] } }
+        },
+        {
+          "name": "GET /cars/page/1",
+          "request": { "method": "GET", "url": { "raw": "{{encarBaseUrl}}/cars/page/1", "host": ["{{encarBaseUrl}}"], "path": ["cars", "page", "1"] } }
+        },
+        {
+          "name": "GET /cars/all",
+          "request": { "method": "GET", "url": { "raw": "{{encarBaseUrl}}/cars/all", "host": ["{{encarBaseUrl}}"], "path": ["cars", "all"] } }
+        },
+        {
+          "name": "POST /cars/incremental",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "[{\"car_id\":40814033}]" },
+            "url": { "raw": "{{encarBaseUrl}}/cars/incremental", "host": ["{{encarBaseUrl}}"], "path": ["cars", "incremental"] }
+          }
+        },
+        {
+          "name": "GET /cars/car/{car_id}",
+          "request": { "method": "GET", "url": { "raw": "{{encarBaseUrl}}/cars/car/40814033", "host": ["{{encarBaseUrl}}"], "path": ["cars", "car", "40814033"] } }
+        },
+        {
+          "name": "POST /tasks detailed",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"task_type\":\"detailed\",\"parameters\":{\"items\":[{\"external_id\":\"40814033\",\"force_update\":false}]},\"metadata\":{\"requested_by\":\"datahub\"}}" },
+            "url": { "raw": "{{encarBaseUrl}}/tasks", "host": ["{{encarBaseUrl}}"], "path": ["tasks"] }
+          }
+        },
+        {
+          "name": "GET /tasks",
+          "request": { "method": "GET", "url": { "raw": "{{encarBaseUrl}}/tasks", "host": ["{{encarBaseUrl}}"], "path": ["tasks"] } }
+        }
+      ]
     }
   ],
   "variable": [
     { "key": "dongchediBaseUrl", "value": "http://localhost:5001", "type": "string" },
-    { "key": "che168BaseUrl", "value": "http://localhost:5002", "type": "string" }
+    { "key": "che168BaseUrl", "value": "http://localhost:5002", "type": "string" },
+    { "key": "encarBaseUrl", "value": "http://localhost:5003", "type": "string" }
   ]
 }

@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 import sys
@@ -18,6 +19,7 @@ from task_service import (
     _flush_listing_batch,
     _normalize_detailed_items,
     _post_parser_batch,
+    build_task_service,
 )
 
 
@@ -227,6 +229,95 @@ class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["items"], [])
         self.assertEqual(payload["item_count"], 0)
         self.assertTrue(payload["is_final"])
+
+    async def test_push_batches_runs_for_all_sources_and_listing_task_types(self):
+        parser_patches = {
+            "dongchedi": "api.dongchedi.parser.DongchediParser.fetch_cars_by_page",
+            "che168": "api.che168.parser.Che168Parser.fetch_cars_by_page",
+            "encar": "api.encar.parser.EncarParser.fetch_cars_by_page",
+        }
+
+        for source, patch_target in parser_patches.items():
+            for task_type in (TaskType.FULL, TaskType.INCREMENTAL):
+                with self.subTest(source=source, task_type=task_type.value):
+                    payloads = []
+
+                    def fake_post(endpoint, *, json, headers, timeout):
+                        payloads.append(json)
+                        response = mock.Mock()
+                        response.content = b'{"status":202}'
+                        response.json.return_value = {"status": 202}
+                        response.raise_for_status.return_value = None
+                        return response
+
+                    with mock.patch(patch_target, side_effect=self._fake_listing_response), mock.patch("task_service.requests.post", side_effect=fake_post):
+                        service = build_task_service(source)
+                        await service.startup()
+                        try:
+                            task = service.create_task(
+                                TaskCreateRequest(
+                                    task_type=task_type,
+                                    parameters={
+                                        "delivery_mode": "push_batches",
+                                        "batch_endpoint": "http://datahub/parser/batches",
+                                        "batch_size": 2,
+                                    },
+                                )
+                            )
+                            await asyncio.wait_for(service._queue.join(), timeout=10)
+
+                            snapshot = service.get_task(task.id)
+                            self.assertEqual(snapshot.status, TaskStatus.SUCCEEDED)
+                            self.assertEqual(snapshot.stage, TaskStage.COMPLETED)
+                            self.assertEqual(snapshot.items_found, 3)
+                            self.assertEqual(snapshot.items_sent, 3)
+                            self.assertEqual(snapshot.result_summary["delivery_mode"], "push_batches")
+                            self.assertEqual(snapshot.result_summary["batches_sent"], 2)
+                            self.assertEqual(snapshot.result_summary["items_sent"], 3)
+
+                            result = service.get_task_result(task.id)
+                            self.assertEqual(result.result, [])
+                        finally:
+                            await service.shutdown()
+
+                    self.assertEqual([payload["source"] for payload in payloads], [source, source])
+                    self.assertEqual([payload["task_type"] for payload in payloads], [task_type.value, task_type.value])
+                    self.assertEqual([payload["item_count"] for payload in payloads], [2, 1])
+                    self.assertEqual([payload["is_final"] for payload in payloads], [False, True])
+                    delivered_ids = [item["car_id"] for payload in payloads for item in payload["items"]]
+                    self.assertEqual(delivered_ids, [101, 102, 103])
+
+    @staticmethod
+    def _fake_listing_response(page):
+        pages = {
+            1: ([101, 102], True),
+            2: ([102, 103], False),
+        }
+        ids, has_more = pages.get(page, ([], False))
+        cars = [FakeListingCar(car_id) for car_id in ids]
+        return SimpleNamespace(
+            data=SimpleNamespace(
+                search_sh_sku_info_list=cars,
+                has_more=has_more,
+            )
+        )
+
+
+class FakeListingCar:
+    def __init__(self, car_id):
+        self.car_id = car_id
+
+    def dict(self, *args, **kwargs):
+        return {
+            "car_id": self.car_id,
+            "sku_id": str(self.car_id),
+            "shop_id": self.car_id + 1000,
+            "title": f"Fake car {self.car_id} 2022",
+            "year": 2022,
+            "car_year": 2022,
+            "image": f"https://example.test/{self.car_id}.jpg",
+            "link": f"https://example.test/cars/{self.car_id}",
+        }
 
 
 if __name__ == "__main__":

@@ -292,12 +292,29 @@ class TaskService:
 
         try:
             result = await runner(context, task.parameters)
+            result_items_sent = task.items_sent
+            if result.summary.get("delivery_mode") == "push_batches":
+                try:
+                    result_items_sent = int(result.summary.get("items_sent", task.items_sent))
+                except (TypeError, ValueError):
+                    result_items_sent = task.items_sent
+            elif isinstance(result.result, Iterable) and not isinstance(result.result, (dict, str, bytes)):
+                result_items_sent = len(result.result)
+
+            result_items_found = None
+            if "items_found" in result.summary:
+                try:
+                    result_items_found = int(result.summary["items_found"])
+                except (TypeError, ValueError):
+                    result_items_found = None
+
             await self._update_task(
                 task_id,
                 status=TaskStatus.SUCCEEDED,
                 stage=TaskStage.COMPLETED,
                 message="Task completed successfully",
-                items_sent=len(result.result) if isinstance(result.result, Iterable) and not isinstance(result.result, (dict, str, bytes)) else task.items_sent,
+                items_found=result_items_found,
+                items_sent=result_items_sent,
                 result_summary=result.summary,
                 finished_at=datetime.now(timezone.utc),
                 result_available=True,
@@ -771,7 +788,7 @@ def _build_dongchedi_runners():
             await context.update(
                 message=f"Parsed dongchedi page {page}",
                 progress_current=page,
-                items_found=len(data),
+                items_found=len(seen_keys) if delivery is not None else len(data),
             )
 
             if not getattr(response.data, "has_more", False):
@@ -849,7 +866,7 @@ def _build_dongchedi_runners():
             await context.update(
                 message=f"Parsed dongchedi page {page}",
                 progress_current=page,
-                items_found=len(data),
+                items_found=len(seen_keys) if delivery is not None else len(data),
             )
 
             if found_existing or not getattr(response.data, "has_more", False):
@@ -932,7 +949,6 @@ def _build_dongchedi_runners():
 
 
 def _build_che168_runners():
-    from api.che168.detailed_api import CarDetailRequest, parse_car_details
     from api.che168.parser import Che168Parser
 
     async def full(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
@@ -977,7 +993,7 @@ def _build_che168_runners():
             await context.update(
                 message=f"Parsed che168 page {page}",
                 progress_current=page,
-                items_found=len(data),
+                items_found=len(seen_keys) if delivery is not None else len(data),
             )
 
             if not getattr(response.data, "has_more", False):
@@ -1051,7 +1067,7 @@ def _build_che168_runners():
             await context.update(
                 message=f"Parsed che168 page {page}",
                 progress_current=page,
-                items_found=len(data),
+                items_found=len(seen_keys) if delivery is not None else len(data),
             )
 
             if found_existing:
@@ -1078,6 +1094,8 @@ def _build_che168_runners():
         return TaskRunResult(result=[] if delivery is not None else list(data), summary=summary)
 
     async def detailed(context: TaskContext, parameters: Dict[str, Any]) -> TaskRunResult:
+        from api.che168.detailed_api import CarDetailRequest, parse_car_details
+
         normalized_items = _normalize_detailed_items("che168", parameters)
 
         await context.set_stage(
@@ -1160,7 +1178,7 @@ def _build_encar_runners():
             await context.update(
                 message=f"Parsed encar page {page}",
                 progress_current=page,
-                items_found=len(data),
+                items_found=len(seen_keys) if delivery is not None else len(data),
             )
 
             if not getattr(response.data, "has_more", False):
@@ -1232,7 +1250,7 @@ def _build_encar_runners():
             await context.update(
                 message=f"Parsed encar page {page}",
                 progress_current=page,
-                items_found=len(data),
+                items_found=len(seen_keys) if delivery is not None else len(data),
             )
 
             if found_existing or not getattr(response.data, "has_more", False):

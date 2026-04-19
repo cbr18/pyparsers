@@ -267,14 +267,14 @@ def test_dongchedi_task_lifecycle():
     cars = listing["data"]["search_sh_sku_info_list"]
     assert cars, "expected non-empty dongchedi listing for task smoke"
 
-    seed_id = cars[0]["car_id"]
+    seed_id = cars[0].get("sku_id") or cars[0]["car_id"]
     created = _request_json(
         f"{DONGCHEDI_BASE_URL}/tasks",
         method="POST",
         payload={
             "task_type": "incremental",
             "parameters": {
-                "id_field": "car_id",
+                "id_field": "sku_id",
                 "existing_ids": [str(seed_id)],
             },
         },

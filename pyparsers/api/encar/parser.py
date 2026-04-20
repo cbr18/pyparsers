@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -15,6 +17,22 @@ from .models.car import EncarCar
 from .models.response import EncarApiResponse, EncarData
 
 logger = logging.getLogger(__name__)
+
+
+def _get_positive_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _get_positive_float_env(name: str, default: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 class EncarParser(BaseCarParser):
@@ -255,13 +273,37 @@ class EncarParser(BaseCarParser):
         return self.fetch_cars_by_page(1)
 
     def fetch_cars_by_page(self, page: int) -> EncarApiResponse:
+        max_retries = _get_positive_int_env("ENCAR_LIST_MAX_RETRIES", 3)
+        retry_delay = _get_positive_float_env("ENCAR_LIST_RETRY_DELAY_SECONDS", 2.0)
+        last_error: Optional[Exception] = None
+
         try:
-            response = requests.get(
-                self.LIST_API_URL,
-                params=self._build_params(page),
-                headers=self.headers,
-                timeout=30,
-            )
+            for attempt in range(1, max_retries + 1):
+                try:
+                    response = requests.get(
+                        self.LIST_API_URL,
+                        params=self._build_params(page),
+                        headers=self.headers,
+                        timeout=30,
+                    )
+                    break
+                except (requests.ConnectionError, requests.Timeout) as exc:
+                    last_error = exc
+                    if attempt >= max_retries:
+                        raise
+                    delay = retry_delay * attempt
+                    logger.warning(
+                        "Encar list page %s attempt %s/%s failed: %s; retrying in %.1fs",
+                        page,
+                        attempt,
+                        max_retries,
+                        exc,
+                        delay,
+                    )
+                    time.sleep(delay)
+            else:
+                raise RuntimeError(f"Encar list request failed: {last_error}")
+
             response.raise_for_status()
             payload = response.json()
             items = payload.get("SearchResults") or []

@@ -1637,8 +1637,21 @@ class DongchediParser(BaseCarParser):
         from selenium.common.exceptions import TimeoutException, WebDriverException
         from bs4 import BeautifulSoup
 
+        def _get_positive_int_env(name: str, default: int) -> int:
+            raw = os.environ.get(name)
+            if not raw:
+                return default
+            try:
+                return max(1, int(raw))
+            except ValueError:
+                logger.warning(
+                    f"fetch_car_specifications: некорректное значение {name}={raw!r}, используется {default}"
+                )
+                return default
+
         url = f"https://www.dongchedi.com/auto/params-carIds-{car_id}"
         chrome_options = Options()
+        chrome_options.page_load_strategy = os.getenv("DONGCHEDI_SPECS_PAGE_LOAD_STRATEGY", "eager")
         chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
@@ -1683,8 +1696,8 @@ class DongchediParser(BaseCarParser):
             else:
                 driver = webdriver.Chrome(options=chrome_options)
             # Устанавливаем таймауты для драйвера
-            driver.set_page_load_timeout(60)  # 60 секунд на загрузку страницы
-            driver.implicitly_wait(10)  # 10 секунд неявного ожидания
+            driver.set_page_load_timeout(_get_positive_int_env("DONGCHEDI_SPECS_PAGE_LOAD_TIMEOUT", 25))
+            driver.implicitly_wait(_get_positive_int_env("DONGCHEDI_SPECS_IMPLICIT_WAIT", 3))
             driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             
             # Обертка для безопасной работы с driver
@@ -1716,6 +1729,15 @@ class DongchediParser(BaseCarParser):
                 logger.info(f"fetch_car_specifications: Загрузка страницы для car_id={car_id}")
                 safe_driver_operation(lambda: driver.get(url), "driver.get()", check_session=False)
                 logger.info(f"fetch_car_specifications: Страница загружена для car_id={car_id}")
+            except TimeoutException as e:
+                logger.warning(
+                    f"fetch_car_specifications: Timeout загрузки страницы для car_id={car_id}: {e}. "
+                    "Пробуем остановить загрузку и разобрать уже полученный HTML"
+                )
+                try:
+                    safe_driver_operation(lambda: driver.execute_script("window.stop();"), "window.stop()", check_session=False)
+                except Exception as stop_error:
+                    logger.debug(f"fetch_car_specifications: Не удалось остановить загрузку для car_id={car_id}: {stop_error}")
             except Exception as e:
                 logger.error(f"fetch_car_specifications: Не удалось загрузить страницу для car_id={car_id}: {e}", exc_info=True)
                 raise
@@ -1799,12 +1821,14 @@ class DongchediParser(BaseCarParser):
                     label_elem = row.find('label', class_='cell_label__ZtXlw')
                     value_elem = row.find('div', class_='cell_normal__37nRi')
                     
-                    if label_elem and value_elem:
-                        label = label_elem.get_text().strip()
-                        value = value_elem.get_text().strip()
-                        
-                        # Маппинг китайских названий на английские поля (только поля которые есть в БД)
-                        field_mapping = {
+                    if not label_elem or not value_elem:
+                        continue
+
+                    label = label_elem.get_text().strip()
+                    value = value_elem.get_text().strip()
+
+                    # Маппинг китайских названий на английские поля (только поля которые есть в БД)
+                    field_mapping = {
                             # === Мощность и динамика ===
                             '最大功率(kW)': 'power',
                             '最大功率': 'power',

@@ -265,6 +265,8 @@ class EncarParser(BaseCarParser):
             dealer_info="; ".join(dealer_parts) if dealer_parts else None,
             warranty_info=warranty_info,
             certification="; ".join(tags) if tags else None,
+            has_details=True,
+            last_detail_update=now,
             created_at=now,
             updated_at=now,
         )

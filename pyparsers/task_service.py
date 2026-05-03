@@ -27,7 +27,7 @@ INCREMENTAL_EXISTING_LIMIT = int(os.getenv("INCREMENTAL_EXISTING_LIMIT", "15000"
 TASK_TTL_HOURS = int(os.getenv("TASK_TTL_HOURS", "24"))
 TASK_RESULT_TTL_MINUTES = int(os.getenv("TASK_RESULT_TTL_MINUTES", "30"))
 MAX_TASKS = int(os.getenv("MAX_TASKS", "1000"))
-BATCH_DELIVERY_DEFAULT_SIZE = int(os.getenv("BATCH_DELIVERY_DEFAULT_SIZE", "500"))
+BATCH_DELIVERY_DEFAULT_SIZE = int(os.getenv("BATCH_DELIVERY_DEFAULT_SIZE", "100"))
 BATCH_DELIVERY_TIMEOUT_SECONDS = int(os.getenv("BATCH_DELIVERY_TIMEOUT_SECONDS", "30"))
 BATCH_DELIVERY_MAX_RETRIES = int(os.getenv("BATCH_DELIVERY_MAX_RETRIES", "3"))
 
@@ -764,7 +764,7 @@ def _build_dongchedi_runners():
             filtered = filter_cars_by_year(cars_list, min_year=2017)
             total_filtered = len(filtered)
             for index, car in enumerate(filtered):
-                car_dict = car.dict()
+                car_dict = car.model_dump(exclude_none=True)
                 car_dict.update({"sort_number": total_filtered - index, "source": "dongchedi"})
                 if car_dict.get("sh_price"):
                     car_dict["sh_price"] = decode_dongchedi_list_sh_price(car_dict["sh_price"])
@@ -836,7 +836,7 @@ def _build_dongchedi_runners():
             total_filtered = len(filtered)
             found_existing = False
             for index, car in enumerate(filtered):
-                car_dict = car.dict()
+                car_dict = car.model_dump(exclude_none=True)
                 key_val = car_dict.get(id_field)
                 key_val = str(key_val) if key_val is not None else None
                 if key_val and key_val in existing_set:
@@ -914,7 +914,7 @@ def _build_dongchedi_runners():
             if car_obj is not None:
                 results.append({
                     "status": meta.get("status", 200),
-                    "car": car_obj.dict(),
+                    "car": car_obj.model_dump(exclude_none=True),
                     "meta": meta,
                 })
                 success_count += 1
@@ -976,7 +976,7 @@ def _build_che168_runners():
             empty_pages = 0
             total_cars = len(cars_list)
             for index, car in enumerate(cars_list):
-                normalized = _normalize_che168_listing_car(car.dict(exclude_none=False), index, total_cars)
+                normalized = _normalize_che168_listing_car(car.model_dump(exclude_none=True), index, total_cars)
                 if normalized is not None:
                     if not _append_unique_listing(seen_keys, "che168", normalized):
                         continue
@@ -1039,7 +1039,7 @@ def _build_che168_runners():
             total_cars = len(cars_list)
             found_existing = False
             for index, car in enumerate(cars_list):
-                car_dict = car.dict(exclude_none=False)
+                car_dict = car.model_dump(exclude_none=True)
                 stop_id = car_dict.get(id_field)
                 if stop_id is not None:
                     try:
@@ -1116,7 +1116,7 @@ def _build_che168_runners():
                 force_update=bool(item.get("force_update", False)),
             )
             detail = await parse_car_details(detail_request)
-            detail_payload = detail.model_dump() if hasattr(detail, "model_dump") else detail.dict()
+            detail_payload = detail.model_dump(exclude_none=True) if hasattr(detail, "model_dump") else detail.dict(exclude_none=True)
             results.append(detail_payload)
             if detail_payload.get("success"):
                 success_count += 1
@@ -1161,7 +1161,7 @@ def _build_encar_runners():
 
             total_cars = len(cars_list)
             for index, car in enumerate(cars_list):
-                normalized = _normalize_encar_listing_car(car.dict(exclude_none=False), index, total_cars)
+                normalized = _normalize_encar_listing_car(car.model_dump(exclude_none=True), index, total_cars)
                 if normalized is not None:
                     if not _append_unique_listing(seen_keys, "encar", normalized):
                         continue
@@ -1226,7 +1226,7 @@ def _build_encar_runners():
             found_existing = False
             total_cars = len(cars_list)
             for index, car in enumerate(cars_list):
-                car_dict = car.dict(exclude_none=False)
+                car_dict = car.model_dump(exclude_none=True)
                 stop_id = car_dict.get(id_field)
                 stop_id = str(stop_id) if stop_id is not None else None
                 if stop_id and stop_id in existing_set:
@@ -1298,7 +1298,7 @@ def _build_encar_runners():
             if car_obj is not None:
                 results.append({
                     "status": meta.get("status", 200),
-                    "car": car_obj.dict(),
+                    "car": car_obj.model_dump(exclude_none=True),
                     "meta": meta,
                 })
                 success_count += 1

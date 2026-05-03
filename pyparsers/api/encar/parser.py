@@ -266,6 +266,7 @@ class EncarParser(BaseCarParser):
             warranty_info=warranty_info,
             certification="; ".join(tags) if tags else None,
             has_details=True,
+            last_detail_update=now,
             created_at=now,
             updated_at=now,
         )

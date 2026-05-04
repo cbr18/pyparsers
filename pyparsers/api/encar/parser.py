@@ -12,7 +12,7 @@ from typing import Any, Optional
 import requests
 
 from ..base_parser import BaseCarParser
-from ..dongchedi.parser import parse_float_value, parse_int_value
+from api.numeric_utils import parse_float_value, parse_int_value, normalize_power_value
 from .models.car import EncarCar
 from .models.response import EncarApiResponse, EncarData
 
@@ -166,6 +166,7 @@ class EncarParser(BaseCarParser):
             dealer_info=self._build_listing_dealer_info(raw),
             certification=self._join_text(raw.get("BuyType")),
             first_registration_time=first_registration_time,
+            power=normalize_power_value(raw.get("Power")),
             created_at=now,
             updated_at=now,
         )
@@ -257,7 +258,10 @@ class EncarParser(BaseCarParser):
             fuel_type=spec.get("fuelName"),
             engine_volume_ml=parse_int_value(spec.get("displacement")),
             body_type=spec.get("bodyName"),
+            drive_type=spec.get("driveName"),
             seat_count=str(spec.get("seatCount")) if spec.get("seatCount") is not None else None,
+            power=normalize_power_value(spec.get("power") or spec.get("maxPower")),
+            torque=parse_float_value(spec.get("torque") or spec.get("maxTorque")),
             first_registration_time=first_registration_time,
             view_count=parse_int_value(manage.get("viewCount")) or 0,
             favorite_count=parse_int_value(manage.get("subscribeCount")) or 0,

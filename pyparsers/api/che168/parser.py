@@ -11,7 +11,7 @@ from .models.car import Che168Car
 from .models.response import Che168ApiResponse, Che168Data
 from ..base_parser import BaseCarParser
 from ..date_utils import normalize_first_registration_date
-from ..dongchedi.parser import normalize_power_value, parse_int_value, parse_float_value
+from api.numeric_utils import parse_int_value, parse_float_value, normalize_power_value
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)

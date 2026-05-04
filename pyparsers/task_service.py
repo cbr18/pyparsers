@@ -424,28 +424,57 @@ def _hash_car_id_from_link(link: str) -> int:
     return int.from_bytes(digest[:8], byteorder="big", signed=False)
 
 
+_SCHEME_CACHE: dict[str, str] = {}
+
+
+def _is_ip(host: str) -> bool:
+    if not host:
+        return False
+    h = host.split(":")[0]
+    return bool(re.match(r"^(\d{1,3}\.){3}\d{1,3}$", h))
+
+
 def _normalize_endpoint(url: Optional[str]) -> Optional[str]:
     if not url:
         return None
-    url = url.rstrip("/")
+    url = url.strip().rstrip("/")
     
-    # 1. Если это уже полный правильный путь - возвращаем как есть
-    if url.endswith("/api/parser/batches"):
-        return url
+    if "://" in url:
+        scheme, rest = url.split("://", 1)
+    else:
+        scheme, rest = None, url
+    
+    host = rest.split("/")[0]
+    if not host:
+        return None
+
+    if _is_ip(host):
+        final_scheme = "http"
+    else:
+        if host not in _SCHEME_CACHE:
+            try:
+                # Пробуем HTTPS если это домен
+                requests.head(f"https://{host}", timeout=2)
+                _SCHEME_CACHE[host] = "https"
+            except Exception:
+                _SCHEME_CACHE[host] = "http"
+        final_scheme = _SCHEME_CACHE[host]
+    
+    new_url = f"{final_scheme}://{rest}"
+    
+    if new_url.endswith("/api/parser/batches"):
+        return new_url
         
-    # 2. Если есть /parser/batches, но нет /api перед ним
-    if url.endswith("/parser/batches"):
-        base = url[:-len("/parser/batches")].rstrip("/")
+    if new_url.endswith("/parser/batches"):
+        base = new_url[:-len("/parser/batches")].rstrip("/")
         if base.endswith("/api"):
-            return url # На всякий случай
+            return new_url
         return f"{base}/api/parser/batches"
         
-    # 3. Если есть /api, но нет /parser/batches
-    if url.endswith("/api"):
-        return f"{url}/parser/batches"
+    if new_url.endswith("/api"):
+        return f"{new_url}/parser/batches"
         
-    # 4. Во всех остальных случаях (базовый домен/IP)
-    return f"{url}/api/parser/batches"
+    return f"{new_url}/api/parser/batches"
 
 
 def _build_batch_delivery_state(parameters: Dict[str, Any]) -> Optional[BatchDeliveryState]:

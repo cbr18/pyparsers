@@ -495,14 +495,20 @@ def _post_parser_batch(
     if auth_token:
         headers["Authorization"] = f"Bearer {auth_token}"
 
-    response = requests.post(endpoint, json=payload, headers=headers, timeout=timeout_seconds)
-    response.raise_for_status()
-    if not response.content:
-        return {}
+    logger.info(f"[HTTP OUT] POST {endpoint} task_id={payload['task_id']} batch_id={payload['batch_id']} items={payload['item_count']}")
     try:
-        return response.json()
-    except ValueError:
-        return {"raw_response": response.text}
+        response = requests.post(endpoint, json=payload, headers=headers, timeout=timeout_seconds)
+        logger.info(f"[HTTP OUT] Response status={response.status_code} task_id={payload['task_id']} batch_id={payload['batch_id']}")
+        response.raise_for_status()
+        if not response.content:
+            return {}
+        try:
+            return response.json()
+        except ValueError:
+            return {"raw_response": response.text}
+    except Exception as e:
+        logger.error(f"[HTTP OUT ERROR] {e} task_id={payload['task_id']} batch_id={payload['batch_id']}", exc_info=True)
+        raise
 
 
 async def _flush_listing_batch(
@@ -523,6 +529,9 @@ async def _flush_listing_batch(
     delivery.buffer = []
     batch_sequence = delivery.batches_sent + delivery.failed_batches + 1
     batch_id = f"{context.task_id}:{batch_sequence}"
+    
+    logger.info(f"[BATCH READY] source={source} batch_id={batch_id} items={len(batch_items)} final={final}")
+    
     payload = {
         "task_id": context.task_id,
         "source": source,
@@ -539,6 +548,7 @@ async def _flush_listing_batch(
     last_error: Optional[Exception] = None
     for attempt in range(1, delivery.max_retries + 1):
         try:
+            logger.info(f"[FLOW] Entering batch send attempt={attempt}/{delivery.max_retries} batch_id={batch_id}")
             await context.run_sync(
                 _post_parser_batch,
                 endpoint=delivery.endpoint,
@@ -1252,6 +1262,7 @@ def _build_encar_runners():
                 progress_current=page,
                 items_found=len(seen_keys) if delivery is not None else len(data),
             )
+            logger.info(f"[FLOW] Finished page {page} source=encar (incremental) items_found={len(seen_keys) if delivery is not None else len(data)}")
 
             if found_existing or not getattr(response.data, "has_more", False):
                 break

@@ -424,6 +424,17 @@ def _hash_car_id_from_link(link: str) -> int:
     return int.from_bytes(digest[:8], byteorder="big", signed=False)
 
 
+def _normalize_endpoint(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return None
+    url = url.rstrip("/")
+    if url.endswith("/parser/batches"):
+        return url
+    if url.endswith("/api"):
+        return f"{url}/parser/batches"
+    return f"{url}/api/parser/batches"
+
+
 def _build_batch_delivery_state(parameters: Dict[str, Any]) -> Optional[BatchDeliveryState]:
     delivery_mode = str(parameters.get("delivery_mode") or "result").strip().lower()
     if delivery_mode in ("", "result", "pull_result"):
@@ -431,20 +442,21 @@ def _build_batch_delivery_state(parameters: Dict[str, Any]) -> Optional[BatchDel
     if delivery_mode != "push_batches":
         raise ValueError(f"Unsupported delivery_mode '{delivery_mode}'")
 
-    endpoint = (
+    # Сначала ищем полный путь в параметрах или специальной переменной
+    raw_endpoint = (
         parameters.get("batch_endpoint")
         or parameters.get("datahub_batch_endpoint")
         or os.getenv("DATAHUB_BATCH_ENDPOINT")
     )
+    
+    endpoint = _normalize_endpoint(raw_endpoint)
+    
+    # Если ничего не нашли, пробуем собрать из DATAHUB_URL
     if not endpoint:
-        datahub_url = os.getenv("DATAHUB_URL", "").rstrip("/")
-        if datahub_url:
-            if datahub_url.endswith("/api"):
-                endpoint = f"{datahub_url}/parser/batches"
-            else:
-                endpoint = f"{datahub_url}/api/parser/batches"
+        endpoint = _normalize_endpoint(os.getenv("DATAHUB_URL"))
+        
     if not endpoint:
-        raise ValueError("delivery_mode=push_batches requires parameters.batch_endpoint or DATAHUB_BATCH_ENDPOINT")
+        raise ValueError("delivery_mode=push_batches requires parameters.batch_endpoint, DATAHUB_BATCH_ENDPOINT or DATAHUB_URL")
 
     batch_size = parameters.get("batch_size") or parameters.get("batch_items") or BATCH_DELIVERY_DEFAULT_SIZE
     try:

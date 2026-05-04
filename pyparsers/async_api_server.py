@@ -50,14 +50,18 @@ class MultipleCarIdsRequest(BaseModel):
 # Load environment variables
 load_dotenv()
 
+def _normalize_endpoint(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return None
+    url = url.rstrip("/")
+    if url.endswith("/parser/batches"):
+        return url
+    if url.endswith("/api"):
+        return f"{url}/parser/batches"
+    return f"{url}/api/parser/batches"
+
 DATAHUB_URL = os.getenv("DATAHUB_URL", "").rstrip("/")
-if DATAHUB_URL:
-    if DATAHUB_URL.endswith("/api"):
-        DATAHUB_BATCH_ENDPOINT = os.getenv("DATAHUB_BATCH_ENDPOINT") or f"{DATAHUB_URL}/parser/batches"
-    else:
-        DATAHUB_BATCH_ENDPOINT = os.getenv("DATAHUB_BATCH_ENDPOINT") or f"{DATAHUB_URL}/api/parser/batches"
-else:
-    DATAHUB_BATCH_ENDPOINT = os.getenv("DATAHUB_BATCH_ENDPOINT")
+DATAHUB_BATCH_ENDPOINT = _normalize_endpoint(os.getenv("DATAHUB_BATCH_ENDPOINT") or DATAHUB_URL)
 
 def _get_int_env(name: str, default: int, minimum: int = 1) -> int:
     raw = os.getenv(name)

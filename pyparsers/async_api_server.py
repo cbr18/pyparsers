@@ -1400,6 +1400,7 @@ async def get_che168_all_cars():
     Принудительно проходит по всем страницам от 1 до 100, чтобы гарантировать полный сбор данных.
     Экономит память: хранит только уникальные id машин.
     """
+    logger.warning("[FLOW WARNING] long-running task inside HTTP request (legacy get_che168_all_cars)")
     lock = _get_full_fetch_lock("che168_all")
     async with lock:
         return await _collect_che168_all_cars()

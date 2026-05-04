@@ -439,7 +439,10 @@ def _build_batch_delivery_state(parameters: Dict[str, Any]) -> Optional[BatchDel
     if not endpoint:
         datahub_url = os.getenv("DATAHUB_URL", "").rstrip("/")
         if datahub_url:
-            endpoint = f"{datahub_url}/parser/batches"
+            if datahub_url.endswith("/api"):
+                endpoint = f"{datahub_url}/parser/batches"
+            else:
+                endpoint = f"{datahub_url}/api/parser/batches"
     if not endpoint:
         raise ValueError("delivery_mode=push_batches requires parameters.batch_endpoint or DATAHUB_BATCH_ENDPOINT")
 

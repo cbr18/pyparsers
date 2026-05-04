@@ -428,10 +428,23 @@ def _normalize_endpoint(url: Optional[str]) -> Optional[str]:
     if not url:
         return None
     url = url.rstrip("/")
-    if url.endswith("/parser/batches"):
+    
+    # 1. Если это уже полный правильный путь - возвращаем как есть
+    if url.endswith("/api/parser/batches"):
         return url
+        
+    # 2. Если есть /parser/batches, но нет /api перед ним
+    if url.endswith("/parser/batches"):
+        base = url[:-len("/parser/batches")].rstrip("/")
+        if base.endswith("/api"):
+            return url # На всякий случай
+        return f"{base}/api/parser/batches"
+        
+    # 3. Если есть /api, но нет /parser/batches
     if url.endswith("/api"):
         return f"{url}/parser/batches"
+        
+    # 4. Во всех остальных случаях (базовый домен/IP)
     return f"{url}/api/parser/batches"
 
 

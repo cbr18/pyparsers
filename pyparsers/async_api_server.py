@@ -33,10 +33,15 @@ from datetime import datetime, timezone
 from source_probes import SourceProbe, probe_item_value, run_source_probe
 
 # Настройка логирования
+log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format=log_format
 )
+# Принудительно обновляем формат для всех существующих логгеров
+for handler in logging.root.handlers:
+    handler.setFormatter(logging.Formatter(log_format))
+
 logger = logging.getLogger(__name__)
 
 # Модель для запроса детального парсинга che168
@@ -54,8 +59,13 @@ def _normalize_endpoint(url: Optional[str]) -> Optional[str]:
     if not url:
         return None
     url = url.rstrip("/")
-    if url.endswith("/parser/batches"):
+    if url.endswith("/api/parser/batches"):
         return url
+    if url.endswith("/parser/batches"):
+        base = url[:-len("/parser/batches")].rstrip("/")
+        if base.endswith("/api"):
+            return url
+        return f"{base}/api/parser/batches"
     if url.endswith("/api"):
         return f"{url}/parser/batches"
     return f"{url}/api/parser/batches"

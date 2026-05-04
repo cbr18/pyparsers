@@ -55,20 +55,53 @@ class MultipleCarIdsRequest(BaseModel):
 # Load environment variables
 load_dotenv()
 
+import requests
+import re
+
+_SCHEME_CACHE: Dict[str, str] = {}
+
+def _is_ip(host: str) -> bool:
+    if not host:
+        return False
+    h = host.split(":")[0]
+    return bool(re.match(r"^(\d{1,3}\.){3}\d{1,3}$", h))
+
 def _normalize_endpoint(url: Optional[str]) -> Optional[str]:
     if not url:
         return None
-    url = url.rstrip("/")
-    if url.endswith("/api/parser/batches"):
-        return url
-    if url.endswith("/parser/batches"):
-        base = url[:-len("/parser/batches")].rstrip("/")
+    url = url.strip().rstrip("/")
+    if "://" in url:
+        scheme, rest = url.split("://", 1)
+    else:
+        scheme, rest = None, url
+    
+    host = rest.split("/")[0]
+    if not host:
+        return None
+        
+    if _is_ip(host):
+        final_scheme = "http"
+    else:
+        if host not in _SCHEME_CACHE:
+            try:
+                requests.head(f"https://{host}", timeout=2)
+                _SCHEME_CACHE[host] = "https"
+            except Exception:
+                _SCHEME_CACHE[host] = "http"
+        final_scheme = _SCHEME_CACHE[host]
+        
+    new_url = f"{final_scheme}://{rest}"
+    
+    if new_url.endswith("/api/parser/batches"):
+        return new_url
+    if new_url.endswith("/parser/batches"):
+        base = new_url[:-len("/parser/batches")].rstrip("/")
         if base.endswith("/api"):
-            return url
+            return new_url
         return f"{base}/api/parser/batches"
-    if url.endswith("/api"):
-        return f"{url}/parser/batches"
-    return f"{url}/api/parser/batches"
+    if new_url.endswith("/api"):
+        return f"{new_url}/parser/batches"
+    return f"{new_url}/api/parser/batches"
 
 DATAHUB_URL = os.getenv("DATAHUB_URL", "").rstrip("/")
 DATAHUB_BATCH_ENDPOINT = _normalize_endpoint(os.getenv("DATAHUB_BATCH_ENDPOINT") or DATAHUB_URL)

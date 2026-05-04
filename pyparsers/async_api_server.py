@@ -50,6 +50,15 @@ class MultipleCarIdsRequest(BaseModel):
 # Load environment variables
 load_dotenv()
 
+DATAHUB_URL = os.getenv("DATAHUB_URL", "").rstrip("/")
+if DATAHUB_URL:
+    if DATAHUB_URL.endswith("/api"):
+        DATAHUB_BATCH_ENDPOINT = os.getenv("DATAHUB_BATCH_ENDPOINT") or f"{DATAHUB_URL}/parser/batches"
+    else:
+        DATAHUB_BATCH_ENDPOINT = os.getenv("DATAHUB_BATCH_ENDPOINT") or f"{DATAHUB_URL}/api/parser/batches"
+else:
+    DATAHUB_BATCH_ENDPOINT = os.getenv("DATAHUB_BATCH_ENDPOINT")
+
 def _get_int_env(name: str, default: int, minimum: int = 1) -> int:
     raw = os.getenv(name)
     if not raw:
@@ -63,6 +72,11 @@ def _get_int_env(name: str, default: int, minimum: int = 1) -> int:
 
 DONGCHEDI_ENHANCE_MAX_CONCURRENT = _get_int_env("DONGCHEDI_ENHANCE_MAX_CONCURRENT", 5)
 INCREMENTAL_EXISTING_LIMIT = _get_int_env("INCREMENTAL_EXISTING_LIMIT", 15000)
+
+logger.info(f"[CONFIG] DATAHUB_URL={DATAHUB_URL}")
+logger.info(f"[CONFIG] DATAHUB_BATCH_ENDPOINT={DATAHUB_BATCH_ENDPOINT}")
+logger.info(f"[CONFIG] INCREMENTAL_EXISTING_LIMIT={INCREMENTAL_EXISTING_LIMIT}")
+
 PERF_ATTACH_BODY = os.getenv("PERF_ATTACH_BODY", "false").lower() == "true"
 
 # IP Whitelist configuration

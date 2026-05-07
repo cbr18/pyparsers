@@ -258,6 +258,8 @@ Detailed parsing adds or improves:
 - `description`
 - `color`, `exterior_color`
 - `engine_volume_ml`, `body_type`, `seat_count`
+
+Completeness follows the shared parser contract: Encar detail rows are only marked `has_details=true` when `power` resolves to a positive integer. If power is missing or invalid, the detail payload can still populate fields, but the row stays incomplete and `last_detail_update` is not set.
 - `view_count`, `favorite_count`
 - `contact_info`, expanded `dealer_info`, `warranty_info`
 

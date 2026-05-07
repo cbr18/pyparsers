@@ -18,6 +18,7 @@ Encar uses the same public list/detail/task contract but has a simpler upstream 
 - detail: `http://api.encar.com/v1/readside/vehicle/{car_id}`
 - implementation: direct JSON API calls via `requests`, without Selenium or Playwright
 - service: `pyparsers-encar` on `:5003`, independent from the other parser containers
+- detail records follow the same `has_details` rule as the other sources: `power` must parse to a positive integer; otherwise the row stays `has_details=false` and `last_detail_update` remains empty.
 
 ## Modes & Requirements
 
@@ -29,14 +30,14 @@ Encar uses the same public list/detail/task contract but has a simpler upstream 
 - **Error handling**: failed detail/spec parsing skips the record but logs category + context. No partially-filled cars are stored.
 - **Validation worker**: (future) dedicated worker in `datahub` can re-check availability and mark `is_available=false` when sources remove a listing.
 - **Concurrency**: default target is 5 simultaneous requests per source with optional per-endpoint rate limiting. The HTTP client enforces this centrally.
-- **Edge cases**: missing `car_id`/`sku_id` are skipped, `power` must contain digits, duplicates resolved via `(source, car_id)` partial index.
+- **Edge cases**: missing `car_id`/`sku_id` are skipped, `power` must contain digits for detailed rows to be marked complete, duplicates resolved via `(source, car_id)` partial index.
 
 ## Enhancement Worker
 
 The Go `EnhancementWorker` inside datahub continuously enriches cars:
 
 - Starts automatically once migrations finish.
-- Pulls cars with `has_details=false` (both sources) and processes them in batches.
+- Pulls cars with `has_details=false` (all sources, including `encar`) and processes them in batches.
 - Default config: `batch_size=10`, `delay_between_batches=300s`, `delay_between_cars=2s`, `max_concurrent=3`.
 - Endpoints: `GET /enhancement/status`, `POST /enhancement/start|stop|config`.
 - Cron container keeps inserting fresh listings so the worker always has something to do.
@@ -50,6 +51,7 @@ The Go `EnhancementWorker` inside datahub continuously enriches cars:
 - Expanded selector logic (no longer assumes label/value share CSS classes) so >110 labels map correctly.
 - Added post-processing for combined fields such as `长*宽*高` → `length/width/height`, mileage normalization (`万公里` → km), year inference from registration date.
 - `_convert_to_domain_car` now feeds Go's `domain.Car` 1:1 with dongchedi fields, ensuring `has_details` semantics match.
+- `encar` detail parsing now matches that same rule: no valid `power` means the row is left incomplete instead of being promoted to `has_details=true`.
 - FastAPI router at `/detailed/*` exposes `parse`, `parse-batch`, and `health` endpoints on the dedicated `pyparsers-che168` service.
 - Current smoke coverage is provided by `tests/integration/test_source_services.py`, which verifies split-service startup plus live list/detail parsing against the direct `5001/5002` endpoints.
 

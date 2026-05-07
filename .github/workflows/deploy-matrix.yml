@@ -1,0 +1,180 @@
+name: Deploy Matrix
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+
+concurrency:
+  group: production-deploy-matrix
+  cancel-in-progress: true
+
+jobs:
+  prepare_matrix:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      targets: ${{ steps.targets.outputs.targets }}
+    steps:
+      - name: Validate deploy targets secret
+        id: targets
+        shell: bash
+        env:
+          SSH_TARGETS_JSON: ${{ secrets.SSH_TARGETS_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SSH_TARGETS_JSON:-}" ]; then
+            echo "SSH_TARGETS_JSON secret is not set" >&2
+            exit 1
+          fi
+
+          targets="$(printf '%s' "$SSH_TARGETS_JSON" | jq -c '.')"
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: prepare_matrix
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        target: ${{ fromJSON(needs.prepare_matrix.outputs.targets) }}
+    concurrency:
+      group: deploy-${{ matrix.target.host }}-${{ matrix.target.user }}
+      cancel-in-progress: false
+    env:
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Load target config
+        shell: bash
+        env:
+          TARGET_JSON: ${{ toJSON(matrix.target) }}
+        run: |
+          set -euo pipefail
+          host="$(jq -r '.host' <<<"$TARGET_JSON")"
+          user="$(jq -r '.user' <<<"$TARGET_JSON")"
+          port="$(jq -r '.port // 22' <<<"$TARGET_JSON")"
+          ssh_key="$(jq -r '.["ssh-key"] // .ssh_key' <<<"$TARGET_JSON")"
+
+          {
+            echo "SSH_HOST=$host"
+            echo "SSH_USER=$user"
+            echo "SSH_PORT=$port"
+            echo "SSH_PRIVATE_KEY<<EOF"
+            printf '%s\n' "$ssh_key"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Prepare CI env file
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > .env <<'EOF'
+          ALLOWED_IPS=127.0.0.1,::1
+          DATAHUB_URL=http://127.0.0.1:8080
+          DATAHUB_TIMEOUT=1800
+          DONGCHEDI_ENHANCE_MAX_CONCURRENT=5
+          CHE168_BATCH_MAX_CONCURRENT=5
+          INCREMENTAL_EXISTING_LIMIT=15000
+          PERF_ATTACH_BODY=false
+          CORS_ALLOW_ORIGINS=*
+          CORS_ALLOW_CREDENTIALS=true
+          CORS_ALLOW_METHODS=GET,POST,PUT,DELETE,OPTIONS
+          CORS_ALLOW_HEADERS=*
+          TASK_TTL_HOURS=24
+          MAX_TASKS=1000
+          EOF
+
+      - name: Validate docker compose
+        run: docker compose config -q
+
+      - name: Prepare SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${SSH_PRIVATE_KEY}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "${SSH_PORT}" "${SSH_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Pack release
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE_TAR="/tmp/pyparsers-release.tar.gz"
+          tar \
+            --exclude=.git \
+            --exclude=.github \
+            --exclude=.env \
+            -czf "${RELEASE_TAR}" .
+
+      - name: Upload release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          scp -P "${SSH_PORT}" /tmp/pyparsers-release.tar.gz "${SSH_USER}@${SSH_HOST}:/tmp/pyparsers-release.tar.gz"
+
+      - name: Deploy on server
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEPLOY_PATH_VALUE="${DEPLOY_PATH:-/home/${SSH_USER}/pyparsers}"
+          ssh -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" '
+            set -euxo pipefail
+            DEPLOY_PATH="'"${DEPLOY_PATH_VALUE}"'"
+            RELEASE_DIR="${DEPLOY_PATH}.incoming"
+            mkdir -p "${DEPLOY_PATH}"
+            rm -rf "${RELEASE_DIR}"
+            mkdir -p "${RELEASE_DIR}"
+            tar -xzf /tmp/pyparsers-release.tar.gz -C "${RELEASE_DIR}"
+            find "${DEPLOY_PATH}" -mindepth 1 -maxdepth 1 ! -name ".env" -exec rm -rf {} +
+            cp -a "${RELEASE_DIR}/." "${DEPLOY_PATH}/"
+            rm -rf "${RELEASE_DIR}"
+            cd "${DEPLOY_PATH}"
+            pwd
+            ls -la
+            ls -la pyparsers
+            test -f .env
+            docker compose version
+            docker compose config -q
+            docker compose up -d --build --remove-orphans
+            for url in http://127.0.0.1:5001/health http://127.0.0.1:5002/health; do
+              for i in $(seq 1 30); do
+                if curl -fsS "${url}" >/dev/null; then
+                  break
+                fi
+                sleep 2
+              done
+              curl -fsS "${url}" >/dev/null
+            done
+            docker compose ps
+          '

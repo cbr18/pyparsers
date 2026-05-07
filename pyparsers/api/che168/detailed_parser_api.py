@@ -167,6 +167,44 @@ def _filter_car_images(image_urls: list) -> list:
     return valid_images
 
 
+def _upgrade_che168_image_url(img_url: Optional[str]) -> Optional[str]:
+    """
+    Пытается поднять качество che168 image URL, если URL уже содержит
+    явный маркер более мелкой версии.
+    """
+    if not img_url or not isinstance(img_url, str):
+        return img_url
+
+    upgraded = img_url.strip()
+    if not upgraded:
+        return upgraded
+
+    if 'autoimg.cn' not in upgraded.lower():
+        return upgraded
+
+    for old, new in (
+        ('640x480', '1024x768'),
+        ('720x540', '1024x768'),
+        ('480x0', '640x0'),
+    ):
+        if old in upgraded:
+            return upgraded.replace(old, new, 1)
+
+    return upgraded
+
+
+def _prefer_high_res_che168_images(image_urls: list) -> list:
+    """
+    Приводит список URL che168 к более высокому качеству там, где это возможно.
+    """
+    upgraded_images = []
+    for img_url in image_urls or []:
+        upgraded = _upgrade_che168_image_url(img_url)
+        if upgraded:
+            upgraded_images.append(upgraded)
+    return upgraded_images
+
+
 def _parse_power_from_text(text: str) -> Optional[int]:
     """
     Пытается извлечь мощность (л.с.) из текста или kW.
@@ -1022,6 +1060,7 @@ class Che168DetailedParserAPI:
             if images:
                 # Фильтруем изображения (исключаем рекламу, логотипы и т.д.)
                 valid_images = _filter_car_images(images)
+                valid_images = _prefer_high_res_che168_images(valid_images)
                 
                 if valid_images:
                     extracted['image'] = valid_images[0]
@@ -1046,7 +1085,7 @@ class Che168DetailedParserAPI:
                 if imageurl and isinstance(imageurl, str) and imageurl.strip():
                     if imageurl.startswith('//'):
                         imageurl = 'https:' + imageurl
-                    extracted['image'] = imageurl.strip()
+                    extracted['image'] = _upgrade_che168_image_url(imageurl.strip())
                     logger.info(f"[API] Использовано imageurl/carimage для car_id={car_id}: {imageurl[:50]}...")
 
             # Если не нашли галерею или она слишком короткая (<=1 фото), пробуем selenium desktop (основной способ)
@@ -1197,6 +1236,7 @@ class Che168DetailedParserAPI:
                                     
                                     if valid_images:
                                         logger.info(f"[API] Fallback (JS): найдено {len(valid_images)} изображений через window.__NEXT_DATA__ для car_id={car_id} (из {len(head_images)} исходных)")
+                                        valid_images = _prefer_high_res_che168_images(valid_images)
                                         result_payload.update({
                                             'image': valid_images[0],
                                             'image_gallery': ' '.join(valid_images),
@@ -1254,6 +1294,7 @@ class Che168DetailedParserAPI:
                                                     result_payload = {}
                                                     if valid_images:
                                                         logger.info(f"[API] Fallback (HTML): найдено {len(valid_images)} изображений через __NEXT_DATA__ в HTML для car_id={car_id} (из {len(head_images)} исходных)")
+                                                        valid_images = _prefer_high_res_che168_images(valid_images)
                                                         result_payload.update({
                                                             'image': valid_images[0],
                                                             'image_gallery': ' '.join(valid_images),
@@ -1511,6 +1552,7 @@ class Che168DetailedParserAPI:
                             # Фильтруем
                             images_filtered = _filter_car_images(images_found)
                             if images_filtered:
+                                images_filtered = _prefer_high_res_che168_images(images_filtered)
                                 logger.info(f"[API] Desktop fallback: УСПЕХ {len(images_filtered)} изображений для car_id={car_id}")
                                 payload = {
                                     'image': images_filtered[0],

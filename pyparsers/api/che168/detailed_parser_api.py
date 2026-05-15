@@ -10,6 +10,7 @@ import time
 import json
 from typing import Optional, Dict, Any, Union, Tuple
 from .models.detailed_car import Che168DetailedCar
+from .chrome_runtime import add_chromium_runtime_options, make_chromium_temp_dir
 from api.date_utils import normalize_first_registration_date
 from api.mileage_utils import normalize_mileage
 
@@ -445,7 +446,6 @@ class Che168DetailedParserAPI:
     def _create_chrome_driver():
         """Создает Chrome WebDriver с оптимальными настройками."""
         import os
-        import tempfile
         from selenium import webdriver
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.chrome.service import Service
@@ -462,8 +462,8 @@ class Che168DetailedParserAPI:
         chrome_options.add_experimental_option('useAutomationExtension', False)
         chrome_options.page_load_strategy = 'eager'
         
-        temp_dir = tempfile.mkdtemp()
-        chrome_options.add_argument(f"--user-data-dir={temp_dir}")
+        temp_dir = make_chromium_temp_dir()
+        add_chromium_runtime_options(chrome_options, temp_dir)
         
         chrome_bin = os.environ.get("CHROME_BIN")
         if chrome_bin:
@@ -1387,7 +1387,7 @@ class Che168DetailedParserAPI:
                         driver.quit()
                     except:
                         pass
-                if os.path.exists(temp_dir):
+                if temp_dir and os.path.exists(temp_dir):
                     try:
                         shutil.rmtree(temp_dir, ignore_errors=True)
                     except:
@@ -1590,7 +1590,8 @@ class Che168DetailedParserAPI:
             finally:
                 if driver:
                     driver.quit()
-                shutil.rmtree(temp_dir, ignore_errors=True)
+                if temp_dir:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
 
         except Exception as e:
             logger.warning(f"[API] Desktop fallback ошибка для car_id={car_id}: {e}")

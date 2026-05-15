@@ -65,6 +65,8 @@ RUN UV_CACHE_DIR=/tmp/uv-cache uv sync --frozen --no-dev --no-cache && rm -rf /t
 COPY --chown=app:app . .
 
 ENV HOME=/home/app
+ENV XDG_CONFIG_HOME=/tmp/.config
+ENV XDG_CACHE_HOME=/tmp/.cache
 ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
 

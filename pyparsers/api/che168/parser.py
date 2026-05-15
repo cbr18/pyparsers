@@ -12,6 +12,7 @@ from .models.response import Che168ApiResponse, Che168Data
 from ..base_parser import BaseCarParser
 from ..date_utils import normalize_first_registration_date
 from api.numeric_utils import parse_int_value, parse_float_value, normalize_power_value
+from .chrome_runtime import add_chromium_runtime_options, make_chromium_temp_dir
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -342,13 +343,6 @@ class Che168Parser(BaseCarParser):
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
-        # Отключаем crashpad/репортер, чтобы не плодить зомби-процессы
-        chrome_options.add_argument("--disable-crash-reporter")
-        chrome_options.add_argument("--disable-features=Crashpad")
-        chrome_options.add_argument("--disable-features=Breakpad")
-        chrome_options.add_argument("--disable-features=SendFeedback")
-        chrome_options.add_argument("--no-crashpad")
-
         # ОТКЛЮЧАЕМ ЗАГРУЗКУ ИЗОБРАЖЕНИЙ И МЕДИА (значительно ускоряет)
         prefs = {
             "profile.managed_default_content_settings.images": 2,  # Блокировать изображения
@@ -387,10 +381,8 @@ class Che168Parser(BaseCarParser):
                 chrome_options.binary_location = chrome_bin
 
             # Добавляем уникальный user-data-dir для избежания конфликтов
-            import tempfile
-            import shutil
-            temp_dir = tempfile.mkdtemp()
-            chrome_options.add_argument(f"--user-data-dir={temp_dir}")
+            temp_dir = make_chromium_temp_dir()
+            add_chromium_runtime_options(chrome_options, temp_dir)
             # Сохраняем путь для последующего удаления
             self._temp_dir = temp_dir
 
@@ -1083,11 +1075,10 @@ class Che168Parser(BaseCarParser):
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--disable-web-security")
         # Добавляем уникальный user-data-dir для избежания конфликтов
-        import tempfile
         import shutil
         import os
-        temp_dir = tempfile.mkdtemp()
-        chrome_options.add_argument(f"--user-data-dir={temp_dir}")
+        temp_dir = make_chromium_temp_dir()
+        add_chromium_runtime_options(chrome_options, temp_dir)
         user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",

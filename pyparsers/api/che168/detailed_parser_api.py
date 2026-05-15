@@ -10,6 +10,7 @@ import time
 import json
 from typing import Optional, Dict, Any, Union, Tuple
 from .models.detailed_car import Che168DetailedCar
+from .chrome_runtime import add_chromium_runtime_options, make_chromium_temp_dir
 from api.date_utils import normalize_first_registration_date
 from api.mileage_utils import normalize_mileage
 
@@ -165,6 +166,44 @@ def _filter_car_images(image_urls: list) -> list:
         logger.info(f"[API] Отфильтровано изображений: {len(image_urls)} -> {len(valid_images)} (исключено {len(image_urls) - len(valid_images)})")
     
     return valid_images
+
+
+def _upgrade_che168_image_url(img_url: Optional[str]) -> Optional[str]:
+    """
+    Пытается поднять качество che168 image URL, если URL уже содержит
+    явный маркер более мелкой версии.
+    """
+    if not img_url or not isinstance(img_url, str):
+        return img_url
+
+    upgraded = img_url.strip()
+    if not upgraded:
+        return upgraded
+
+    if 'autoimg.cn' not in upgraded.lower():
+        return upgraded
+
+    for old, new in (
+        ('640x480', '1024x768'),
+        ('720x540', '1024x768'),
+        ('480x0', '640x0'),
+    ):
+        if old in upgraded:
+            return upgraded.replace(old, new, 1)
+
+    return upgraded
+
+
+def _prefer_high_res_che168_images(image_urls: list) -> list:
+    """
+    Приводит список URL che168 к более высокому качеству там, где это возможно.
+    """
+    upgraded_images = []
+    for img_url in image_urls or []:
+        upgraded = _upgrade_che168_image_url(img_url)
+        if upgraded:
+            upgraded_images.append(upgraded)
+    return upgraded_images
 
 
 def _parse_power_from_text(text: str) -> Optional[int]:
@@ -407,7 +446,6 @@ class Che168DetailedParserAPI:
     def _create_chrome_driver():
         """Создает Chrome WebDriver с оптимальными настройками."""
         import os
-        import tempfile
         from selenium import webdriver
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.chrome.service import Service
@@ -424,8 +462,8 @@ class Che168DetailedParserAPI:
         chrome_options.add_experimental_option('useAutomationExtension', False)
         chrome_options.page_load_strategy = 'eager'
         
-        temp_dir = tempfile.mkdtemp()
-        chrome_options.add_argument(f"--user-data-dir={temp_dir}")
+        temp_dir = make_chromium_temp_dir()
+        add_chromium_runtime_options(chrome_options, temp_dir)
         
         chrome_bin = os.environ.get("CHROME_BIN")
         if chrome_bin:
@@ -1022,6 +1060,7 @@ class Che168DetailedParserAPI:
             if images:
                 # Фильтруем изображения (исключаем рекламу, логотипы и т.д.)
                 valid_images = _filter_car_images(images)
+                valid_images = _prefer_high_res_che168_images(valid_images)
                 
                 if valid_images:
                     extracted['image'] = valid_images[0]
@@ -1046,7 +1085,7 @@ class Che168DetailedParserAPI:
                 if imageurl and isinstance(imageurl, str) and imageurl.strip():
                     if imageurl.startswith('//'):
                         imageurl = 'https:' + imageurl
-                    extracted['image'] = imageurl.strip()
+                    extracted['image'] = _upgrade_che168_image_url(imageurl.strip())
                     logger.info(f"[API] Использовано imageurl/carimage для car_id={car_id}: {imageurl[:50]}...")
 
             # Если не нашли галерею или она слишком короткая (<=1 фото), пробуем selenium desktop (основной способ)
@@ -1197,6 +1236,7 @@ class Che168DetailedParserAPI:
                                     
                                     if valid_images:
                                         logger.info(f"[API] Fallback (JS): найдено {len(valid_images)} изображений через window.__NEXT_DATA__ для car_id={car_id} (из {len(head_images)} исходных)")
+                                        valid_images = _prefer_high_res_che168_images(valid_images)
                                         result_payload.update({
                                             'image': valid_images[0],
                                             'image_gallery': ' '.join(valid_images),
@@ -1254,6 +1294,7 @@ class Che168DetailedParserAPI:
                                                     result_payload = {}
                                                     if valid_images:
                                                         logger.info(f"[API] Fallback (HTML): найдено {len(valid_images)} изображений через __NEXT_DATA__ в HTML для car_id={car_id} (из {len(head_images)} исходных)")
+                                                        valid_images = _prefer_high_res_che168_images(valid_images)
                                                         result_payload.update({
                                                             'image': valid_images[0],
                                                             'image_gallery': ' '.join(valid_images),
@@ -1346,7 +1387,7 @@ class Che168DetailedParserAPI:
                         driver.quit()
                     except:
                         pass
-                if os.path.exists(temp_dir):
+                if temp_dir and os.path.exists(temp_dir):
                     try:
                         shutil.rmtree(temp_dir, ignore_errors=True)
                     except:
@@ -1511,6 +1552,7 @@ class Che168DetailedParserAPI:
                             # Фильтруем
                             images_filtered = _filter_car_images(images_found)
                             if images_filtered:
+                                images_filtered = _prefer_high_res_che168_images(images_filtered)
                                 logger.info(f"[API] Desktop fallback: УСПЕХ {len(images_filtered)} изображений для car_id={car_id}")
                                 payload = {
                                     'image': images_filtered[0],
@@ -1548,7 +1590,8 @@ class Che168DetailedParserAPI:
             finally:
                 if driver:
                     driver.quit()
-                shutil.rmtree(temp_dir, ignore_errors=True)
+                if temp_dir:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
 
         except Exception as e:
             logger.warning(f"[API] Desktop fallback ошибка для car_id={car_id}: {e}")

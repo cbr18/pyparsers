@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pyparsers"))
 
 from api.che168.parser import Che168Parser
+from api.che168.detailed_parser_api import _prefer_high_res_che168_images, _upgrade_che168_image_url
 
 
 class _FakeProcess:
@@ -155,6 +156,36 @@ class Che168ParserTests(unittest.TestCase):
 
         self.assertEqual(car.brand_name, "保时捷")
         self.assertEqual(car.series_name, "Cayenne")
+
+    def test_upgrade_che168_image_url_promotes_smaller_variants(self):
+        self.assertEqual(
+            _upgrade_che168_image_url(
+                "https://2sc2.autoimg.cn/escimg/auto/g33/M03/E7/4A/640x480_c42_autohomecar__abc.jpg.webp"
+            ),
+            "https://2sc2.autoimg.cn/escimg/auto/g33/M03/E7/4A/1024x768_c42_autohomecar__abc.jpg.webp",
+        )
+        self.assertEqual(
+            _upgrade_che168_image_url(
+                "https://2sc2.autoimg.cn/escimg/g26/M04/EA/6C/f_s_autohomecar__abc.jpg"
+            ),
+            "https://2sc2.autoimg.cn/escimg/g26/M04/EA/6C/f_s_autohomecar__abc.jpg",
+        )
+
+    def test_prefer_high_res_che168_images_upgrades_gallery(self):
+        upgraded = _prefer_high_res_che168_images(
+            [
+                "https://2sc2.autoimg.cn/escimg/auto/g33/M03/E7/4A/640x480_c42_autohomecar__abc.jpg.webp",
+                "https://2sc2.autoimg.cn/escimg/auto/g33/M03/E7/4A/1024x768_c42_autohomecar__def.jpg.webp",
+            ]
+        )
+
+        self.assertEqual(
+            upgraded,
+            [
+                "https://2sc2.autoimg.cn/escimg/auto/g33/M03/E7/4A/1024x768_c42_autohomecar__abc.jpg.webp",
+                "https://2sc2.autoimg.cn/escimg/auto/g33/M03/E7/4A/1024x768_c42_autohomecar__def.jpg.webp",
+            ],
+        )
 
 
 if __name__ == "__main__":

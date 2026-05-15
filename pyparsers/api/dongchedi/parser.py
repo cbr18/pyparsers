@@ -8,137 +8,182 @@ from .models.car import DongchediCar
 from ..base_parser import BaseCarParser
 from api.date_utils import normalize_first_registration_date
 from api.mileage_utils import normalize_mileage
+from api.numeric_utils import parse_int_value, parse_float_value, normalize_power_value
 
 logger = logging.getLogger(__name__)
 
 
-def parse_float_value(raw_value: Union[str, int, float, None]) -> Optional[float]:
-    """
-    Преобразует строковое значение в float.
-    
-    Args:
-        raw_value: Исходное значение
-        
-    Returns:
-        float или None
-    """
-    if raw_value is None:
-        return None
-    if isinstance(raw_value, (int, float)):
-        return float(raw_value)
-    value_str = str(raw_value).strip()
-    if not value_str:
-        return None
-    # Извлекаем число из строки
-    match = re.search(r'([\d.,]+)', value_str)
-    if match:
-        try:
-            return float(match.group(1).replace(',', '.'))
-        except ValueError:
-            return None
-    return None
-
-
-def parse_int_value(raw_value: Union[str, int, float, None]) -> Optional[int]:
-    """
-    Преобразует строковое значение в int.
-    
-    Args:
-        raw_value: Исходное значение
-        
-    Returns:
-        int или None
-    """
-    if raw_value is None:
-        return None
-    if isinstance(raw_value, int):
-        return raw_value
-    if isinstance(raw_value, float):
-        return int(raw_value)
-    value_str = str(raw_value).strip()
-    if not value_str:
-        return None
-    # Извлекаем число из строки
-    match = re.search(r'(\d+)', value_str)
-    if match:
-        try:
-            return int(match.group(1))
-        except ValueError:
-            return None
-    return None
-
-
-_PS_PATTERN = re.compile(r'\(([\d.,]+)\s*[Pp][Ss]?\)')
-_HORSEPOWER_UNIT_PATTERN = re.compile(r'([\d.,]+)\s*(?:[Pp][Ss]?|л\.с\.|HP|hp)')
-_KW_PATTERN = re.compile(r'[\d.,]+\s*[Kk][Ww]')
-_FIRST_NUMBER_PATTERN = re.compile(r'([\d.,]+)')
-_KW_TO_HP = 1.35962
-
-
-def _parse_number(text: str) -> Optional[float]:
-    match = _FIRST_NUMBER_PATTERN.search(text)
-    if not match:
-        return None
-    number_str = match.group(1).replace(',', '.')
-    try:
-        return float(number_str)
-    except ValueError:
-        return None
-
-
-def _format_hp(value: float) -> int:
-    """Форматирует значение мощности как целое число л.с."""
-    return int(round(value))
-
-
-def normalize_power_value(raw_value, assume_kw: bool = False) -> Optional[int]:
-    """
-    Нормализует значение мощности и возвращает его как целое число л.с.
-    
-    Args:
-        raw_value: Исходное значение (строка или число)
-        assume_kw: Если True, предполагаем что значение в кВт если единицы не указаны
-        
-    Returns:
-        Мощность в л.с. как int или None
-    """
-    if raw_value is None:
-        return None
-    value_str = str(raw_value).strip()
-    if not value_str:
-        return None
-    normalized = value_str.replace('（', '(').replace('）', ')')
-
-    match = _PS_PATTERN.search(normalized)
-    if match:
-        number = _parse_number(match.group(1))
-        if number is not None:
-            return _format_hp(number)
-
-    match = _HORSEPOWER_UNIT_PATTERN.search(normalized)
-    if match:
-        number = _parse_number(match.group(1))
-        if number is not None:
-            return _format_hp(number)
-
-    if _KW_PATTERN.search(normalized):
-        number = _parse_number(normalized)
-        if number is not None:
-            return _format_hp(number * _KW_TO_HP)
-
-    if assume_kw:
-        number = _parse_number(normalized)
-        if number is not None:
-            return _format_hp(number * _KW_TO_HP)
-
-    number = _parse_number(normalized)
-    if number is not None:
-        return _format_hp(number)
-
-    return None
-
 class DongchediParser(BaseCarParser):
     """Парсер для сайта Dongchedi"""
+
+    SPEC_FIELD_MAPPING = {
+        # === Мощность и динамика ===
+        '最大功率(kW)': 'power',
+        '最大功率': 'power',
+        '最大马力': 'power',
+        '最大马力(Ps)': 'power',
+        '最大扭矩(N·m)': 'torque',
+        '官方百公里加速时间(s)': 'acceleration',
+        '最高车速(km/h)': 'max_speed',
+        '百公里耗电量(kWh/100km)': 'fuel_consumption',
+        'NEDC综合油耗(L/100km)': 'fuel_consumption',
+        'WLTC综合油耗(L/100km)': 'fuel_consumption',
+        '环保标准': 'emission_standard',
+        
+        # === Размеры и кузов ===
+        '长x宽x高(mm)': 'dimensions',
+        '长(mm)': 'length',
+        '宽(mm)': 'width',
+        '高(mm)': 'height',
+        '轴距(mm)': 'wheelbase',
+        '车身结构': 'body_type',
+        '整备质量(kg)': 'curb_weight',
+        '满载质量(kg)': 'gross_weight',
+        '行李舱容积(L)': 'trunk_volume',
+        '行李厢容积(L)': 'trunk_volume',
+        '油箱容积(L)': 'fuel_tank_volume',
+        '座位数(个)': 'seat_count',
+        '座位数': 'seat_count',
+        '车门数(个)': 'door_count',
+        '车门数': 'door_count',
+        
+        # === Двигатель ДВС ===
+        '发动机': 'engine_type',
+        '发动机型号': 'engine_code',
+        '排量(mL)': 'engine_volume_ml',
+        '排量(L)': 'engine_volume',
+        '气缸数(个)': 'cylinder_count',
+        '每缸气门数(个)': 'valve_count',
+        '压缩比': 'compression_ratio',
+        '进气形式': 'turbo_type',
+        
+        # === Электромобили ===
+        '纯电续航里程(km)': 'electric_range',
+        '纯电续航里程(km)CLTC': 'electric_range',
+        '纯电续航里程(km)NEDC': 'electric_range',
+        '纯电续航里程(km)工信部': 'electric_range',
+        '电池容量(kWh)': 'battery_capacity',
+        '充电时间(小时)': 'charging_time',
+        '快充时间(小时)': 'fast_charge_time',
+        '快充接口位置': 'charge_port_type',
+        
+        # === Трансмиссия и привод ===
+        '变速箱': 'transmission_type',
+        '变速箱描述': 'transmission_type',
+        '变速箱类型': 'transmission_type',
+        '挡位数': 'gear_count',
+        '驱动方式': 'drive_type',
+        
+        # === Подвеска и тормоза ===
+        '前悬挂形式': 'front_suspension',
+        '前悬架类型': 'front_suspension',
+        '后悬挂形式': 'rear_suspension',
+        '后悬架类型': 'rear_suspension',
+        '前制动器类型': 'front_brakes',
+        '后制动器类型': 'rear_brakes',
+        '驻车制动类型': 'brake_system',
+        
+        # === Колёса и шины ===
+        '前轮胎规格尺寸': 'tire_size',
+        '后轮胎规格尺寸': 'tire_size',
+        '轮胎规格': 'tire_size',
+        '轮毂规格': 'wheel_size',
+        '铝合金轮毂': 'wheel_type',
+        '备胎规格': 'tire_type',
+        
+        # === Безопасность ===
+        '主/副驾驶座安全气囊': 'airbag_count',
+        '前排安全气囊': 'airbag_count',
+        'ABS防抱死': 'abs',
+        '车身稳定系统(ESP/DSC等)': 'esp',
+        'ESP车身稳定系统': 'esp',
+        '牵引力控制(TCS/ASR等)': 'tcs',
+        'TCS牵引力控制': 'tcs',
+        '上坡辅助(HAC)': 'hill_assist',
+        '上坡辅助': 'hill_assist',
+        '并线辅助': 'blind_spot_monitor',
+        '盲区监测': 'blind_spot_monitor',
+        '车道偏离预警': 'lane_departure',
+        
+        # === Комфорт ===
+        '空调控制方式': 'air_conditioning',
+        '空调': 'air_conditioning',
+        '自动空调': 'climate_control',
+        '座椅材质': 'upholstery',
+        '座椅加热': 'seat_heating',
+        '座椅通风': 'seat_ventilation',
+        '座椅按摩': 'seat_massage',
+        '方向盘加热': 'steering_wheel_heating',
+        '天窗类型': 'sunroof',
+        '全景天窗': 'panoramic_roof',
+        
+        # === Мультимедиа ===
+        'GPS导航': 'navigation',
+        '卫星导航系统': 'navigation',
+        '音响系统': 'audio_system',
+        '扬声器数量(个)': 'speakers_count',
+        '扬声器数量': 'speakers_count',
+        '蓝牙/车载电话': 'bluetooth',
+        '蓝牙': 'bluetooth',
+        'USB接口': 'usb',
+        'AUX接口': 'aux',
+        
+        # === Освещение ===
+        '前大灯类型': 'headlight_type',
+        '近光灯': 'headlight_type',
+        '远光灯': 'headlight_type',
+        '前雾灯': 'fog_lights',
+        'LED大灯': 'led_lights',
+        '日间行车灯': 'daytime_running',
+    }
+
+    def _parse_spec_item(self, label, value, specs):
+        """Парсит один элемент спецификации и обновляет словарь specs."""
+        if label not in self.SPEC_FIELD_MAPPING:
+            return False
+
+        field_name = self.SPEC_FIELD_MAPPING[label]
+        clean_value = str(value).strip()
+        if not clean_value or clean_value in ('-', '无', '待查'):
+            return False
+
+        # Преобразуем в числовые типы в зависимости от поля
+        if field_name == 'power':
+            # Проверяем, что значение содержит цифры перед обработкой
+            if not any(c.isdigit() for c in clean_value):
+                return False
+            # Если label содержит '马力' или 'Ps', это уже л.с., не конвертируем
+            is_already_hp = '马力' in label or 'Ps' in label
+            normalized_hp = normalize_power_value(clean_value, assume_kw=not is_already_hp)
+            if normalized_hp:
+                specs[field_name] = normalized_hp
+            return True
+        elif field_name == 'max_speed':
+            specs[field_name] = parse_int_value(clean_value)
+        elif field_name == 'electric_range':
+            specs[field_name] = parse_int_value(clean_value)
+        elif field_name == 'engine_volume_ml':
+            specs[field_name] = parse_int_value(clean_value)
+        elif field_name == 'door_count':
+            specs[field_name] = parse_int_value(clean_value)
+        elif field_name in ('length', 'width', 'height', 'wheelbase', 'curb_weight'):
+            specs[field_name] = parse_int_value(clean_value)
+        elif field_name in ('torque', 'acceleration', 'fuel_consumption', 'battery_capacity'):
+            specs[field_name] = parse_float_value(clean_value)
+        else:
+            specs[field_name] = clean_value
+            
+            # Обработка специальных случаев
+            if field_name == 'dimensions':
+                try:
+                    parts = clean_value.split('x')
+                    if len(parts) == 3:
+                        specs['length'] = parse_int_value(parts[0])
+                        specs['width'] = parse_int_value(parts[1])
+                        specs['height'] = parse_int_value(parts[2])
+                except:
+                    pass
+        return True
 
     def __init__(self):
         self.base_url = "https://www.dongchedi.com/motor/pc/sh/sh_sku_list"
@@ -1616,12 +1661,125 @@ class DongchediParser(BaseCarParser):
             results.append((car_obj, meta))
         return results
 
-    def fetch_car_specifications(self, car_id: str):
+    def fetch_car_specifications(self, car_id: str, series_id: Optional[str] = None):
         """
         Парсит технические характеристики машины по car_id через страницу параметров.
+        Сначала пробует JSON API и __NEXT_DATA__, затем fallback на Selenium.
         Возвращает (dict | None, meta: dict)
         """
-        logger.info(f"fetch_car_specifications: ВХОД в функцию для car_id={car_id}")
+        logger.info(f"fetch_car_specifications: ВХОД в функцию для car_id={car_id}, series_id={series_id}")
+        
+        # 1. Пробуем быстрый JSON API (требует series_id)
+        if series_id:
+            try:
+                specs = self._fetch_specs_via_json_api(car_id, series_id)
+                if specs and self._is_specs_complete(specs):
+                    logger.info(f"fetch_car_specifications: Успешно получено через JSON API для car_id={car_id}")
+                    return specs, {"status": 200, "method": "json_api"}
+            except Exception as e:
+                logger.debug(f"Ошибка при получении через JSON API для car_id={car_id}: {e}")
+
+        # 2. Пробуем извлечь из __NEXT_DATA__ (через обычный requests)
+        try:
+            specs = self._fetch_specs_via_next_data(car_id)
+            if specs and self._is_specs_complete(specs):
+                logger.info(f"fetch_car_specifications: Успешно получено через __NEXT_DATA__ для car_id={car_id}")
+                return specs, {"status": 200, "method": "next_data"}
+        except Exception as e:
+            logger.debug(f"Ошибка при получении через __NEXT_DATA__ для car_id={car_id}: {e}")
+
+        # 3. Fallback на Selenium (оригинальная логика)
+        return self._fetch_specs_via_selenium(car_id)
+
+    def _is_specs_complete(self, specs: dict) -> bool:
+        """Проверяет, что в specs есть минимально необходимый набор полей."""
+        # Мощность и объем двигателя - критичные поля
+        required = ['power', 'engine_volume_ml']
+        # Если хотя бы одно из них есть, считаем что данные получены
+        # В идеале проверять больше полей, но Dongchedi часто прячет часть данных
+        has_essential = any(specs.get(field) for field in required)
+        if not has_essential:
+            logger.warning(f"Specs incomplete: missing {required}. Current specs keys: {list(specs.keys())}")
+        return has_essential
+
+    def _fetch_specs_via_json_api(self, car_id: str, series_id: str) -> Optional[Dict[str, Any]]:
+        """Получает спецификации через внутренний JSON API конфигураций."""
+        url = "https://www.dongchedi.com/motor/pc/car/series/config"
+        params = {
+            "series_id": str(series_id),
+            "car_ids": str(car_id),
+            "aid": "1839",
+            "app_name": "auto_web_pc"
+        }
+        
+        headers = dict(self.headers)
+        headers["Referer"] = f"https://www.dongchedi.com/auto/params-carIds-{car_id}"
+        
+        response = requests.get(url, params=params, headers=headers, timeout=10)
+        if response.status_code != 200:
+            return None
+            
+        payload = response.json()
+        if payload.get("status") != 0 or not payload.get("data"):
+            return None
+            
+        data = payload["data"]
+        # Структура: data -> config_data -> [ { group_name, items: [ { name, values: [ { value } ] } ] } ]
+        specs = {}
+        config_data = data.get("config_data", [])
+        for group in config_data:
+            for item in group.get("items", []):
+                label = item.get("name")
+                values = item.get("values", [])
+                if values and label:
+                    # Берем значение для первого (и единственного в нашем запросе) car_id
+                    val = values[0].get("value")
+                    self._parse_spec_item(label, val, specs)
+        
+        return specs if specs else None
+
+    def _fetch_specs_via_next_data(self, car_id: str) -> Optional[Dict[str, Any]]:
+        """Получает спецификации через парсинг __NEXT_DATA__ со страницы параметров."""
+        from bs4 import BeautifulSoup
+        import json
+        
+        url = f"https://www.dongchedi.com/auto/params-carIds-{car_id}"
+        headers = dict(self.headers)
+        
+        response = requests.get(url, headers=headers, timeout=15)
+        if response.status_code != 200 or '__NEXT_DATA__' not in response.text:
+            return None
+            
+        soup = BeautifulSoup(response.text, 'html.parser')
+        script_tag = soup.find('script', {'id': '__NEXT_DATA__'})
+        if not script_tag or not script_tag.string:
+            return None
+            
+        data = json.loads(script_tag.string)
+        # Путь в JSON может меняться, обычно это props -> pageProps -> config_data
+        page_props = data.get('props', {}).get('pageProps', {})
+        config_data = page_props.get('config_data', [])
+        
+        if not config_data:
+            # Попробуем альтернативный путь
+            config_data = page_props.get('data', {}).get('config_data', [])
+            
+        if not config_data:
+            return None
+            
+        specs = {}
+        for group in config_data:
+            for item in group.get("items", []):
+                label = item.get("name")
+                values = item.get("values", [])
+                if values and label:
+                    val = values[0].get("value")
+                    self._parse_spec_item(label, val, specs)
+                    
+        return specs if specs else None
+
+    def _fetch_specs_via_selenium(self, car_id: str):
+        """Оригинальная логика парсинга через Selenium."""
         import time
         import random
         import json
@@ -1644,9 +1802,6 @@ class DongchediParser(BaseCarParser):
             try:
                 return max(1, int(raw))
             except ValueError:
-                logger.warning(
-                    f"fetch_car_specifications: некорректное значение {name}={raw!r}, используется {default}"
-                )
                 return default
 
         url = f"https://www.dongchedi.com/auto/params-carIds-{car_id}"
@@ -1706,46 +1861,31 @@ class DongchediParser(BaseCarParser):
                 try:
                     if driver is None:
                         raise WebDriverException("Driver is None")
-                    # Проверяем что driver все еще активен (только если нужно)
-                    if check_session:
-                        try:
-                            # Используем более легкую проверку - просто пытаемся выполнить операцию
-                            # Если сессия потеряна, операция сама выбросит исключение
-                            pass
-                        except Exception:
-                            raise WebDriverException("Driver session is lost")
-                    # Выполняем операцию напрямую - она сама выбросит ConnectionRefusedError если сессия потеряна
                     return operation()
                 except (ConnectionRefusedError, OSError) as e:
-                    # Специальная обработка для ConnectionRefusedError - это означает что Chrome упал
                     logger.error(f"fetch_car_specifications: Chrome процесс упал при {description} для car_id={car_id}: {e}")
                     raise WebDriverException(f"Chrome process crashed: {e}")
                 except (WebDriverException, Exception) as e:
                     logger.warning(f"fetch_car_specifications: Ошибка при выполнении {description} для car_id={car_id}: {e}")
                     raise
             
-            # Получаем page_source максимально быстро после загрузки, чтобы минимизировать риск потери сессии
             try:
                 logger.info(f"fetch_car_specifications: Загрузка страницы для car_id={car_id}")
                 safe_driver_operation(lambda: driver.get(url), "driver.get()", check_session=False)
                 logger.info(f"fetch_car_specifications: Страница загружена для car_id={car_id}")
             except TimeoutException as e:
-                logger.warning(
-                    f"fetch_car_specifications: Timeout загрузки страницы для car_id={car_id}: {e}. "
-                    "Пробуем остановить загрузку и разобрать уже полученный HTML"
-                )
+                logger.warning(f"fetch_car_specifications: Timeout загрузки страницы для car_id={car_id}: {e}")
                 try:
                     safe_driver_operation(lambda: driver.execute_script("window.stop();"), "window.stop()", check_session=False)
-                except Exception as stop_error:
-                    logger.debug(f"fetch_car_specifications: Не удалось остановить загрузку для car_id={car_id}: {stop_error}")
+                except Exception:
+                    pass
             except Exception as e:
                 logger.error(f"fetch_car_specifications: Не удалось загрузить страницу для car_id={car_id}: {e}", exc_info=True)
                 raise
             
-            time.sleep(random.uniform(1, 2))  # Уменьшено время ожидания
+            time.sleep(random.uniform(1, 2))
             
             try:
-                logger.info(f"fetch_car_specifications: Ожидание body для car_id={car_id}")
                 safe_driver_operation(
                     lambda: WebDriverWait(driver, 10).until(
                         EC.presence_of_element_located((By.TAG_NAME, "body"))
@@ -1753,44 +1893,19 @@ class DongchediParser(BaseCarParser):
                     "wait for body",
                     check_session=False
                 )
-                logger.info(f"fetch_car_specifications: Body найден для car_id={car_id}")
-            except (TimeoutException, Exception) as e:
-                logger.warning(f"fetch_car_specifications: Timeout ожидания body для car_id={car_id}: {e}, продолжаем")
+            except:
+                pass
             
-            # Получаем page_source СРАЗУ после загрузки, до любых других операций
-            # Это минимизирует риск потери сессии между операциями
             try:
-                logger.info(f"fetch_car_specifications: Получение page_source для car_id={car_id}")
                 page_source = safe_driver_operation(lambda: driver.page_source, "driver.page_source", check_session=False)
-                logger.info(f"fetch_car_specifications: page_source получен для car_id={car_id}, размер: {len(page_source)} байт")
             except Exception as e:
                 logger.error(f"fetch_car_specifications: Не удалось получить page_source для car_id={car_id}: {e}", exc_info=True)
                 raise
             
-            # Скролл выполняем ПОСЛЕ получения page_source (это не критично для парсинга)
-            try:
-                safe_driver_operation(lambda: driver.execute_script("window.scrollTo(0, document.body.scrollHeight);"), "scroll down", check_session=False)
-                time.sleep(0.5)
-                safe_driver_operation(lambda: driver.execute_script("window.scrollTo(0, 0);"), "scroll up", check_session=False)
-                time.sleep(0.5)
-            except Exception as e:
-                # Скролл не критичен, мы уже получили page_source
-                logger.debug(f"fetch_car_specifications: Ошибка при скролле для car_id={car_id}: {e} (не критично, page_source уже получен)")
-            logger.info(f"fetch_car_specifications: page_source получен для car_id={car_id}, размер: {len(page_source)} байт")
             soup = BeautifulSoup(page_source, 'html.parser')
-            logger.info(f"fetch_car_specifications: BeautifulSoup создан для car_id={car_id}")
-            logger.info(f"fetch_car_specifications: HTML загружен для car_id={car_id}, размер: {len(page_source)} байт")
-            
-            # Парсим технические характеристики из таблицы (внутри try, чтобы можно было удалить soup в finally)
             specs = {}
-            
-            # Ищем таблицы с параметрами
             table_rows = soup.find_all('div', class_='table_row__yVX1h')
-            logger.info(f"Найдено table_rows для car_id={car_id}: {len(table_rows)} строк")
-            
-            # Если не нашли, пробуем альтернативные селекторы
             if len(table_rows) == 0:
-                # Пробуем другие возможные классы
                 alt_selectors = [
                     ('div', {'class': re.compile(r'table.*row', re.I)}),
                     ('div', {'class': re.compile(r'row.*table', re.I)}),
@@ -1800,268 +1915,48 @@ class DongchediParser(BaseCarParser):
                 for tag, attrs in alt_selectors:
                     alt_rows = soup.find_all(tag, attrs)
                     if alt_rows:
-                        logger.info(f"Найдено альтернативных строк ({tag}, {attrs}): {len(alt_rows)}")
                         table_rows = alt_rows
                         break
-            
-            # Логируем все найденные label'ы для диагностики
-            all_labels = []
-            for row in table_rows:
-                try:
-                    label_elem = row.find('label', class_='cell_label__ZtXlw')
-                    if label_elem:
-                        all_labels.append(label_elem.get_text().strip())
-                except:
-                    pass
-            if all_labels:
-                logger.info(f"Все найденные label'ы на странице specs для car_id={car_id}: {all_labels[:30]}")
             
             for row in table_rows:
                 try:
                     label_elem = row.find('label', class_='cell_label__ZtXlw')
                     value_elem = row.find('div', class_='cell_normal__37nRi')
-                    
-                    if not label_elem or not value_elem:
-                        continue
-
-                    label = label_elem.get_text().strip()
-                    value = value_elem.get_text().strip()
-
-                    # Маппинг китайских названий на английские поля (только поля которые есть в БД)
-                    field_mapping = {
-                            # === Мощность и динамика ===
-                            '最大功率(kW)': 'power',
-                            '最大功率': 'power',
-                            '最大马力': 'power',
-                            '最大马力(Ps)': 'power',
-                            '最大扭矩(N·m)': 'torque',
-                            '官方百公里加速时间(s)': 'acceleration',
-                            '最高车速(km/h)': 'max_speed',
-                            '百公里耗电量(kWh/100km)': 'fuel_consumption',
-                            'NEDC综合油耗(L/100km)': 'fuel_consumption',
-                            'WLTC综合油耗(L/100km)': 'fuel_consumption',
-                            '环保标准': 'emission_standard',
-                            
-                            # === Размеры и кузов ===
-                            '长x宽x高(mm)': 'dimensions',
-                            '长(mm)': 'length',
-                            '宽(mm)': 'width',
-                            '高(mm)': 'height',
-                            '轴距(mm)': 'wheelbase',
-                            '车身结构': 'body_type',
-                            '整备质量(kg)': 'curb_weight',
-                            '满载质量(kg)': 'gross_weight',
-                            '行李舱容积(L)': 'trunk_volume',
-                            '行李厢容积(L)': 'trunk_volume',
-                            '油箱容积(L)': 'fuel_tank_volume',
-                            '座位数(个)': 'seat_count',
-                            '座位数': 'seat_count',
-                            '车门数(个)': 'door_count',
-                            '车门数': 'door_count',
-                            
-                            # === Двигатель ДВС ===
-                            '发动机': 'engine_type',
-                            '发动机型号': 'engine_code',
-                            '排量(mL)': 'engine_volume_ml',
-                            '排量(L)': 'engine_volume',
-                            '气缸数(个)': 'cylinder_count',
-                            '每缸气门数(个)': 'valve_count',
-                            '压缩比': 'compression_ratio',
-                            '进气形式': 'turbo_type',
-                            
-                            # === Электромобили ===
-                            '纯电续航里程(km)': 'electric_range',
-                            '纯电续航里程(km)CLTC': 'electric_range',
-                            '纯电续航里程(km)NEDC': 'electric_range',
-                            '纯电续航里程(km)工信部': 'electric_range',
-                            '电池容量(kWh)': 'battery_capacity',
-                            '充电时间(小时)': 'charging_time',
-                            '快充时间(小时)': 'fast_charge_time',
-                            '快充接口位置': 'charge_port_type',
-                            
-                            # === Трансмиссия и привод ===
-                            '变速箱': 'transmission_type',
-                            '变速箱描述': 'transmission_type',
-                            '变速箱类型': 'transmission_type',
-                            '挡位数': 'gear_count',
-                            '驱动方式': 'drive_type',
-                            
-                            # === Подвеска и тормоза ===
-                            '前悬挂形式': 'front_suspension',
-                            '前悬架类型': 'front_suspension',
-                            '后悬挂形式': 'rear_suspension',
-                            '后悬架类型': 'rear_suspension',
-                            '前制动器类型': 'front_brakes',
-                            '后制动器类型': 'rear_brakes',
-                            '驻车制动类型': 'brake_system',
-                            
-                            # === Колёса и шины ===
-                            '前轮胎规格尺寸': 'tire_size',
-                            '后轮胎规格尺寸': 'tire_size',
-                            '轮胎规格': 'tire_size',
-                            '轮毂规格': 'wheel_size',
-                            '铝合金轮毂': 'wheel_type',
-                            '备胎规格': 'tire_type',
-                            
-                            # === Безопасность ===
-                            '主/副驾驶座安全气囊': 'airbag_count',
-                            '前排安全气囊': 'airbag_count',
-                            'ABS防抱死': 'abs',
-                            '车身稳定系统(ESP/DSC等)': 'esp',
-                            'ESP车身稳定系统': 'esp',
-                            '牵引力控制(TCS/ASR等)': 'tcs',
-                            'TCS牵引力控制': 'tcs',
-                            '上坡辅助(HAC)': 'hill_assist',
-                            '上坡辅助': 'hill_assist',
-                            '并线辅助': 'blind_spot_monitor',
-                            '盲区监测': 'blind_spot_monitor',
-                            '车道偏离预警': 'lane_departure',
-                            
-                            # === Комфорт ===
-                            '空调控制方式': 'air_conditioning',
-                            '空调': 'air_conditioning',
-                            '自动空调': 'climate_control',
-                            '座椅材质': 'upholstery',
-                            '座椅加热': 'seat_heating',
-                            '座椅通风': 'seat_ventilation',
-                            '座椅按摩': 'seat_massage',
-                            '方向盘加热': 'steering_wheel_heating',
-                            '天窗类型': 'sunroof',
-                            '全景天窗': 'panoramic_roof',
-                            
-                            # === Мультимедиа ===
-                            'GPS导航': 'navigation',
-                            '卫星导航系统': 'navigation',
-                            '音响系统': 'audio_system',
-                            '扬声器数量(个)': 'speakers_count',
-                            '扬声器数量': 'speakers_count',
-                            '蓝牙/车载电话': 'bluetooth',
-                            '蓝牙': 'bluetooth',
-                            'USB接口': 'usb',
-                            'AUX接口': 'aux',
-                            
-                            # === Освещение ===
-                            '前大灯类型': 'headlight_type',
-                            '近光灯': 'headlight_type',
-                            '远光灯': 'headlight_type',
-                            '前雾灯': 'fog_lights',
-                            'LED大灯': 'led_lights',
-                            '日间行车灯': 'daytime_running',
-                        }
-                        
-                    if label in field_mapping:
-                        field_name = field_mapping[label]
-                        clean_value = value.strip()
-                        
-                        # Преобразуем в числовые типы в зависимости от поля
-                        if field_name == 'power':
-                            logger.info(f"Raw power value from HTML: '{clean_value}' for label '{label}'")
-                            # Проверяем, что значение содержит цифры перед обработкой
-                            if not any(c.isdigit() for c in clean_value):
-                                logger.warning(f"Power value '{clean_value}' does not contain digits, skipping")
-                                continue  # Пропускаем это поле
-                            # Если label содержит '马力' или 'Ps', это уже л.с., не конвертируем
-                            is_already_hp = '马力' in label or 'Ps' in label
-                            normalized_hp = normalize_power_value(clean_value, assume_kw=not is_already_hp)
-                            logger.info(f"Normalized power value: '{normalized_hp}' for label '{label}' (is_already_hp={is_already_hp})")
-                            if normalized_hp:
-                                specs[field_name] = normalized_hp  # уже int
-                            else:
-                                logger.warning(f"Power value '{clean_value}' is invalid, skipping")
-                            continue
-                        elif field_name == 'max_speed':
-                            # int - максимальная скорость в км/ч
-                            specs[field_name] = parse_int_value(clean_value)
-                        elif field_name == 'electric_range':
-                            # int - запас хода в км
-                            specs[field_name] = parse_int_value(clean_value)
-                        elif field_name == 'engine_volume_ml':
-                            # int - объём двигателя в мл
-                            specs[field_name] = parse_int_value(clean_value)
-                        elif field_name == 'door_count':
-                            # int - количество дверей
-                            specs[field_name] = parse_int_value(clean_value)
-                        elif field_name in ('length', 'width', 'height', 'wheelbase', 'curb_weight'):
-                            # Размеры и вес - int (SMALLINT в БД)
-                            specs[field_name] = parse_int_value(clean_value)
-                        elif field_name in ('torque', 'acceleration', 'fuel_consumption', 'battery_capacity'):
-                            # float - числовые характеристики с дробной частью
-                            specs[field_name] = parse_float_value(clean_value)
-                        else:
-                            specs[field_name] = clean_value
-                            
-                            # Обработка специальных случаев
-                            if field_name == 'dimensions':
-                                # Парсим размеры из строки "5200x2062x1618"
-                                try:
-                                    parts = value.split('x')
-                                    if len(parts) == 3:
-                                        specs['length'] = parse_int_value(parts[0])
-                                        specs['width'] = parse_int_value(parts[1])
-                                        specs['height'] = parse_int_value(parts[2])
-                                except:
-                                    pass
-                            
-                except Exception as row_e:
-                    logger.debug(f"Ошибка при парсинге строки таблицы для car_id={car_id}: {row_e}")
+                    if label_elem and value_elem:
+                        label = label_elem.get_text().strip()
+                        value = value_elem.get_text().strip()
+                        self._parse_spec_item(label, value, specs)
+                except:
                     continue
             
-            # Fallback: если power не найден, пробуем извлечь из поля engine_type (发动机)
-            # Формат: "2.0T 250马力 H4" или "3.0T 150马力 L4"
-            if 'power' not in specs and 'engine_type' in specs:
-                engine_desc = specs.get('engine_type', '')
-                hp_match = re.search(r'(\d+)\s*马力', engine_desc)
-                if hp_match:
-                    power_from_engine = parse_int_value(hp_match.group(1))
-                    logger.info(f"Fallback: Power extracted from engine_type '{engine_desc}': {power_from_engine} for car_id={car_id}")
-                    specs['power'] = power_from_engine
-            
-            # Логируем итоговые specs
-            if 'power' in specs:
-                logger.info(f"Final power in specs: {specs['power']} for car_id={car_id}")
-            else:
-                logger.warning(f"Power NOT found in specs for car_id={car_id}, engine_type={specs.get('engine_type', 'N/A')}")
+            # Fallback для power из engine_type
+            if 'power' not in specs:
+                for row in table_rows:
+                    try:
+                        label_elem = row.find('label', class_='cell_label__ZtXlw')
+                        if label_elem and label_elem.get_text().strip() == '发动机':
+                            value_elem = row.find('div', class_='cell_normal__37nRi')
+                            if value_elem:
+                                engine_desc = value_elem.get_text().strip()
+                                hp_match = re.search(r'(\d+)\s*马力', engine_desc)
+                                if hp_match:
+                                    specs['power'] = parse_int_value(hp_match.group(1))
+                    except:
+                        continue
+
         except Exception as e:
-            # В случае ошибки логируем и возвращаем пустой словарь
-            logger.error(f"Ошибка в fetch_car_specifications для car_id={car_id}: {e}", exc_info=True)
+            logger.error(f"Ошибка в _fetch_specs_via_selenium для car_id={car_id}: {e}", exc_info=True)
             specs = {}
-            # Гарантируем, что soup инициализирован
-            if 'soup' not in locals() or soup is None:
-                soup = None
         finally:
-            # Гарантируем закрытие драйвера с проверкой валидности сессии
             if driver:
                 try:
-                    # Проверяем что driver еще активен перед закрытием
-                    try:
-                        driver.current_url  # Проверка что сессия жива
-                        driver.quit()
-                    except (ConnectionRefusedError, WebDriverException, Exception):
-                        # Driver уже закрыт или сессия потеряна, просто помечаем как None
-                        logger.debug(f"fetch_car_specifications: Driver уже закрыт для car_id={car_id}")
-                        pass
-                except Exception as e:
-                    logger.debug(f"fetch_car_specifications: Ошибка при закрытии driver для car_id={car_id}: {e}")
-                finally:
-                    driver = None
-            # Удаляем временную директорию
-            try:
-                if temp_dir and os.path.exists(temp_dir):
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-            except Exception:
-                pass
-            # Освобождаем память от page_source (soup уже не нужен, так как парсинг завершен)
-            if page_source:
-                del page_source
-            # Освобождаем память от soup
-            if 'soup' in locals() and soup:
-                try:
-                    soup.decompose()
-                    del soup
+                    driver.quit()
                 except:
                     pass
+            if temp_dir and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
-        return specs, {"status": 200, "link": url}
+        return specs, {"status": 200, "link": url, "method": "selenium"}
 
     def enhance_car_with_details(self, car_obj, sku_id: str, car_id: str = None):
         """
@@ -2079,11 +1974,12 @@ class DongchediParser(BaseCarParser):
         
         # Получаем детальную информацию
         logger.info(f"Starting enhance for sku_id={sku_id}, car_id={car_id}")
+        series_id = None
         try:
             detail_car, _ = self.fetch_car_detail(sku_id)
-            logger.info(f"fetch_car_detail completed for sku_id={sku_id}")
-            if detail_car and hasattr(detail_car, 'power'):
-                logger.info(f"Power from detail_car: {getattr(detail_car, 'power', None)} for sku_id={sku_id}")
+            if detail_car:
+                if hasattr(detail_car, 'series_id'):
+                    series_id = detail_car.series_id
         except Exception as e:
             logger.error(f"Error in fetch_car_detail for sku_id={sku_id}: {e}", exc_info=True)
             detail_car = None
@@ -2091,19 +1987,12 @@ class DongchediParser(BaseCarParser):
         # Получаем car_id из detail_car, если он не был передан
         if not car_id and detail_car and hasattr(detail_car, 'car_id') and detail_car.car_id:
             car_id = str(detail_car.car_id)
-            logger.info(f"Got car_id from detail_car: {car_id} for sku_id={sku_id}")
         
-        # Получаем технические характеристики, если car_id предоставлен
+        # Получаем технические характеристики
         specs = {}
         if car_id:
             try:
-                logger.info(f"Starting fetch_car_specifications for car_id={car_id}")
-                specs, _ = self.fetch_car_specifications(car_id)
-                logger.info(f"fetch_car_specifications completed for car_id={car_id}, specs keys: {list(specs.keys())}")
-                if 'power' in specs:
-                    logger.info(f"Power from specs: {specs['power']} for car_id={car_id}")
-                if 'engine_volume_ml' in specs:
-                    logger.info(f"engine_volume_ml from specs: {specs['engine_volume_ml']} for car_id={car_id}")
+                specs, _ = self.fetch_car_specifications(car_id, series_id=series_id)
             except Exception as e:
                 logger.error(f"Error in fetch_car_specifications for car_id={car_id}: {e}", exc_info=True)
                 specs = {}

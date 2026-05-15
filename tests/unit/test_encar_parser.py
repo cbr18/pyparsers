@@ -24,6 +24,7 @@ class EncarParserTests(unittest.TestCase):
             "FormYear": "2022",
             "Mileage": 96917.0,
             "Price": 1700.0,
+            "Power": "184 hp",
             "Trust": ["HomeService"],
             "ServiceMark": ["EncarDiagnosisP1"],
             "Condition": ["Inspection"],
@@ -43,6 +44,7 @@ class EncarParserTests(unittest.TestCase):
         self.assertEqual(car.first_registration_time, "2022-02-01")
         self.assertEqual(car.mileage, 96917)
         self.assertEqual(car.price, 1700.0)
+        self.assertEqual(car.power, 184)
         self.assertTrue(car.image.startswith("https://ci.encar.com/"))
         self.assertIn("HomeService", car.tags)
         self.assertIn("오토플래닛", car.dealer_info)
@@ -98,6 +100,9 @@ class EncarParserTests(unittest.TestCase):
                 "colorName": "검정색",
                 "seatCount": 5,
                 "bodyName": "중형차",
+                "maxPower": "146ps",
+                "torque": "19.5kg.m",
+                "driveName": "FF",
             },
             "photos": [{"path": "/carpicture02/pic4172/41728116_001.jpg"}],
             "partnership": {"dealer": {"name": "부천지점", "firm": {"code": "7240", "name": "오토플래닛"}}},
@@ -109,11 +114,84 @@ class EncarParserTests(unittest.TestCase):
         self.assertEqual(car.car_id, 41728573)
         self.assertEqual(car.shop_id, 7240)
         self.assertEqual(car.engine_volume_ml, 1999)
+        self.assertEqual(car.power, 146)
+        self.assertEqual(car.torque, 19.5)
+        self.assertEqual(car.drive_type, "FF")
         self.assertEqual(car.exterior_color, "검정색")
         self.assertEqual(car.view_count, 10)
         self.assertEqual(car.favorite_count, 2)
         self.assertTrue(car.is_available)
         self.assertIn("판매자 설명", car.description)
+        self.assertTrue(car.has_details)
+        self.assertIsNotNone(car.last_detail_update)
+
+    def test_parse_detail_car_requires_power_for_details_and_reports_stats(self):
+        parser = EncarParser()
+
+        fixtures = [
+            {
+                "name": "with_power",
+                "raw": {
+                    "category": {
+                        "manufacturerName": "기아",
+                        "modelName": "K5",
+                        "gradeName": "2.0 LPI",
+                        "gradeDetailName": "트렌디",
+                        "yearMonth": "202202",
+                    },
+                    "advertisement": {"status": "ADVERTISE"},
+                    "contact": {},
+                    "spec": {
+                        "power": "146ps",
+                        "maxPower": "146ps",
+                        "displacement": 1999,
+                    },
+                },
+                "expected_has_details": True,
+            },
+            {
+                "name": "without_power",
+                "raw": {
+                    "category": {
+                        "manufacturerName": "기아",
+                        "modelName": "K5",
+                        "gradeName": "2.0 LPI",
+                        "gradeDetailName": "트렌디",
+                        "yearMonth": "202202",
+                    },
+                    "advertisement": {"status": "ADVERTISE"},
+                    "contact": {},
+                    "spec": {
+                        "displacement": 1999,
+                    },
+                },
+                "expected_has_details": False,
+            },
+        ]
+
+        parsed = [
+            (item["name"], parser._parse_detail_car(item["raw"], f"car-{idx}"))
+            for idx, item in enumerate(fixtures, start=1)
+        ]
+
+        stats = {
+            "before_true": len(parsed),
+            "before_false": 0,
+            "after_true": sum(1 for _, car in parsed if car.has_details),
+            "after_false": sum(1 for _, car in parsed if not car.has_details),
+        }
+
+        for (name, car), fixture in zip(parsed, fixtures, strict=True):
+            self.assertEqual(car.has_details, fixture["expected_has_details"], name)
+            if car.has_details:
+                self.assertIsNotNone(car.last_detail_update, name)
+            else:
+                self.assertIsNone(car.last_detail_update, name)
+
+        self.assertEqual(stats["before_true"], 2)
+        self.assertEqual(stats["before_false"], 0)
+        self.assertEqual(stats["after_true"], 1)
+        self.assertEqual(stats["after_false"], 1)
 
 
 if __name__ == "__main__":

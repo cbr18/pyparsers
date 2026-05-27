@@ -12,7 +12,11 @@ from .models.response import Che168ApiResponse, Che168Data
 from ..base_parser import BaseCarParser
 from ..date_utils import normalize_first_registration_date
 from api.numeric_utils import parse_int_value, parse_float_value, normalize_power_value
-from .chrome_runtime import add_chromium_runtime_options, make_chromium_temp_dir
+from .chrome_runtime import (
+    add_chromium_runtime_options,
+    chromium_runtime_args,
+    make_chromium_temp_dir,
+)
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -741,9 +745,15 @@ class Che168Parser(BaseCarParser):
         url = self._build_url(page)
         last_error = None
         for attempt in range(1, 3):
+            temp_dir = None
+            browser = None
             try:
+                temp_dir = make_chromium_temp_dir("che168-playwright-")
                 with sync_playwright() as p:
-                    launch_kwargs = {"headless": self.headless}
+                    launch_kwargs = {
+                        "headless": self.headless,
+                        "args": chromium_runtime_args(temp_dir),
+                    }
                     chrome_bin = os.environ.get("CHROME_BIN") or "/usr/bin/chromium"
                     if chrome_bin:
                         launch_kwargs["executable_path"] = chrome_bin
@@ -773,6 +783,18 @@ class Che168Parser(BaseCarParser):
                 logger.warning(f"Playwright fallback attempt {attempt}/2 failed for page {page}: {e}")
                 if attempt < 2:
                     time.sleep(2)
+            finally:
+                if browser is not None:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+                if temp_dir:
+                    try:
+                        import shutil
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                    except Exception:
+                        pass
 
         logger.warning(f"Playwright fallback failed for page {page}: {last_error}")
         return None

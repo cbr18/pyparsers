@@ -24,3 +24,16 @@ def add_chromium_runtime_options(chrome_options, temp_dir: str) -> None:
     chrome_options.add_argument("--disable-features=Crashpad,Breakpad,SendFeedback")
     chrome_options.add_argument("--no-crashpad")
     chrome_options.add_argument("--noerrdialogs")
+
+
+def chromium_runtime_args(temp_dir: str) -> list[str]:
+    return [
+        f"--user-data-dir={temp_dir}",
+        f"--disk-cache-dir={temp_dir}/cache",
+        f"--crash-dumps-dir={temp_dir}/crashes",
+        "--disable-crash-reporter",
+        "--disable-breakpad",
+        "--disable-features=Crashpad,Breakpad,SendFeedback",
+        "--no-crashpad",
+        "--noerrdialogs",
+    ]

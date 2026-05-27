@@ -9,6 +9,11 @@ from ..base_parser import BaseCarParser
 from api.date_utils import normalize_first_registration_date
 from api.mileage_utils import normalize_mileage
 from api.numeric_utils import parse_int_value, parse_float_value, normalize_power_value
+from api.che168.chrome_runtime import (
+    add_chromium_runtime_options,
+    chromium_runtime_args,
+    make_chromium_temp_dir,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -355,45 +360,52 @@ class DongchediParser(BaseCarParser):
             url = f"https://www.dongchedi.com/usedcar/{car_id}"
             logger.info(f"[PLAYWRIGHT] Загружаем {url}")
             
-            with sync_playwright() as p:
-                launch_kwargs = {"headless": True}
-                chrome_bin = os.environ.get("CHROME_BIN") or "/usr/bin/chromium"
-                if chrome_bin:
-                    launch_kwargs["executable_path"] = chrome_bin
-                browser = p.chromium.launch(**launch_kwargs)
-                page = browser.new_page()
-                
-                try:
-                    page.goto(url, timeout=25000, wait_until="domcontentloaded")
-                    page.wait_for_timeout(2500)
+            temp_dir = make_chromium_temp_dir("dongchedi-playwright-")
+            browser = None
+            try:
+                with sync_playwright() as p:
+                    launch_kwargs = {
+                        "headless": True,
+                        "args": chromium_runtime_args(temp_dir),
+                    }
+                    chrome_bin = os.environ.get("CHROME_BIN") or "/usr/bin/chromium"
+                    if chrome_bin:
+                        launch_kwargs["executable_path"] = chrome_bin
+                    browser = p.chromium.launch(**launch_kwargs)
+                    page = browser.new_page()
                     
-                    nd = page.query_selector("#__NEXT_DATA__")
-                    if not nd:
-                        logger.warning(f"[PLAYWRIGHT] __NEXT_DATA__ не найден для car_id={car_id}")
-                        browser.close()
+                    try:
+                        page.goto(url, timeout=25000, wait_until="domcontentloaded")
+                        page.wait_for_timeout(2500)
+                        
+                        nd = page.query_selector("#__NEXT_DATA__")
+                        if not nd:
+                            logger.warning(f"[PLAYWRIGHT] __NEXT_DATA__ не найден для car_id={car_id}")
+                            return None
+                        
+                        data = json.loads(nd.inner_text())
+                        sku_detail = data.get("props", {}).get("pageProps", {}).get("skuDetail", {})
+                        
+                        if not sku_detail:
+                            logger.warning(f"[PLAYWRIGHT] skuDetail пустой для car_id={car_id}")
+                            return None
+                        
+                        # Используем общий метод парсинга
+                        result = self._parse_sku_detail(sku_detail, car_id)
+                        logger.info(f"[PLAYWRIGHT] Успешно: mileage={result.get('mileage')}, images={result.get('image_count')}")
+                        return result
+                        
+                    except Exception as e:
+                        logger.warning(f"[PLAYWRIGHT] Ошибка для car_id={car_id}: {e}")
                         return None
-                    
-                    data = json.loads(nd.inner_text())
-                    sku_detail = data.get("props", {}).get("pageProps", {}).get("skuDetail", {})
-                    
-                    if not sku_detail:
-                        logger.warning(f"[PLAYWRIGHT] skuDetail пустой для car_id={car_id}")
-                        browser.close()
-                        return None
-                    
-                    # Используем общий метод парсинга
-                    result = self._parse_sku_detail(sku_detail, car_id)
-                    logger.info(f"[PLAYWRIGHT] Успешно: mileage={result.get('mileage')}, images={result.get('image_count')}")
-                    browser.close()
-                    return result
-                    
-                except Exception as e:
-                    logger.warning(f"[PLAYWRIGHT] Ошибка для car_id={car_id}: {e}")
+            finally:
+                if browser is not None:
                     try:
                         browser.close()
-                    except:
+                    except Exception:
                         pass
-                    return None
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
                     
         except ImportError:
             logger.debug("[PLAYWRIGHT] playwright не установлен")
@@ -778,7 +790,6 @@ class DongchediParser(BaseCarParser):
         import random
         import json
         import shutil
-        import tempfile
         from selenium import webdriver
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support.ui import WebDriverWait
@@ -806,8 +817,8 @@ class DongchediParser(BaseCarParser):
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--disable-web-security")
         # Добавляем уникальный user-data-dir для избежания конфликтов
-        temp_dir = tempfile.mkdtemp()
-        chrome_options.add_argument(f"--user-data-dir={temp_dir}")
+        temp_dir = make_chromium_temp_dir("dongchedi-chrome-")
+        add_chromium_runtime_options(chrome_options, temp_dir)
         user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
@@ -1785,7 +1796,6 @@ class DongchediParser(BaseCarParser):
         import json
         import os
         import shutil
-        import tempfile
         from selenium import webdriver
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support.ui import WebDriverWait
@@ -1835,8 +1845,8 @@ class DongchediParser(BaseCarParser):
         soup = None
         page_source = None
         try:
-            temp_dir = tempfile.mkdtemp()
-            chrome_options.add_argument(f"--user-data-dir={temp_dir}")
+            temp_dir = make_chromium_temp_dir("dongchedi-specs-chrome-")
+            add_chromium_runtime_options(chrome_options, temp_dir)
             user_agents = [
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",

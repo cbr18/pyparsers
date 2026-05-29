@@ -114,7 +114,7 @@ Important: DataHub batch payload currently has one `page` field per batch, not p
 
 ## Related Commits
 
-- None yet.
+- `bd83153` - fix incremental listing `sort_number` assignment without million-sized task offsets.
 
 ## Test Plan
 

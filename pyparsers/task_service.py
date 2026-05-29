@@ -24,6 +24,10 @@ from models import TaskCreateRequest, TaskResultEnvelope, TaskSnapshot, TaskStag
 logger = logging.getLogger(__name__)
 
 INCREMENTAL_EXISTING_LIMIT = int(os.getenv("INCREMENTAL_EXISTING_LIMIT", "15000"))
+# sort_number is used by DataHub to preserve source listing order (higher = fresher).
+# For full tasks, we use LISTING_SORT_NUMBER_BASE - global_index.
+# For incremental tasks, we use (max_sort_number or 2*BASE) + BASE - global_index.
+LISTING_SORT_NUMBER_BASE = 1_000_000
 TASK_TTL_HOURS = int(os.getenv("TASK_TTL_HOURS", "24"))
 TASK_RESULT_TTL_MINUTES = int(os.getenv("TASK_RESULT_TTL_MINUTES", "30"))
 MAX_TASKS = int(os.getenv("MAX_TASKS", "1000"))
@@ -461,21 +465,14 @@ def _normalize_endpoint(url: Optional[str]) -> Optional[str]:
         final_scheme = _SCHEME_CACHE[host]
     
     new_url = f"{final_scheme}://{rest}"
-    
-    if new_url.endswith("/api/parser/batches"):
-        return new_url
-        
+
     if new_url.endswith("/parser/batches"):
-        base = new_url[:-len("/parser/batches")].rstrip("/")
-        if base.endswith("/api"):
-            return new_url
-        return f"{base}/api/parser/batches"
-        
+        return new_url
+
     if new_url.endswith("/api"):
         return f"{new_url}/parser/batches"
-        
-    return f"{new_url}/api/parser/batches"
 
+    return f"{new_url}/api/parser/batches"
 
 def _build_batch_delivery_state(parameters: Dict[str, Any]) -> Optional[BatchDeliveryState]:
     delivery_mode = str(parameters.get("delivery_mode") or "result").strip().lower()
@@ -680,12 +677,12 @@ def _delivery_summary(delivery: Optional[BatchDeliveryState]) -> dict[str, Any]:
     }
 
 
-def _normalize_che168_listing_car(car_dict: dict, index: int, total: int) -> Optional[dict]:
+def _normalize_che168_listing_car(car_dict: dict, sort_number: int) -> Optional[dict]:
     if not car_dict.get("link") and car_dict.get("car_id"):
         car_dict["link"] = f'https://m.che168.com/cardetail/index?infoid={car_dict["car_id"]}'
 
     car_dict.update({
-        "sort_number": total - index,
+        "sort_number": sort_number,
         "source": "che168",
     })
 
@@ -740,7 +737,7 @@ def _normalize_che168_listing_car(car_dict: dict, index: int, total: int) -> Opt
     return car_dict
 
 
-def _normalize_encar_listing_car(car_dict: dict, index: int, total: int) -> Optional[dict]:
+def _normalize_encar_listing_car(car_dict: dict, sort_number: int) -> Optional[dict]:
     year_val = car_dict.get("year") or car_dict.get("car_year")
     if year_val is not None:
         try:
@@ -750,7 +747,7 @@ def _normalize_encar_listing_car(car_dict: dict, index: int, total: int) -> Opti
             pass
 
     car_dict.update({
-        "sort_number": total - index,
+        "sort_number": sort_number,
         "source": "encar",
     })
 
@@ -815,6 +812,7 @@ def _build_dongchedi_runners():
         data = MemoryOptimizedList()
         delivery = _build_batch_delivery_state(parameters)
         seen_keys: set[str] = set()
+        global_index = 0
         page = 1
         pages_scanned = 0
 
@@ -829,10 +827,12 @@ def _build_dongchedi_runners():
                 break
 
             filtered = filter_cars_by_year(cars_list, min_year=2017)
-            total_filtered = len(filtered)
-            for index, car in enumerate(filtered):
+            for car in filtered:
                 car_dict = car.model_dump(exclude_none=True)
-                car_dict.update({"sort_number": total_filtered - index, "source": "dongchedi"})
+                sort_number = LISTING_SORT_NUMBER_BASE - global_index
+                global_index += 1
+
+                car_dict.update({"sort_number": sort_number, "source": "dongchedi"})
                 if car_dict.get("sh_price"):
                     car_dict["sh_price"] = decode_dongchedi_list_sh_price(car_dict["sh_price"])
                 if car_dict.get("car_id") is not None:
@@ -888,6 +888,15 @@ def _build_dongchedi_runners():
         id_field = parameters.get("id_field") or "sku_id"
         existing_set = {str(x) for idx, x in enumerate(existing_ids) if x and idx < INCREMENTAL_EXISTING_LIMIT}
         pages_scanned = 0
+        global_index = 0
+        
+        # We want new items to rank above previous ones.
+        # DataHub provides max_sort_number from the current catalog.
+        max_sort_number = parameters.get("max_sort_number")
+        if max_sort_number is not None:
+            sort_base = int(max_sort_number) + LISTING_SORT_NUMBER_BASE
+        else:
+            sort_base = LISTING_SORT_NUMBER_BASE * 2
 
         await context.set_stage(TaskStage.LISTING, message="Collecting incremental dongchedi listing", progress_current=0, progress_total=100, progress_unit="page")
 
@@ -900,9 +909,8 @@ def _build_dongchedi_runners():
                 break
 
             filtered = filter_cars_by_year(cars_list, min_year=2017)
-            total_filtered = len(filtered)
             found_existing = False
-            for index, car in enumerate(filtered):
+            for car in filtered:
                 car_dict = car.model_dump(exclude_none=True)
                 key_val = car_dict.get(id_field)
                 key_val = str(key_val) if key_val is not None else None
@@ -910,7 +918,10 @@ def _build_dongchedi_runners():
                     found_existing = True
                     break
 
-                car_dict.update({"sort_number": total_filtered - index, "source": "dongchedi"})
+                sort_number = sort_base - global_index
+                global_index += 1
+
+                car_dict.update({"sort_number": sort_number, "source": "dongchedi"})
                 if car_dict.get("sh_price"):
                     car_dict["sh_price"] = decode_dongchedi_list_sh_price(car_dict["sh_price"])
                 if car_dict.get("car_id") is not None:
@@ -1025,6 +1036,7 @@ def _build_che168_runners():
         seen_keys: set[str] = set()
         pages_scanned = 0
         empty_pages = 0
+        global_index = 0
 
         await context.set_stage(TaskStage.LISTING, message="Collecting full che168 listing", progress_current=0, progress_total=100, progress_unit="page")
 
@@ -1041,9 +1053,10 @@ def _build_che168_runners():
                 continue
 
             empty_pages = 0
-            total_cars = len(cars_list)
-            for index, car in enumerate(cars_list):
-                normalized = _normalize_che168_listing_car(car.model_dump(exclude_none=True), index, total_cars)
+            for car in cars_list:
+                sort_number = LISTING_SORT_NUMBER_BASE - global_index
+                global_index += 1
+                normalized = _normalize_che168_listing_car(car.model_dump(exclude_none=True), sort_number)
                 if normalized is not None:
                     if not _append_unique_listing(seen_keys, "che168", normalized):
                         continue
@@ -1092,6 +1105,14 @@ def _build_che168_runners():
         id_field = parameters.get("id_field") or "car_id"
         existing_set = {str(x) for idx, x in enumerate(existing_ids) if x and idx < INCREMENTAL_EXISTING_LIMIT}
         pages_scanned = 0
+        global_index = 0
+
+        # We want new items to rank above previous ones.
+        max_sort_number = parameters.get("max_sort_number")
+        if max_sort_number is not None:
+            sort_base = int(max_sort_number) + LISTING_SORT_NUMBER_BASE
+        else:
+            sort_base = LISTING_SORT_NUMBER_BASE * 2
 
         await context.set_stage(TaskStage.LISTING, message="Collecting incremental che168 listing", progress_current=0, progress_total=100, progress_unit="page")
 
@@ -1103,9 +1124,8 @@ def _build_che168_runners():
             if not cars_list:
                 break
 
-            total_cars = len(cars_list)
             found_existing = False
-            for index, car in enumerate(cars_list):
+            for car in cars_list:
                 car_dict = car.model_dump(exclude_none=True)
                 stop_id = car_dict.get(id_field)
                 if stop_id is not None:
@@ -1117,7 +1137,10 @@ def _build_che168_runners():
                     found_existing = True
                     break
 
-                normalized = _normalize_che168_listing_car(car_dict, index, total_cars)
+                sort_number = sort_base - global_index
+                global_index += 1
+
+                normalized = _normalize_che168_listing_car(car_dict, sort_number)
                 if normalized is not None:
                     if not _append_unique_listing(seen_keys, "che168", normalized):
                         continue
@@ -1213,6 +1236,7 @@ def _build_encar_runners():
         data = MemoryOptimizedList()
         delivery = _build_batch_delivery_state(parameters)
         seen_keys: set[str] = set()
+        global_index = 0
         page = 1
         pages_scanned = 0
 
@@ -1226,9 +1250,10 @@ def _build_encar_runners():
             if not cars_list:
                 break
 
-            total_cars = len(cars_list)
-            for index, car in enumerate(cars_list):
-                normalized = _normalize_encar_listing_car(car.model_dump(exclude_none=True), index, total_cars)
+            for car in cars_list:
+                sort_number = LISTING_SORT_NUMBER_BASE - global_index
+                global_index += 1
+                normalized = _normalize_encar_listing_car(car.model_dump(exclude_none=True), sort_number)
                 if normalized is not None:
                     if not _append_unique_listing(seen_keys, "encar", normalized):
                         continue
@@ -1279,6 +1304,14 @@ def _build_encar_runners():
         existing_set = {str(x) for idx, x in enumerate(existing_ids) if x and idx < INCREMENTAL_EXISTING_LIMIT}
         page = 1
         pages_scanned = 0
+        global_index = 0
+
+        # We want new items to rank above previous ones.
+        max_sort_number = parameters.get("max_sort_number")
+        if max_sort_number is not None:
+            sort_base = int(max_sort_number) + LISTING_SORT_NUMBER_BASE
+        else:
+            sort_base = LISTING_SORT_NUMBER_BASE * 2
 
         await context.set_stage(TaskStage.LISTING, message="Collecting incremental encar listing", progress_current=0, progress_total=100, progress_unit="page")
 
@@ -1291,8 +1324,7 @@ def _build_encar_runners():
                 break
 
             found_existing = False
-            total_cars = len(cars_list)
-            for index, car in enumerate(cars_list):
+            for car in cars_list:
                 car_dict = car.model_dump(exclude_none=True)
                 stop_id = car_dict.get(id_field)
                 stop_id = str(stop_id) if stop_id is not None else None
@@ -1300,7 +1332,10 @@ def _build_encar_runners():
                     found_existing = True
                     break
 
-                normalized = _normalize_encar_listing_car(car_dict, index, total_cars)
+                sort_number = sort_base - global_index
+                global_index += 1
+
+                normalized = _normalize_encar_listing_car(car_dict, sort_number)
                 if normalized is not None:
                     if not _append_unique_listing(seen_keys, "encar", normalized):
                         continue

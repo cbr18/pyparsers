@@ -226,7 +226,7 @@
 | certification | TEXT | string | Сертификация | "认证车" |
 | description | TEXT | string | Описание | "全新极狐阿尔法S，续航708公里" |
 | is_available | BOOLEAN | bool | Доступность | true, false |
-| sort_number | INTEGER | int | Порядок сортировки | 100, 0 |
+| sort_number | INTEGER | int | Source-level listing rank (higher = fresher) | 1000000, 0 |
 | view_count | INTEGER | int | Количество просмотров | 150, 0 |
 | favorite_count | INTEGER | int | Количество добавлений в избранное | 25, 0 |
 | has_details | BOOLEAN | bool | Наличие детальной информации | true, false |

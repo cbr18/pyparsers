@@ -478,7 +478,8 @@
             "type": "boolean"
           },
           "sort_number": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Source-level listing rank. Higher value means higher/fresher in source listing order."
           },
           "brand_id": {
             "type": "integer"

@@ -158,6 +158,24 @@ class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.batch_size, 2)
         self.assertEqual(_delivery_summary(state)["delivery_mode"], "push_batches")
 
+    def test_normalize_endpoint_preserves_explicit_path(self):
+        from task_service import _normalize_endpoint
+        # Explicit full path should be preserved
+        self.assertEqual(
+            _normalize_endpoint("http://datahub:8080/parser/batches"),
+            "http://datahub:8080/parser/batches"
+        )
+        # Base URL should be expanded to /api/parser/batches
+        self.assertEqual(
+            _normalize_endpoint("http://datahub:8080"),
+            "http://datahub:8080/api/parser/batches"
+        )
+        # URL ending in /api should be expanded to /api/parser/batches
+        self.assertEqual(
+            _normalize_endpoint("http://datahub:8080/api"),
+            "http://datahub:8080/api/parser/batches"
+        )
+
     def test_append_unique_listing_deduplicates_within_task(self):
         seen = set()
         self.assertTrue(_append_unique_listing(seen, "encar", {"car_id": 1, "sku_id": "1"}))
@@ -175,6 +193,7 @@ class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
             "task_id": "task-1",
             "batch_id": "task-1:1",
             "items": [{"car_id": 1}],
+            "item_count": 1,
         }
 
         with mock.patch("task_service.requests.post", return_value=fake_response) as mocked_post:
@@ -318,6 +337,9 @@ class FakeListingCar:
             "image": f"https://example.test/{self.car_id}.jpg",
             "link": f"https://example.test/cars/{self.car_id}",
         }
+
+    def model_dump(self, *args, **kwargs):
+        return self.dict(*args, **kwargs)
 
 
 if __name__ == "__main__":

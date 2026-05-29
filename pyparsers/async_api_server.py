@@ -131,6 +131,8 @@ PERF_ATTACH_BODY = os.getenv("PERF_ATTACH_BODY", "false").lower() == "true"
 # Пустая строка или не задано = доступ разрешён всем
 ALLOWED_IPS_RAW = os.getenv("ALLOWED_IPS", "").strip()
 
+LISTING_SORT_NUMBER_BASE = 1_000_000
+
 def _parse_allowed_ips(raw: str) -> list:
     """Парсит список разрешённых IP/CIDR в список ipaddress объектов"""
     if not raw:
@@ -607,7 +609,7 @@ async def get_encar_blocked_status():
     return await run_source_probe(_build_encar_probe())
 
 
-def _normalize_encar_car_dict(car_dict: Dict[str, Any], index: int, total: int) -> Optional[Dict[str, Any]]:
+def _normalize_encar_car_dict(car_dict: Dict[str, Any], sort_number: int) -> Optional[Dict[str, Any]]:
     year = car_dict.get("year") or car_dict.get("car_year")
     if year is not None:
         try:
@@ -617,7 +619,7 @@ def _normalize_encar_car_dict(car_dict: Dict[str, Any], index: int, total: int) 
             pass
 
     car_dict.update({
-        "sort_number": total - index,
+        "sort_number": sort_number,
         "source": "encar",
     })
 
@@ -639,9 +641,9 @@ def _normalize_encar_car_dict(car_dict: Dict[str, Any], index: int, total: int) 
 async def get_encar_cars():
     response = await encar_parser.async_fetch_cars()
     cars = []
-    total_cars = len(response.data.search_sh_sku_info_list)
     for index, car in enumerate(response.data.search_sh_sku_info_list):
-        normalized = _normalize_encar_car_dict(car.dict(), index, total_cars)
+        sort_number = LISTING_SORT_NUMBER_BASE - index
+        normalized = _normalize_encar_car_dict(car.dict(), sort_number)
         if normalized is not None:
             cars.append(normalized)
 
@@ -659,9 +661,12 @@ async def get_encar_cars():
 async def get_encar_cars_by_page(page: int):
     response = await encar_parser.async_fetch_cars_by_page(page)
     cars = []
-    total_cars = len(response.data.search_sh_sku_info_list)
+    # Encar default page size is 50. We use it to maintain source-level ranking
+    # across pages for single-page requests without fetching full history.
+    page_size_heuristic = 50
     for index, car in enumerate(response.data.search_sh_sku_info_list):
-        normalized = _normalize_encar_car_dict(car.dict(), index, total_cars)
+        sort_number = LISTING_SORT_NUMBER_BASE - ((page - 1) * page_size_heuristic + index)
+        normalized = _normalize_encar_car_dict(car.dict(), sort_number)
         if normalized is not None:
             cars.append(normalized)
 
@@ -688,14 +693,14 @@ async def _collect_encar_all_cars() -> Dict[str, Any]:
         if not cars_list:
             break
 
-        total_cars = len(cars_list)
         for index, car in enumerate(cars_list):
             car_dict = car.dict()
             car_id = car_dict.get("car_id") or car_dict.get("sku_id") or car_dict.get("link")
             if not car_id or str(car_id) in seen_ids:
                 continue
 
-            normalized = _normalize_encar_car_dict(car_dict, index, total_cars)
+            sort_number = LISTING_SORT_NUMBER_BASE - (len(all_cars))
+            normalized = _normalize_encar_car_dict(car_dict, sort_number)
             if normalized is not None:
                 all_cars.append(normalized)
                 seen_ids.add(str(car_id))
@@ -705,10 +710,6 @@ async def _collect_encar_all_cars() -> Dict[str, Any]:
         page += 1
 
     total = len(all_cars)
-    for index, car in enumerate(all_cars):
-        car["sort_number"] = total - index
-        car["source"] = "encar"
-
     seen_ids.clear()
     gc.collect()
     return {
@@ -738,6 +739,7 @@ async def get_encar_incremental_cars(existing_cars: List[Dict]):
             existing_ids.add(str(car_id))
 
     next_sort_number = _get_next_sort_number(existing_cars, "encar")
+    sort_base = (next_sort_number or LISTING_SORT_NUMBER_BASE * 2) + LISTING_SORT_NUMBER_BASE
     page = 1
     found_existing = False
 
@@ -747,7 +749,6 @@ async def get_encar_incremental_cars(existing_cars: List[Dict]):
         if not cars_list:
             break
 
-        total_cars = len(cars_list)
         for index, car in enumerate(cars_list):
             car_dict = car.dict()
             car_id = car_dict.get("car_id") or car_dict.get("sku_id") or car_dict.get("link")
@@ -755,7 +756,8 @@ async def get_encar_incremental_cars(existing_cars: List[Dict]):
                 found_existing = True
                 break
 
-            normalized = _normalize_encar_car_dict(car_dict, index, total_cars)
+            sort_number = sort_base - (len(new_cars))
+            normalized = _normalize_encar_car_dict(car_dict, sort_number)
             if normalized is not None:
                 new_cars.append(normalized)
 
@@ -764,9 +766,6 @@ async def get_encar_incremental_cars(existing_cars: List[Dict]):
         page += 1
 
     total_new_cars = len(new_cars)
-    for index, car in enumerate(new_cars):
-        car["sort_number"] = next_sort_number + total_new_cars - index - 1
-        car["source"] = "encar"
 
     existing_ids.clear()
     gc.collect()
@@ -818,7 +817,6 @@ async def get_dongchedi_cars():
     
     # Преобразуем в формат для совместимости с фронтендом
     filtered_cars = []
-    total_cars = len(response.data.search_sh_sku_info_list)
     for i, car in enumerate(response.data.search_sh_sku_info_list):
         car_dict = car.dict()
         
@@ -832,7 +830,7 @@ async def get_dongchedi_cars():
                 pass
                 
         car_dict.update({
-            'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
+            'sort_number': LISTING_SORT_NUMBER_BASE - i,  # Новые машины (первые в списке) получают большие номера
             'source': 'dongchedi'
         })
         if car_dict.get('sh_price'):
@@ -872,7 +870,9 @@ async def get_dongchedi_cars_by_page(page: int):
     
     # Преобразуем в формат для совместимости с фронтендом
     filtered_cars = []
-    total_cars = len(response.data.search_sh_sku_info_list)
+    # Dongchedi API uses limit=80. We use it to maintain source-level ranking
+    # across pages for single-page requests without fetching full history.
+    page_size_heuristic = 80
     for i, car in enumerate(response.data.search_sh_sku_info_list):
         car_dict = car.dict()
         
@@ -886,7 +886,7 @@ async def get_dongchedi_cars_by_page(page: int):
                 pass
                 
         car_dict.update({
-            'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
+            'sort_number': LISTING_SORT_NUMBER_BASE - ((page - 1) * page_size_heuristic + i),  # Новые машины (первые в списке) получают большие номера
             'source': 'dongchedi'
         })
         if car_dict.get('sh_price'):
@@ -987,7 +987,7 @@ async def _collect_dongchedi_all_cars() -> Dict[str, Any]:
     # Добавляем sort_number по убыванию (новые машины - большие номера)
     total = len(all_cars)
     for i, car in enumerate(all_cars):
-        car['sort_number'] = total - i
+        car['sort_number'] = LISTING_SORT_NUMBER_BASE - i
         car['source'] = 'dongchedi'
 
     response_payload = {
@@ -1039,6 +1039,7 @@ async def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
     
     # Получаем следующий номер для нумерации
     next_sort_number = _get_next_sort_number(existing_cars, 'dongchedi')
+    sort_base = (next_sort_number or LISTING_SORT_NUMBER_BASE * 2) + LISTING_SORT_NUMBER_BASE
 
     # Парсим до первого совпадения
     page = 1
@@ -1096,7 +1097,7 @@ async def get_dongchedi_incremental_cars(existing_cars: List[Dict]):
     # Добавляем sort_number по убыванию (новые машины - большие номера)
     total_new_cars = len(new_cars)
     for i, car in enumerate(new_cars):
-        car['sort_number'] = next_sort_number + total_new_cars - i - 1
+        car['sort_number'] = sort_base - i
         car['source'] = 'dongchedi'
 
     response_payload = {
@@ -1197,7 +1198,6 @@ async def get_che168_cars():
     
     # Преобразуем в формат для совместимости с фронтендом
     cars_with_metadata = []
-    total_cars = len(response.data.search_sh_sku_info_list)
     for i, car in enumerate(response.data.search_sh_sku_info_list):
         car_dict = car.dict()
         
@@ -1211,7 +1211,7 @@ async def get_che168_cars():
                 pass
                 
         car_dict.update({
-            'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
+            'sort_number': LISTING_SORT_NUMBER_BASE - i,  # Новые машины (первые в списке) получают большие номера
             'source': 'che168'
         })
         cars_with_metadata.append(car_dict)
@@ -1237,7 +1237,10 @@ async def get_che168_cars_by_page(page: int):
     
     # Преобразуем в формат для совместимости с фронтендом
     cars_with_metadata = []
-    total_cars = len(response.data.search_sh_sku_info_list)
+    # Che168 page size varies (usually 40). We use 100 as a safe upper bound
+    # to maintain source-level ranking across pages for single-page requests 
+    # without fetching full history.
+    page_size_heuristic = 100
     for i, car in enumerate(response.data.search_sh_sku_info_list):
         car_dict = car.dict()
         
@@ -1251,7 +1254,7 @@ async def get_che168_cars_by_page(page: int):
                 pass
                 
         car_dict.update({
-            'sort_number': total_cars - i,  # Новые машины (первые в списке) получают большие номера
+            'sort_number': LISTING_SORT_NUMBER_BASE - ((page - 1) * page_size_heuristic + i),  # Новые машины (первые в списке) получают большие номера
             'source': 'che168'
         })
         cars_with_metadata.append(car_dict)
@@ -1285,6 +1288,7 @@ async def get_che168_incremental_cars(existing_cars: List[Dict]):
 
     # Получаем следующий номер для нумерации
     next_sort_number = _get_next_sort_number(existing_cars, 'che168')
+    sort_base = (next_sort_number or LISTING_SORT_NUMBER_BASE * 2) + LISTING_SORT_NUMBER_BASE
 
     # Парсим до первого совпадения
     page = 1
@@ -1324,7 +1328,7 @@ async def get_che168_incremental_cars(existing_cars: List[Dict]):
     # Добавляем sort_number по убыванию (новые машины - большие номера)
     total_new_cars = len(new_cars)
     for i, car in enumerate(new_cars):
-        car['sort_number'] = next_sort_number + total_new_cars - i - 1
+        car['sort_number'] = sort_base - i
         car['source'] = 'che168'
 
     result = {
@@ -1437,7 +1441,7 @@ async def _collect_che168_all_cars() -> Dict[str, Any]:
     logger.info(f"[CHE168] Всего найдено {total} уникальных машин")
 
     for i, car in enumerate(all_cars):
-        car['sort_number'] = total - i
+        car['sort_number'] = LISTING_SORT_NUMBER_BASE - i
         car['source'] = 'che168'
 
     result = {

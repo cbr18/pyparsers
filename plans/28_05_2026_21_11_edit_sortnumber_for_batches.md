@@ -1,7 +1,7 @@
 # Plan: Fix sort_number for listing batches
 
 Task: [28_05_2026_21_11_edit_sortnumber_for_batches.md](../tasks/28_05_2026_21_11_edit_sortnumber_for_batches.md)
-Status: draft
+Status: IN WORK
 
 ## Goal
 
@@ -15,6 +15,7 @@ Make `sort_number` represent source-level listing order for task/result and task
 4. Verify push-batch delivery does not flush rows before their final rank is known, or switch to a rank formula that is correct before flushing.
 5. Update parser/DataHub contract notes to define `sort_number` as source-level listing rank.
 6. Run focused unit tests, then integration smoke checks if source containers are available.
+7. Verify repeated incremental runs do not add `1_000_000` layers above `max_sort_number`.
 
 ## Validation
 

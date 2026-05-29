@@ -14,6 +14,7 @@ from task_service import (
     TaskRunResult,
     TaskService,
     _append_unique_listing,
+    _assign_incremental_sort_numbers,
     _build_batch_delivery_state,
     _delivery_summary,
     _flush_listing_batch,
@@ -182,6 +183,13 @@ class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(_append_unique_listing(seen, "encar", {"car_id": 1, "sku_id": "1"}))
         self.assertTrue(_append_unique_listing(seen, "encar", {"car_id": 2, "sku_id": "2"}))
         self.assertEqual(len(seen), 2)
+
+    def test_assign_incremental_sort_numbers_ranks_directly_above_current_max(self):
+        items = [({"car_id": 101}, 1), ({"car_id": 102}, 1), ({"car_id": 103}, 2)]
+
+        _assign_incremental_sort_numbers(items, {"max_sort_number": 72})
+
+        self.assertEqual([item["sort_number"] for item, _ in items], [75, 74, 73])
 
     def test_post_parser_batch_sends_idempotency_headers(self):
         fake_response = mock.Mock()

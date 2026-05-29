@@ -1,6 +1,6 @@
 # Fix sort_number for listing batches
 
-Status: FAILED
+Status: IN WORK
 Created: 2026-05-28 21:11
 Project: pyparsers
 Plan: [28_05_2026_21_11_edit_sortnumber_for_batches.md](../plans/28_05_2026_21_11_edit_sortnumber_for_batches.md)
@@ -33,6 +33,18 @@ Observed DataHub database distribution:
 - `encar`: `sort_number` min `1`, max `50`
 
 That distribution matches per-page position, not source-level listing order.
+
+Additional production evidence on 2026-05-29 showed repeated incremental runs creating million-sized `sort_number` layers:
+
+- `5999993`
+- `4999990`
+- `3999982`
+- `2999994`
+- `2000000`
+- `1000000`
+- `999999`
+
+Root cause: the incremental task implementation used `max_sort_number + LISTING_SORT_NUMBER_BASE - global_index`, adding `1_000_000` on every incremental run. That made `sort_number` depend on task execution count, not only source listing order.
 
 ## Non-Functional Constraints
 
@@ -81,9 +93,10 @@ Recommended approach:
 - Accumulate normalized listing candidates in task order first, or track a global task-level listing index.
 - Assign ranks from the final ordered list before returning/sending listings:
   - `sort_number = total_ranked_items - global_index` for full tasks.
-  - For incremental tasks, use the same ordered list of newly found items. If DataHub provides `max_sort_number`, assign `max_sort_number + total_new_items - global_index`; otherwise use a large task-local base that keeps page order correct inside the task.
+  - For incremental tasks, use the same ordered list of newly found items. If DataHub provides `max_sort_number`, assign `max_sort_number + total_new_items - global_index`; otherwise assign `total_new_items - global_index`.
 - Prefer passing `max_sort_number` from DataHub in task parameters if this needs to be monotonic across multiple incremental runs.
 - Keep batch flushing compatible with the chosen ranking strategy. If ranks require knowing `total_new_items`, either buffer until ranks are assigned or use a monotonic base/rank strategy that is correct before flushing.
+- Do not add task/run-sized offsets such as `+1_000_000` to incremental `max_sort_number`.
 
 Important: DataHub batch payload currently has one `page` field per batch, not per item, so DataHub cannot reliably reconstruct item-level page order after receiving a mixed batch. The primary fix belongs in pyparsers.
 
@@ -98,6 +111,10 @@ Important: DataHub batch payload currently has one `page` field per batch, not p
 - Existing detail parsing behavior is unchanged.
 - Existing source filters, duplicate handling, and stop-on-existing incremental behavior are preserved.
 - Documentation or contract comments mention that `sort_number` is source-level listing rank, where higher means higher/fresher in the source order.
+
+## Related Commits
+
+- None yet.
 
 ## Test Plan
 

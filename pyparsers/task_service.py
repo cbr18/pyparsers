@@ -26,7 +26,9 @@ logger = logging.getLogger(__name__)
 INCREMENTAL_EXISTING_LIMIT = int(os.getenv("INCREMENTAL_EXISTING_LIMIT", "15000"))
 # sort_number is used by DataHub to preserve source listing order (higher = fresher).
 # For full tasks, we use LISTING_SORT_NUMBER_BASE - global_index.
-# For incremental tasks, we use (max_sort_number or 2*BASE) + BASE - global_index.
+# For incremental tasks, new rows rank directly above DataHub's current source-local
+# maximum. Do not add a task/run-sized offset; that creates artificial million-sized
+# layers across repeated incremental runs.
 LISTING_SORT_NUMBER_BASE = 1_000_000
 TASK_TTL_HOURS = int(os.getenv("TASK_TTL_HOURS", "24"))
 TASK_RESULT_TTL_MINUTES = int(os.getenv("TASK_RESULT_TTL_MINUTES", "30"))
@@ -677,6 +679,37 @@ def _delivery_summary(delivery: Optional[BatchDeliveryState]) -> dict[str, Any]:
     }
 
 
+def _assign_incremental_sort_numbers(
+    items: list[tuple[dict[str, Any], int]],
+    parameters: Dict[str, Any],
+) -> None:
+    max_sort_number = parameters.get("max_sort_number")
+    current_max = int(max_sort_number) if max_sort_number is not None else 0
+    sort_start = current_max + len(items)
+    for index, (car_dict, _) in enumerate(items):
+        car_dict["sort_number"] = sort_start - index
+
+
+async def _emit_incremental_listing_items(
+    context: TaskContext,
+    delivery: Optional[BatchDeliveryState],
+    data: MemoryOptimizedList,
+    items: list[tuple[dict[str, Any], int]],
+    *,
+    source: str,
+) -> None:
+    for car_dict, page in items:
+        await _emit_or_collect_listing(
+            context,
+            delivery,
+            data,
+            car_dict,
+            source=source,
+            task_type=TaskType.INCREMENTAL,
+            page=page,
+        )
+
+
 def _normalize_che168_listing_car(car_dict: dict, sort_number: int) -> Optional[dict]:
     if not car_dict.get("link") and car_dict.get("car_id"):
         car_dict["link"] = f'https://m.che168.com/cardetail/index?infoid={car_dict["car_id"]}'
@@ -888,15 +921,7 @@ def _build_dongchedi_runners():
         id_field = parameters.get("id_field") or "sku_id"
         existing_set = {str(x) for idx, x in enumerate(existing_ids) if x and idx < INCREMENTAL_EXISTING_LIMIT}
         pages_scanned = 0
-        global_index = 0
-        
-        # We want new items to rank above previous ones.
-        # DataHub provides max_sort_number from the current catalog.
-        max_sort_number = parameters.get("max_sort_number")
-        if max_sort_number is not None:
-            sort_base = int(max_sort_number) + LISTING_SORT_NUMBER_BASE
-        else:
-            sort_base = LISTING_SORT_NUMBER_BASE * 2
+        pending_items: list[tuple[dict[str, Any], int]] = []
 
         await context.set_stage(TaskStage.LISTING, message="Collecting incremental dongchedi listing", progress_current=0, progress_total=100, progress_unit="page")
 
@@ -918,10 +943,7 @@ def _build_dongchedi_runners():
                     found_existing = True
                     break
 
-                sort_number = sort_base - global_index
-                global_index += 1
-
-                car_dict.update({"sort_number": sort_number, "source": "dongchedi"})
+                car_dict.update({"sort_number": 0, "source": "dongchedi"})
                 if car_dict.get("sh_price"):
                     car_dict["sh_price"] = decode_dongchedi_list_sh_price(car_dict["sh_price"])
                 if car_dict.get("car_id") is not None:
@@ -931,25 +953,25 @@ def _build_dongchedi_runners():
                         car_dict["car_id"] = 0
                 if not _append_unique_listing(seen_keys, "dongchedi", car_dict):
                     continue
-                await _emit_or_collect_listing(
-                    context,
-                    delivery,
-                    data,
-                    car_dict,
-                    source="dongchedi",
-                    task_type=TaskType.INCREMENTAL,
-                    page=page,
-                )
+                pending_items.append((car_dict, page))
 
             await context.update(
                 message=f"Parsed dongchedi page {page}",
                 progress_current=page,
-                items_found=len(seen_keys) if delivery is not None else len(data),
+                items_found=len(pending_items),
             )
 
             if found_existing or not getattr(response.data, "has_more", False):
                 break
 
+        _assign_incremental_sort_numbers(pending_items, parameters)
+        await _emit_incremental_listing_items(
+            context,
+            delivery,
+            data,
+            pending_items,
+            source="dongchedi",
+        )
         await _flush_listing_batch(
             context,
             delivery,
@@ -1105,14 +1127,7 @@ def _build_che168_runners():
         id_field = parameters.get("id_field") or "car_id"
         existing_set = {str(x) for idx, x in enumerate(existing_ids) if x and idx < INCREMENTAL_EXISTING_LIMIT}
         pages_scanned = 0
-        global_index = 0
-
-        # We want new items to rank above previous ones.
-        max_sort_number = parameters.get("max_sort_number")
-        if max_sort_number is not None:
-            sort_base = int(max_sort_number) + LISTING_SORT_NUMBER_BASE
-        else:
-            sort_base = LISTING_SORT_NUMBER_BASE * 2
+        pending_items: list[tuple[dict[str, Any], int]] = []
 
         await context.set_stage(TaskStage.LISTING, message="Collecting incremental che168 listing", progress_current=0, progress_total=100, progress_unit="page")
 
@@ -1137,32 +1152,29 @@ def _build_che168_runners():
                     found_existing = True
                     break
 
-                sort_number = sort_base - global_index
-                global_index += 1
-
-                normalized = _normalize_che168_listing_car(car_dict, sort_number)
+                normalized = _normalize_che168_listing_car(car_dict, 0)
                 if normalized is not None:
                     if not _append_unique_listing(seen_keys, "che168", normalized):
                         continue
-                    await _emit_or_collect_listing(
-                        context,
-                        delivery,
-                        data,
-                        normalized,
-                        source="che168",
-                        task_type=TaskType.INCREMENTAL,
-                        page=page,
-                    )
+                    pending_items.append((normalized, page))
 
             await context.update(
                 message=f"Parsed che168 page {page}",
                 progress_current=page,
-                items_found=len(seen_keys) if delivery is not None else len(data),
+                items_found=len(pending_items),
             )
 
             if found_existing:
                 break
 
+        _assign_incremental_sort_numbers(pending_items, parameters)
+        await _emit_incremental_listing_items(
+            context,
+            delivery,
+            data,
+            pending_items,
+            source="che168",
+        )
         await _flush_listing_batch(
             context,
             delivery,
@@ -1304,14 +1316,7 @@ def _build_encar_runners():
         existing_set = {str(x) for idx, x in enumerate(existing_ids) if x and idx < INCREMENTAL_EXISTING_LIMIT}
         page = 1
         pages_scanned = 0
-        global_index = 0
-
-        # We want new items to rank above previous ones.
-        max_sort_number = parameters.get("max_sort_number")
-        if max_sort_number is not None:
-            sort_base = int(max_sort_number) + LISTING_SORT_NUMBER_BASE
-        else:
-            sort_base = LISTING_SORT_NUMBER_BASE * 2
+        pending_items: list[tuple[dict[str, Any], int]] = []
 
         await context.set_stage(TaskStage.LISTING, message="Collecting incremental encar listing", progress_current=0, progress_total=100, progress_unit="page")
 
@@ -1332,34 +1337,31 @@ def _build_encar_runners():
                     found_existing = True
                     break
 
-                sort_number = sort_base - global_index
-                global_index += 1
-
-                normalized = _normalize_encar_listing_car(car_dict, sort_number)
+                normalized = _normalize_encar_listing_car(car_dict, 0)
                 if normalized is not None:
                     if not _append_unique_listing(seen_keys, "encar", normalized):
                         continue
-                    await _emit_or_collect_listing(
-                        context,
-                        delivery,
-                        data,
-                        normalized,
-                        source="encar",
-                        task_type=TaskType.INCREMENTAL,
-                        page=page,
-                    )
+                    pending_items.append((normalized, page))
 
             await context.update(
                 message=f"Parsed encar page {page}",
                 progress_current=page,
-                items_found=len(seen_keys) if delivery is not None else len(data),
+                items_found=len(pending_items),
             )
-            logger.info(f"[FLOW] Finished page {page} source=encar (incremental) items_found={len(seen_keys) if delivery is not None else len(data)}")
+            logger.info(f"[FLOW] Finished page {page} source=encar (incremental) items_found={len(pending_items)}")
 
             if found_existing or not getattr(response.data, "has_more", False):
                 break
             page += 1
 
+        _assign_incremental_sort_numbers(pending_items, parameters)
+        await _emit_incremental_listing_items(
+            context,
+            delivery,
+            data,
+            pending_items,
+            source="encar",
+        )
         await _flush_listing_batch(
             context,
             delivery,
@@ -1371,7 +1373,7 @@ def _build_encar_runners():
 
         summary = {
             "pages_scanned": pages_scanned,
-            "items_found": len(seen_keys) if delivery is not None else len(data),
+            "items_found": len(pending_items),
             "id_field": id_field,
             **_delivery_summary(delivery),
         }

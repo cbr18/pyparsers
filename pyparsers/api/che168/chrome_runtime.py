@@ -6,8 +6,10 @@ def configure_chromium_runtime_env() -> None:
     """Keep Chromium runtime files out of the container writable layer."""
     os.environ.setdefault("XDG_CONFIG_HOME", "/tmp/.config")
     os.environ.setdefault("XDG_CACHE_HOME", "/tmp/.cache")
+    os.environ.setdefault("XDG_DATA_HOME", "/tmp/.local/share")
     os.makedirs(os.environ["XDG_CONFIG_HOME"], exist_ok=True)
     os.makedirs(os.environ["XDG_CACHE_HOME"], exist_ok=True)
+    os.makedirs(os.environ["XDG_DATA_HOME"], exist_ok=True)
 
 
 def make_chromium_temp_dir(prefix: str = "che168-chrome-") -> str:

@@ -464,19 +464,24 @@ class Che168DetailedParserAPI:
         
         temp_dir = make_chromium_temp_dir()
         add_chromium_runtime_options(chrome_options, temp_dir)
-        
-        chrome_bin = os.environ.get("CHROME_BIN")
-        if chrome_bin:
-            chrome_options.binary_location = chrome_bin
-        
-        driver_path = os.environ.get("CHROMEDRIVER_PATH")
-        if driver_path:
-            driver = webdriver.Chrome(service=Service(driver_path), options=chrome_options)
-        else:
-            driver = webdriver.Chrome(options=chrome_options)
-        
-        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        return driver, temp_dir
+
+        try:
+            chrome_bin = os.environ.get("CHROME_BIN")
+            if chrome_bin:
+                chrome_options.binary_location = chrome_bin
+
+            driver_path = os.environ.get("CHROMEDRIVER_PATH")
+            if driver_path:
+                driver = webdriver.Chrome(service=Service(driver_path), options=chrome_options)
+            else:
+                driver = webdriver.Chrome(options=chrome_options)
+
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            return driver, temp_dir
+        except Exception:
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
     
     # Маппинг китайских названий параметров на поля модели
     API_FIELD_MAPPING = {

@@ -411,25 +411,24 @@ class Che168Parser(BaseCarParser):
 
     def _safe_quit_driver(self):
         """Корректно завершает сессию и ждёт остановки процесса chromedriver."""
-        if not self.driver:
-            return
-        try:
-            self.driver.quit()
-        except Exception:
-            pass
-        # Дождаться завершения процесса chromedriver (если доступен)
-        try:
-            service = getattr(self.driver, "service", None)
-            proc = getattr(service, "process", None) if service else None
-            if proc:
-                proc.wait(timeout=5)
-        except Exception:
-            pass
-        # Небольшая пауза, чтобы crashpad успел завершиться
-        time.sleep(0.2)
-        self.driver = None
         temp_dir = getattr(self, "_temp_dir", None)
         self._temp_dir = None
+        if self.driver:
+            try:
+                self.driver.quit()
+            except Exception:
+                pass
+            # Дождаться завершения процесса chromedriver (если доступен)
+            try:
+                service = getattr(self.driver, "service", None)
+                proc = getattr(service, "process", None) if service else None
+                if proc:
+                    proc.wait(timeout=5)
+            except Exception:
+                pass
+            # Небольшая пауза, чтобы crashpad успел завершиться
+            time.sleep(0.2)
+            self.driver = None
         # Удаляем временный user-data-dir, если создавали
         if temp_dir:
             try:

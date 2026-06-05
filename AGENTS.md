@@ -19,6 +19,8 @@
 - Do not change migrations, generated artifacts, lock files, compose files, or secrets unless the user explicitly asks.
 - Do not hardcode secrets or tokens. Use the existing `.env` / `env_file` pattern.
 - Answer concisely and do only what was explicitly requested. Do not expand scope without approval.
+- Do not run `git push` unless the user explicitly asks for that push in the current task.
+- Never push directly to `main` without explicit confirmation that pushing to `main` is intended.
 - When changing an existing flow, preserve its documented non-functional properties unless the task explicitly changes them.
 - When changing code, keep related documentation and contract notes up to date in the same task.
 

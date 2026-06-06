@@ -115,9 +115,11 @@ def _get_int_env(name: str, default: int, minimum: int = 1) -> int:
 
 
 CHE168_BATCH_MAX_CONCURRENT = _get_int_env("CHE168_BATCH_MAX_CONCURRENT", 5)
+CHE168_DETAIL_FAILURE_CACHE_SECONDS = _get_int_env("CHE168_DETAIL_FAILURE_CACHE_SECONDS", 300)
 
 _inflight_detail_lock = asyncio.Lock()
 _inflight_detail_tasks: Dict[int, asyncio.Future[Tuple[Optional[Che168DetailedCar], bool]]] = {}
+_detail_failure_cache: Dict[int, Tuple[float, Tuple[Optional[Che168DetailedCar], bool]]] = {}
 
 
 def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict:
@@ -326,10 +328,23 @@ async def _run_detail_parse(car_id: int, shop_id: Optional[int] = None) -> tuple
     return await loop.run_in_executor(None, _work)
 
 
-async def _parse_car_details_async(car_id: int, shop_id: Optional[int] = None) -> tuple[Optional[Che168DetailedCar], bool]:
+async def _parse_car_details_async(
+    car_id: int,
+    shop_id: Optional[int] = None,
+    force_update: bool = False,
+) -> tuple[Optional[Che168DetailedCar], bool]:
     loop = asyncio.get_running_loop()
     owner = False
     async with _inflight_detail_lock:
+        if not force_update:
+            cached = _detail_failure_cache.get(car_id)
+            if cached:
+                expires_at, cached_result = cached
+                if loop.time() < expires_at:
+                    logger.info("che168 detail parse skipped from failure cache car_id=%s shop_id=%s", car_id, shop_id)
+                    return cached_result
+                _detail_failure_cache.pop(car_id, None)
+
         future = _inflight_detail_tasks.get(car_id)
         if future is None:
             future = loop.create_future()
@@ -350,6 +365,17 @@ async def _parse_car_details_async(car_id: int, shop_id: Optional[int] = None) -
         logger.warning("che168 detail parse failed car_id=%s shop_id=%s: %s", car_id, shop_id, exc)
         raise
     else:
+        if result[0] is None and result[1]:
+            async with _inflight_detail_lock:
+                _detail_failure_cache[car_id] = (
+                    loop.time() + CHE168_DETAIL_FAILURE_CACHE_SECONDS,
+                    result,
+                )
+                logger.info(
+                    "che168 detail parse cached failed banned result car_id=%s ttl=%ss",
+                    car_id,
+                    CHE168_DETAIL_FAILURE_CACHE_SECONDS,
+                )
         future.set_result(result)
         logger.info("che168 detail parse completed car_id=%s shop_id=%s", car_id, shop_id)
         return result
@@ -395,7 +421,11 @@ async def parse_car_details(request: CarDetailRequest):
     try:
         logger.info(f"Начало парсинга детальной информации для car_id: {request.car_id}, shop_id: {request.shop_id}")
         
-        car_data, is_banned = await _parse_car_details_async(request.car_id, shop_id=request.shop_id)
+        car_data, is_banned = await _parse_car_details_async(
+            request.car_id,
+            shop_id=request.shop_id,
+            force_update=request.force_update,
+        )
         
         if car_data:
             logger.info(f"Успешно получена детальная информация для car_id: {request.car_id}")
@@ -493,5 +523,4 @@ async def parse_cars_details_batch(request: BatchDetailRequest):
 async def health_check():
     """Проверка здоровья сервиса"""
     return {"status": "healthy", "service": "che168-detailed-parser"}
-
 

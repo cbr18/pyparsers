@@ -38,6 +38,8 @@ from api.che168 import detailed_api
 from api.che168 import detailed_parser_api
 from api.che168.detailed_parser_api import (
     Che168DetailedParserAPI,
+    _desktop_urls_to_try,
+    _filter_car_images,
     _prefer_high_res_che168_images,
     _upgrade_che168_image_url,
 )
@@ -220,6 +222,16 @@ class Che168ParserTests(unittest.TestCase):
             ],
         )
 
+    def test_filter_car_images_rejects_che168_service_images(self):
+        filtered = _filter_car_images(
+            [
+                "https://dx.autoimg.cn/2sc/2022/2022-12/cardetail_load_error.png?format=webp",
+                "https://dx.autoimg.cn/2sc/2025rnw_sdcard_images/details_nvbar_return_black.png?format=webp",
+            ]
+        )
+
+        self.assertEqual(filtered, [])
+
     def test_detail_api_uses_session_device_id(self):
         parser = Che168DetailedParserAPI()
 
@@ -239,7 +251,7 @@ class Che168ParserTests(unittest.TestCase):
         max_active = 0
         lock = threading.Lock()
 
-        def fake_unlocked(car_id, shop_id=None, return_html=False):
+        def fake_unlocked(car_id, shop_id=None, return_html=False, allow_generic=True):
             nonlocal active, max_active
             with lock:
                 active += 1
@@ -264,13 +276,86 @@ class Che168ParserTests(unittest.TestCase):
 
         self.assertEqual(max_active, 1)
 
+    def test_detail_parse_passes_shop_id_to_carinfo_api(self):
+        parser = Che168DetailedParserAPI()
+
+        with (
+            mock.patch.object(parser, "_fetch_params_api", return_value={}),
+            mock.patch.object(
+                parser,
+                "_fetch_carinfo_api",
+                return_value={
+                    "power": 104,
+                    "image": "https://example.test/a.jpg",
+                    "image_gallery": "https://example.test/a.jpg",
+                    "image_count": 1,
+                    "first_registration_time": "2020-01-01",
+                },
+            ) as mocked_carinfo,
+        ):
+            parser.parse_car_details(57021858, shop_id=344884)
+
+        mocked_carinfo.assert_called_once_with(57021858, has_gallery=False, shop_id=344884)
+
+    def test_desktop_fallback_skips_generic_url_when_disabled(self):
+        urls = _desktop_urls_to_try(57021858, shop_id=344884, allow_generic=False)
+
+        self.assertEqual(urls, ["https://www.che168.com/dealer/344884/57021858.html"])
+
+    def test_desktop_fallback_keeps_generic_url_without_shop_id(self):
+        urls = _desktop_urls_to_try(57021858, shop_id=None, allow_generic=False)
+
+        self.assertEqual(urls, ["https://www.che168.com/cardetail/57021858.html"])
+
+    def test_mobile_fallback_gallery_skips_second_desktop_enrich(self):
+        parser = Che168DetailedParserAPI()
+
+        with (
+            mock.patch.object(parser, "_fetch_params_api", return_value={"is_banned": True}),
+            mock.patch.object(
+                parser,
+                "_fetch_carinfo_api",
+                return_value={
+                    "is_banned": True,
+                    "image": "https://example.test/a.jpg",
+                    "image_gallery": "https://example.test/a.jpg",
+                    "image_count": 1,
+                },
+            ),
+            mock.patch.object(parser, "_fetch_images_desktop", return_value={}) as mocked_desktop,
+        ):
+            car_data, is_banned = parser.parse_car_details(57021858, shop_id=344884)
+
+        self.assertIsNotNone(car_data)
+        self.assertFalse(is_banned)
+        self.assertEqual(car_data.image_gallery, "https://example.test/a.jpg")
+        mocked_desktop.assert_not_called()
+
+    def test_failed_carinfo_fallback_is_not_repeated_by_parse(self):
+        parser = Che168DetailedParserAPI()
+
+        with (
+            mock.patch.object(parser, "_fetch_params_api", return_value={"is_banned": True}),
+            mock.patch.object(parser, "_fetch_carinfo_api", return_value={"is_banned": True}),
+            mock.patch.object(parser, "_fetch_images_desktop", return_value={}) as mocked_desktop,
+            mock.patch.object(parser, "_fetch_images_fallback", return_value={}) as mocked_mobile,
+        ):
+            car_data, is_banned = parser.parse_car_details(57021858, shop_id=344884)
+
+        self.assertIsNone(car_data)
+        self.assertTrue(is_banned)
+        mocked_desktop.assert_not_called()
+        mocked_mobile.assert_not_called()
+
 
 class Che168DetailApiAsyncTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         detailed_api._inflight_detail_tasks.clear()
+        detailed_api._detail_failure_cache.clear()
 
     async def asyncTearDown(self):
         detailed_api._inflight_detail_tasks.clear()
+        detailed_api._detail_failure_cache.clear()
 
     async def test_parse_car_details_coalesces_same_car_id(self):
         calls = 0
@@ -291,6 +376,36 @@ class Che168DetailApiAsyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second, (None, False))
         self.assertEqual(calls, 1)
         self.assertNotIn(57021858, detailed_api._inflight_detail_tasks)
+
+    async def test_parse_car_details_uses_failure_cache_for_recent_banned_failure(self):
+        calls = 0
+
+        async def fake_run_detail_parse(car_id, shop_id=None):
+            nonlocal calls
+            calls += 1
+            return None, True
+
+        with mock.patch.object(detailed_api, "_run_detail_parse", side_effect=fake_run_detail_parse):
+            first = await detailed_api._parse_car_details_async(57021858, shop_id=344884)
+            second = await detailed_api._parse_car_details_async(57021858, shop_id=344884)
+
+        self.assertEqual(first, (None, True))
+        self.assertEqual(second, (None, True))
+        self.assertEqual(calls, 1)
+
+    async def test_parse_car_details_force_update_bypasses_failure_cache(self):
+        calls = 0
+
+        async def fake_run_detail_parse(car_id, shop_id=None):
+            nonlocal calls
+            calls += 1
+            return None, True
+
+        with mock.patch.object(detailed_api, "_run_detail_parse", side_effect=fake_run_detail_parse):
+            await detailed_api._parse_car_details_async(57021858, shop_id=344884)
+            await detailed_api._parse_car_details_async(57021858, shop_id=344884, force_update=True)
+
+        self.assertEqual(calls, 2)
 
 
 if __name__ == "__main__":

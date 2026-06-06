@@ -38,11 +38,21 @@ def _get_positive_int_env(name: str, default: int) -> int:
 
 
 CHE168_FALLBACK_MAX_CONCURRENT = _get_positive_int_env("CHE168_FALLBACK_MAX_CONCURRENT", 2)
+CHE168_DESKTOP_PAGE_LOAD_TIMEOUT = _get_positive_int_env("CHE168_DESKTOP_PAGE_LOAD_TIMEOUT", 15)
 _fallback_semaphore = threading.BoundedSemaphore(CHE168_FALLBACK_MAX_CONCURRENT)
 
 
 def _make_mobile_device_id() -> str:
     return secrets.token_hex(16)
+
+
+def _desktop_urls_to_try(car_id: int, shop_id: Optional[int] = None, allow_generic: bool = True) -> list[str]:
+    urls_to_try = []
+    if shop_id:
+        urls_to_try.append(f'https://www.che168.com/dealer/{shop_id}/{car_id}.html')
+    if allow_generic or not shop_id:
+        urls_to_try.append(f'https://www.che168.com/cardetail/{car_id}.html')
+    return urls_to_try
 
 
 @contextmanager
@@ -701,7 +711,7 @@ class Che168DetailedParserAPI:
             else:
                 # Получаем данные из обоих API
                 params_data = self._fetch_params_api(car_id)
-                carinfo_data = self._fetch_carinfo_api(car_id, has_gallery=False)
+                carinfo_data = self._fetch_carinfo_api(car_id, has_gallery=False, shop_id=shop_id)
             
             # Объединяем данные
             extracted = {'car_id': car_id}
@@ -730,10 +740,17 @@ class Che168DetailedParserAPI:
                 logger.info(f"[API] Получено {len(carinfo_data)} полей из getcarinfo")
 
             desktop_images: Dict[str, Any] = {}
-            need_desktop_fetch = api_blocked or not extracted.get('image_gallery')
+            carinfo_fallback_attempted = bool(carinfo_data.get('is_banned'))
+            mobile_fallback_used = bool(carinfo_data.get('is_banned') and carinfo_data.get('image_gallery'))
+            need_desktop_fetch = not extracted.get('image_gallery') and not carinfo_fallback_attempted
             if need_desktop_fetch:
                 try:
-                    desktop_images = self._fetch_images_desktop(car_id, shop_id=shop_id, return_html=True)
+                    desktop_images = self._fetch_images_desktop(
+                        car_id,
+                        shop_id=shop_id,
+                        return_html=True,
+                        allow_generic=not bool(shop_id),
+                    )
                     if desktop_images and desktop_images.get('image_gallery'):
                         logger.info(
                             f"[API] Desktop Selenium: получено {desktop_images.get('image_count', 0)} изображений для car_id={car_id}"
@@ -750,6 +767,22 @@ class Che168DetailedParserAPI:
                 if desktop_images.get('mileage') and not extracted.get('mileage'):
                     extracted['mileage'] = desktop_images['mileage']
                     logger.info(f"[API] Пробег из desktop HTML: {extracted['mileage']} для car_id={car_id}")
+
+            if not extracted.get('image_gallery') and not carinfo_fallback_attempted:
+                try:
+                    mobile_images = self._fetch_images_fallback(car_id)
+                    if mobile_images and mobile_images.get('image_gallery'):
+                        mobile_fallback_used = True
+                        if mobile_images.get('image_gallery') and not extracted.get('image_gallery'):
+                            extracted['image_gallery'] = mobile_images['image_gallery']
+                            extracted['image_count'] = mobile_images.get('image_count', len(mobile_images['image_gallery'].split()))
+                        if mobile_images.get('image') and not extracted.get('image'):
+                            extracted['image'] = mobile_images['image']
+                        if mobile_images.get('mileage') and not extracted.get('mileage'):
+                            extracted['mileage'] = mobile_images['mileage']
+                        logger.info(f"[API] Mobile fallback: получено {extracted.get('image_count', 0)} изображений для car_id={car_id}")
+                except Exception as e:
+                    logger.warning(f"[API] Mobile fallback ошибка для car_id={car_id}: {e}")
 
             # Определяем, заблокирован ли источник
             # Если API был заблокирован (403/514) и не удалось получить критичные поля через fallback, устанавливаем is_banned
@@ -773,10 +806,23 @@ class Che168DetailedParserAPI:
                 page_source = desktop_images.get('page_source') if desktop_images else None
                 if page_source:
                     extracted = _parse_html_fields(page_source, extracted)
+                elif carinfo_fallback_attempted:
+                    logger.info(
+                        f"[API] HTML обогащение пропущено для car_id={car_id}: fallback уже выполнялся внутри getcarinfo"
+                    )
+                elif mobile_fallback_used and extracted.get('image_gallery'):
+                    logger.info(
+                        f"[API] HTML обогащение пропущено для car_id={car_id}: mobile fallback уже получил галерею"
+                    )
                 else:
                     # На всякий случай попробуем ещё раз достать HTML, если не сохранили
                     try:
-                        html_payload = self._fetch_images_desktop(car_id, shop_id=shop_id, return_html=True)
+                        html_payload = self._fetch_images_desktop(
+                            car_id,
+                            shop_id=shop_id,
+                            return_html=True,
+                            allow_generic=not bool(shop_id),
+                        )
                         if html_payload.get('page_source'):
                             extracted = _parse_html_fields(html_payload['page_source'], {**extracted, **{k: v for k, v in html_payload.items() if k != 'page_source'}})
                     except Exception as html_err:
@@ -963,13 +1009,14 @@ class Che168DetailedParserAPI:
             logger.error(f"[API] Ошибка парсинга getparamtypeitems: {e}")
             return extracted
     
-    def _fetch_carinfo_api(self, car_id: int, has_gallery: bool = False) -> Dict[str, Any]:
+    def _fetch_carinfo_api(self, car_id: int, has_gallery: bool = False, shop_id: Optional[int] = None) -> Dict[str, Any]:
         """
         Получает базовую информацию о машине из API getcarinfo
         
         Args:
             car_id: ID машины
             has_gallery: True если галерея уже получена (не запускать fallback для изображений)
+            shop_id: ID дилера из listing, нужен для прямого dealer URL в fallback
             
         Returns:
             Словарь с извлечёнными данными
@@ -999,7 +1046,11 @@ class Che168DetailedParserAPI:
                     return extracted
                 
                 # Пробуем получить изображения через selenium desktop (основной fallback)
-                images_data = self._fetch_images_desktop(car_id, extracted.get('shop_id'))
+                images_data = self._fetch_images_desktop(
+                    car_id,
+                    shop_id or extracted.get('shop_id'),
+                    allow_generic=not bool(shop_id or extracted.get('shop_id')),
+                )
                 if images_data and images_data.get('image_gallery'):
                     extracted.update(images_data)
                     logger.info(f"[API] Получены изображения через selenium desktop для car_id={car_id}")
@@ -1162,7 +1213,11 @@ class Che168DetailedParserAPI:
                     need_gallery = True
 
             if need_gallery:
-                images_data = self._fetch_images_desktop(car_id, extracted.get('shop_id'))
+                images_data = self._fetch_images_desktop(
+                    car_id,
+                    shop_id or extracted.get('shop_id'),
+                    allow_generic=not bool(shop_id or extracted.get('shop_id')),
+                )
                 if images_data:
                     # Не перетираем image, если уже есть; обновляем галерею/счетчик
                     if images_data.get('image_gallery'):
@@ -1200,7 +1255,11 @@ class Che168DetailedParserAPI:
                 return extracted
             
             # Пробуем desktop fallback
-            images_data = self._fetch_images_desktop(car_id, extracted.get('shop_id'))
+            images_data = self._fetch_images_desktop(
+                car_id,
+                shop_id or extracted.get('shop_id'),
+                allow_generic=not bool(shop_id or extracted.get('shop_id')),
+            )
             if images_data and images_data.get('image_gallery'):
                 extracted.update(images_data)
                 logger.info(f"[API] Получены изображения через selenium desktop после ошибки API для car_id={car_id}")
@@ -1226,7 +1285,11 @@ class Che168DetailedParserAPI:
                 return extracted
             
             # Пробуем desktop fallback
-            images_data = self._fetch_images_desktop(car_id, extracted.get('shop_id'))
+            images_data = self._fetch_images_desktop(
+                car_id,
+                shop_id or extracted.get('shop_id'),
+                allow_generic=not bool(shop_id or extracted.get('shop_id')),
+            )
             if images_data and images_data.get('image_gallery'):
                 extracted.update(images_data)
                 logger.info(f"[API] Получены изображения через selenium desktop после ошибки парсинга для car_id={car_id}")
@@ -1310,13 +1373,10 @@ class Che168DetailedParserAPI:
                                             'image_count': len(valid_images)
                                         })
                                     else:
-                                        # Если фильтр слишком строгий — возвращаем сырые изображения
-                                        logger.warning(f"[API] Fallback (JS): фильтр убрал все изображения для car_id={car_id}, возвращаем сырые {len(head_images)}")
-                                        result_payload.update({
-                                            'image': head_images[0] if head_images else None,
-                                            'image_gallery': ' '.join(head_images) if head_images else None,
-                                            'image_count': len(head_images)
-                                        })
+                                        logger.warning(
+                                            f"[API] Fallback (JS): фильтр убрал все изображения для car_id={car_id}, "
+                                            f"служебные изображения не возвращаем"
+                                        )
                             if result_payload:
                                 return result_payload
                 except Exception as e:
@@ -1368,13 +1428,10 @@ class Che168DetailedParserAPI:
                                                             'image_count': len(valid_images)
                                                         })
                                                     else:
-                                                        # Если фильтр слишком строгий — возвращаем сырые изображения
-                                                        logger.warning(f"[API] Fallback (HTML): фильтр убрал все изображения для car_id={car_id}, возвращаем сырые {len(head_images)}")
-                                                        result_payload.update({
-                                                            'image': head_images[0] if head_images else None,
-                                                            'image_gallery': ' '.join(head_images) if head_images else None,
-                                                            'image_count': len(head_images)
-                                                        })
+                                                        logger.warning(
+                                                            f"[API] Fallback (HTML): фильтр убрал все изображения для car_id={car_id}, "
+                                                            f"служебные изображения не возвращаем"
+                                                        )
                                                     mileage_val, m_meta = _extract_mileage_from_payload(sku_detail, year_hint=None)
                                                     if mileage_val:
                                                         result_payload['mileage'] = mileage_val
@@ -1435,17 +1492,16 @@ class Che168DetailedParserAPI:
                             payload['mileage'] = mileage_html
                         return payload
                     else:
-                        # Если фильтр слишком строгий — возвращаем сырые изображения
-                        logger.warning(f"[API] Fallback: фильтр убрал все изображения для car_id={car_id}, возвращаем сырые {len(raw_images)}")
-                        payload = {
-                            'image': raw_images[0] if raw_images else None,
-                            'image_gallery': ' '.join(raw_images) if raw_images else None,
-                            'image_count': len(raw_images)
-                        }
+                        logger.warning(
+                            f"[API] Fallback: фильтр убрал все изображения для car_id={car_id}, "
+                            f"служебные изображения не возвращаем"
+                        )
+                        payload = {}
                         mileage_html, m_meta = _extract_mileage_from_soup(soup, year_hint=None)
                         if mileage_html:
                             payload['mileage'] = mileage_html
-                        return payload
+                        if payload:
+                            return payload
                 
                 return {}
             finally:
@@ -1463,15 +1519,32 @@ class Che168DetailedParserAPI:
             logger.debug(f"[API] Fallback для изображений не удался для car_id={car_id}: {e}")
             return {}
 
-    def _fetch_images_desktop(self, car_id: int, shop_id: Optional[int] = None, return_html: bool = False) -> Dict[str, Any]:
+    def _fetch_images_desktop(
+        self,
+        car_id: int,
+        shop_id: Optional[int] = None,
+        return_html: bool = False,
+        allow_generic: bool = True,
+    ) -> Dict[str, Any]:
         """
         Основной Selenium-fallback: парсит галерею с десктопной страницы.
         Использует eager page load strategy для быстрой загрузки.
         """
         with _fallback_slot(car_id, "desktop"):
-            return self._fetch_images_desktop_unlocked(car_id, shop_id=shop_id, return_html=return_html)
+            return self._fetch_images_desktop_unlocked(
+                car_id,
+                shop_id=shop_id,
+                return_html=return_html,
+                allow_generic=allow_generic,
+            )
 
-    def _fetch_images_desktop_unlocked(self, car_id: int, shop_id: Optional[int] = None, return_html: bool = False) -> Dict[str, Any]:
+    def _fetch_images_desktop_unlocked(
+        self,
+        car_id: int,
+        shop_id: Optional[int] = None,
+        return_html: bool = False,
+        allow_generic: bool = True,
+    ) -> Dict[str, Any]:
         logger.info(f"[API] Desktop selenium начинаем для car_id={car_id}, shop_id={shop_id}")
         try:
             from selenium.webdriver.support.ui import WebDriverWait
@@ -1481,38 +1554,42 @@ class Che168DetailedParserAPI:
             import time
             import shutil
 
-            urls_to_try = [f'https://www.che168.com/cardetail/{car_id}.html']
-            if shop_id:
-                urls_to_try.insert(0, f'https://www.che168.com/dealer/{shop_id}/{car_id}.html')
+            urls_to_try = _desktop_urls_to_try(car_id, shop_id=shop_id, allow_generic=allow_generic)
 
             driver = None
             temp_dir = None
             last_page_source = None
             try:
                 driver, temp_dir = self._create_chrome_driver()
-                driver.set_page_load_timeout(45)
+                driver.set_page_load_timeout(CHE168_DESKTOP_PAGE_LOAD_TIMEOUT)
 
                 for url in urls_to_try:
                     logger.info(f"[API] Desktop selenium пробуем URL: {url}")
+                    load_timed_out = False
                     try:
                         try:
                             driver.get(url)
                         except Exception as load_err:
                             # Даже при таймауте пробуем извлечь изображения
+                            load_timed_out = True
                             logger.warning(f"[API] Desktop: таймаут загрузки {url}, пробуем извлечь из частичной загрузки")
 
                         try:
-                            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                            body_wait_seconds = 2 if load_timed_out else 10
+                            WebDriverWait(driver, body_wait_seconds).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
                         except:
                             pass
 
                         # Прокрутка для загрузки динамического контента
-                        time.sleep(3)
-                        for scroll_pos in [500, 1000, 1500, 2000]:
-                            driver.execute_script(f"window.scrollTo(0, {scroll_pos});")
+                        if load_timed_out:
                             time.sleep(1)
-                        driver.execute_script("window.scrollTo(0, 0);")
-                        time.sleep(2)
+                        else:
+                            time.sleep(3)
+                            for scroll_pos in [500, 1000, 1500, 2000]:
+                                driver.execute_script(f"window.scrollTo(0, {scroll_pos});")
+                                time.sleep(1)
+                            driver.execute_script("window.scrollTo(0, 0);")
+                            time.sleep(2)
 
                         last_page_source = driver.page_source
                         soup = BeautifulSoup(last_page_source, 'html.parser')

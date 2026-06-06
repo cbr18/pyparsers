@@ -1,13 +1,46 @@
 import unittest
 from unittest import mock
+import asyncio
+import threading
+import time
+import types
 
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pyparsers"))
 
+if "fastapi" not in sys.modules:
+    fastapi_stub = types.ModuleType("fastapi")
+
+    class _FakeAPIRouter:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def post(self, *args, **kwargs):
+            return lambda func: func
+
+        def get(self, *args, **kwargs):
+            return lambda func: func
+
+    class _FakeHTTPException(Exception):
+        def __init__(self, status_code=None, detail=None):
+            super().__init__(detail)
+            self.status_code = status_code
+            self.detail = detail
+
+    fastapi_stub.APIRouter = _FakeAPIRouter
+    fastapi_stub.HTTPException = _FakeHTTPException
+    sys.modules["fastapi"] = fastapi_stub
+
 from api.che168.parser import Che168Parser
-from api.che168.detailed_parser_api import _prefer_high_res_che168_images, _upgrade_che168_image_url
+from api.che168 import detailed_api
+from api.che168 import detailed_parser_api
+from api.che168.detailed_parser_api import (
+    Che168DetailedParserAPI,
+    _prefer_high_res_che168_images,
+    _upgrade_che168_image_url,
+)
 
 
 class _FakeProcess:
@@ -186,6 +219,78 @@ class Che168ParserTests(unittest.TestCase):
                 "https://2sc2.autoimg.cn/escimg/auto/g33/M03/E7/4A/1024x768_c42_autohomecar__def.jpg.webp",
             ],
         )
+
+    def test_detail_api_uses_session_device_id(self):
+        parser = Che168DetailedParserAPI()
+
+        params = parser._api_params(57021858)
+
+        self.assertEqual(params["infoid"], 57021858)
+        self.assertEqual(params["_appid"], "2sc.m")
+        self.assertNotEqual(params["deviceid"], "api_parser_57021858")
+        self.assertRegex(params["deviceid"], r"^[0-9a-f]{32}$")
+        self.assertEqual(params["deviceid"], parser._api_params(1)["deviceid"])
+
+    def test_fallback_desktop_uses_concurrency_limit(self):
+        parser = Che168DetailedParserAPI()
+        original_semaphore = detailed_parser_api._fallback_semaphore
+        detailed_parser_api._fallback_semaphore = threading.BoundedSemaphore(1)
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+
+        def fake_unlocked(car_id, shop_id=None, return_html=False):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return {"car_id": car_id}
+
+        try:
+            with mock.patch.object(parser, "_fetch_images_desktop_unlocked", side_effect=fake_unlocked):
+                threads = [
+                    threading.Thread(target=parser._fetch_images_desktop, args=(57021858,)),
+                    threading.Thread(target=parser._fetch_images_desktop, args=(57021859,)),
+                ]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
+        finally:
+            detailed_parser_api._fallback_semaphore = original_semaphore
+
+        self.assertEqual(max_active, 1)
+
+
+class Che168DetailApiAsyncTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        detailed_api._inflight_detail_tasks.clear()
+
+    async def asyncTearDown(self):
+        detailed_api._inflight_detail_tasks.clear()
+
+    async def test_parse_car_details_coalesces_same_car_id(self):
+        calls = 0
+
+        async def fake_run_detail_parse(car_id, shop_id=None):
+            nonlocal calls
+            calls += 1
+            await asyncio.sleep(0.05)
+            return None, False
+
+        with mock.patch.object(detailed_api, "_run_detail_parse", side_effect=fake_run_detail_parse):
+            first, second = await asyncio.gather(
+                detailed_api._parse_car_details_async(57021858),
+                detailed_api._parse_car_details_async(57021858),
+            )
+
+        self.assertEqual(first, (None, False))
+        self.assertEqual(second, (None, False))
+        self.assertEqual(calls, 1)
+        self.assertNotIn(57021858, detailed_api._inflight_detail_tasks)
 
 
 if __name__ == "__main__":

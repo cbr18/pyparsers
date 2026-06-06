@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import re
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Dict, Tuple
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -115,6 +115,9 @@ def _get_int_env(name: str, default: int, minimum: int = 1) -> int:
 
 
 CHE168_BATCH_MAX_CONCURRENT = _get_int_env("CHE168_BATCH_MAX_CONCURRENT", 5)
+
+_inflight_detail_lock = asyncio.Lock()
+_inflight_detail_tasks: Dict[int, asyncio.Future[Tuple[Optional[Che168DetailedCar], bool]]] = {}
 
 
 def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict:
@@ -312,7 +315,7 @@ def _convert_to_domain_car(detailed_car: Che168DetailedCar, car_id: int) -> dict
     return domain_car
 
 
-async def _parse_car_details_async(car_id: int, shop_id: Optional[int] = None) -> tuple[Optional[Che168DetailedCar], bool]:
+async def _run_detail_parse(car_id: int, shop_id: Optional[int] = None) -> tuple[Optional[Che168DetailedCar], bool]:
     loop = asyncio.get_running_loop()
 
     def _work() -> tuple[Optional[Che168DetailedCar], bool]:
@@ -321,6 +324,39 @@ async def _parse_car_details_async(car_id: int, shop_id: Optional[int] = None) -
         return parser.parse_car_details(car_id, shop_id=shop_id)
 
     return await loop.run_in_executor(None, _work)
+
+
+async def _parse_car_details_async(car_id: int, shop_id: Optional[int] = None) -> tuple[Optional[Che168DetailedCar], bool]:
+    loop = asyncio.get_running_loop()
+    owner = False
+    async with _inflight_detail_lock:
+        future = _inflight_detail_tasks.get(car_id)
+        if future is None:
+            future = loop.create_future()
+            _inflight_detail_tasks[car_id] = future
+            owner = True
+            logger.info("che168 detail parse started car_id=%s shop_id=%s", car_id, shop_id)
+        else:
+            logger.info("che168 detail parse coalesced car_id=%s shop_id=%s", car_id, shop_id)
+
+    if not owner:
+        return await asyncio.shield(future)
+
+    try:
+        result = await _run_detail_parse(car_id, shop_id=shop_id)
+    except Exception as exc:
+        future.set_exception(exc)
+        future.exception()
+        logger.warning("che168 detail parse failed car_id=%s shop_id=%s: %s", car_id, shop_id, exc)
+        raise
+    else:
+        future.set_result(result)
+        logger.info("che168 detail parse completed car_id=%s shop_id=%s", car_id, shop_id)
+        return result
+    finally:
+        async with _inflight_detail_lock:
+            if _inflight_detail_tasks.get(car_id) is future:
+                _inflight_detail_tasks.pop(car_id, None)
 
 class CarDetailRequest(BaseModel):
     car_id: int
@@ -457,7 +493,5 @@ async def parse_cars_details_batch(request: BatchDetailRequest):
 async def health_check():
     """Проверка здоровья сервиса"""
     return {"status": "healthy", "service": "che168-detailed-parser"}
-
-
 
 

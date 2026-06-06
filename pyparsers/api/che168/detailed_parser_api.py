@@ -5,9 +5,13 @@ API-based парсер детальной информации с che168.com
 
 import re
 import logging
+import os
 import requests
+import secrets
+import threading
 import time
 import json
+from contextlib import contextmanager
 from typing import Optional, Dict, Any, Union, Tuple
 from .models.detailed_car import Che168DetailedCar
 from .chrome_runtime import add_chromium_runtime_options, make_chromium_temp_dir
@@ -22,6 +26,40 @@ logger = logging.getLogger(__name__)
 # используем только HTML-фоллбэк, затем делаем одиночную пробу снова.
 API_BAN_COOLDOWN_SECONDS = 300  # 5 минут
 _api_ban_until_ts: float = 0.0
+
+
+def _get_positive_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        logger.warning("[API] Некорректное значение %s=%s. Используется %s.", name, os.getenv(name), default)
+        return default
+    return value if value > 0 else default
+
+
+CHE168_FALLBACK_MAX_CONCURRENT = _get_positive_int_env("CHE168_FALLBACK_MAX_CONCURRENT", 2)
+_fallback_semaphore = threading.BoundedSemaphore(CHE168_FALLBACK_MAX_CONCURRENT)
+
+
+def _make_mobile_device_id() -> str:
+    return secrets.token_hex(16)
+
+
+@contextmanager
+def _fallback_slot(car_id: int, source: str):
+    logger.info(
+        "[API] Selenium fallback waiting car_id=%s source=%s limit=%s",
+        car_id,
+        source,
+        CHE168_FALLBACK_MAX_CONCURRENT,
+    )
+    _fallback_semaphore.acquire()
+    logger.info("[API] Selenium fallback acquired car_id=%s source=%s", car_id, source)
+    try:
+        yield
+    finally:
+        _fallback_semaphore.release()
+        logger.info("[API] Selenium fallback released car_id=%s source=%s", car_id, source)
 
 
 def _parse_int(value: Union[str, int, float, None]) -> Optional[int]:
@@ -611,13 +649,31 @@ class Che168DetailedParserAPI:
             timeout: Таймаут для HTTP запросов в секундах
         """
         self.timeout = timeout
+        self.device_id = _make_mobile_device_id()
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+            "User-Agent": (
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 "
+                "Mobile/15E148 Safari/604.1"
+            ),
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "zh-CN,zh;q=0.9",
+            "Origin": "https://m.che168.com",
             "Referer": "https://m.che168.com/",
         })
+
+    def _api_params(self, car_id: int) -> Dict[str, Any]:
+        return {
+            "infoid": car_id,
+            "deviceid": self.device_id,
+            "_appid": "2sc.m",
+        }
+
+    def _api_headers(self, car_id: int) -> Dict[str, str]:
+        return {
+            "Referer": f"https://m.che168.com/cardetail/index?infoid={car_id}",
+        }
     
     def parse_car_details(self, car_id: int, shop_id: Optional[int] = None) -> tuple[Optional[Che168DetailedCar], bool]:
         """
@@ -781,16 +837,17 @@ class Che168DetailedParserAPI:
             Словарь с извлечёнными данными
         """
         url = "https://apiuscdt.che168.com/api/v1/car/getparamtypeitems"
-        params = {
-            "infoid": car_id,
-            "deviceid": f"api_parser_{car_id}",
-            "_appid": "2sc.m"
-        }
+        params = self._api_params(car_id)
         
         extracted = {}
         
         try:
-            response = self.session.get(url, params=params, timeout=self.timeout)
+            response = self.session.get(
+                url,
+                params=params,
+                headers=self._api_headers(car_id),
+                timeout=self.timeout,
+            )
             
             # Обрабатываем 403/514 - блокировка API
             if response.status_code in [403, 514]:
@@ -918,16 +975,17 @@ class Che168DetailedParserAPI:
             Словарь с извлечёнными данными
         """
         url = "https://apiuscdt.che168.com/apic/v2/car/getcarinfo"
-        params = {
-            "infoid": car_id,
-            "deviceid": f"api_parser_{car_id}",
-            "_appid": "2sc.m"
-        }
+        params = self._api_params(car_id)
         
         extracted = {}
         
         try:
-            response = self.session.get(url, params=params, timeout=self.timeout)
+            response = self.session.get(
+                url,
+                params=params,
+                headers=self._api_headers(car_id),
+                timeout=self.timeout,
+            )
             
             # Обрабатываем 403 Forbidden и 514 Frequency Capped - это блокировка API
             if response.status_code in [403, 514]:
@@ -1189,6 +1247,10 @@ class Che168DetailedParserAPI:
         Fallback метод для получения изображений через selenium парсер
         когда API блокируется (403). Парсит head_images из JSON на странице.
         """
+        with _fallback_slot(car_id, "mobile"):
+            return self._fetch_images_fallback_unlocked(car_id)
+
+    def _fetch_images_fallback_unlocked(self, car_id: int) -> Dict[str, Any]:
         try:
             import json
             import shutil
@@ -1406,6 +1468,10 @@ class Che168DetailedParserAPI:
         Основной Selenium-fallback: парсит галерею с десктопной страницы.
         Использует eager page load strategy для быстрой загрузки.
         """
+        with _fallback_slot(car_id, "desktop"):
+            return self._fetch_images_desktop_unlocked(car_id, shop_id=shop_id, return_html=return_html)
+
+    def _fetch_images_desktop_unlocked(self, car_id: int, shop_id: Optional[int] = None, return_html: bool = False) -> Dict[str, Any]:
         logger.info(f"[API] Desktop selenium начинаем для car_id={car_id}, shop_id={shop_id}")
         try:
             from selenium.webdriver.support.ui import WebDriverWait

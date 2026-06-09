@@ -2,10 +2,12 @@ import asyncio
 import logging
 import os
 import re
+import time
 from typing import Optional, List, Union, Dict, Tuple
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+import metrics
 
 # Используем API-based парсер вместо Playwright (быстрее и надёжнее)
 from .detailed_parser_api import Che168DetailedParserAPI as Che168DetailedParser
@@ -342,6 +344,7 @@ async def _parse_car_details_async(
                 expires_at, cached_result = cached
                 if loop.time() < expires_at:
                     logger.info("che168 detail parse skipped from failure cache car_id=%s shop_id=%s", car_id, shop_id)
+                    metrics.CHE168_DETAIL_FAILURE_CACHE_HITS.inc()
                     return cached_result
                 _detail_failure_cache.pop(car_id, None)
 
@@ -353,11 +356,13 @@ async def _parse_car_details_async(
             logger.info("che168 detail parse started car_id=%s shop_id=%s", car_id, shop_id)
         else:
             logger.info("che168 detail parse coalesced car_id=%s shop_id=%s", car_id, shop_id)
+            metrics.CHE168_DETAIL_COALESCED.inc()
 
     if not owner:
         return await asyncio.shield(future)
 
     try:
+        metrics.CHE168_DETAIL_INFLIGHT.inc()
         result = await _run_detail_parse(car_id, shop_id=shop_id)
     except Exception as exc:
         future.set_exception(exc)
@@ -376,6 +381,7 @@ async def _parse_car_details_async(
                     car_id,
                     CHE168_DETAIL_FAILURE_CACHE_SECONDS,
                 )
+                metrics.CHE168_DETAIL_FAILURE_CACHE_WRITES.inc()
         future.set_result(result)
         logger.info("che168 detail parse completed car_id=%s shop_id=%s", car_id, shop_id)
         return result
@@ -383,6 +389,7 @@ async def _parse_car_details_async(
         async with _inflight_detail_lock:
             if _inflight_detail_tasks.get(car_id) is future:
                 _inflight_detail_tasks.pop(car_id, None)
+        metrics.CHE168_DETAIL_INFLIGHT.dec()
 
 class CarDetailRequest(BaseModel):
     car_id: int
@@ -407,6 +414,19 @@ class BatchDetailResponse(BaseModel):
     failed: int
     results: List[CarDetailResponse]
 
+
+def _record_detail_request(endpoint: str, started_at: float, success: bool, is_banned: bool) -> None:
+    result = "success" if success else "failure"
+    banned = str(bool(is_banned)).lower()
+    metrics.CHE168_DETAIL_REQUESTS.inc(endpoint=endpoint, result=result, banned=banned)
+    metrics.CHE168_DETAIL_DURATION.observe(
+        time.monotonic() - started_at,
+        endpoint=endpoint,
+        result=result,
+        banned=banned,
+    )
+
+
 @router.post("/parse", response_model=CarDetailResponse)
 async def parse_car_details(request: CarDetailRequest):
     """
@@ -418,6 +438,7 @@ async def parse_car_details(request: CarDetailRequest):
     Returns:
         CarDetailResponse с результатом парсинга
     """
+    started_at = time.monotonic()
     try:
         logger.info(f"Начало парсинга детальной информации для car_id: {request.car_id}, shop_id: {request.shop_id}")
         
@@ -445,29 +466,35 @@ async def parse_car_details(request: CarDetailRequest):
             
             # Создаем объект, который Go сможет распарсить как domain.Car
             # Используем dict вместо Che168DetailedCar для совместимости
-            return CarDetailResponse(
+            response = CarDetailResponse(
                 success=True,
                 car_id=request.car_id,
                 data=domain_car_dict,  # Теперь это dict в формате domain.Car
                 is_banned=is_banned
             )
+            _record_detail_request("parse", started_at, response.success, response.is_banned)
+            return response
         else:
             logger.warning(f"Не удалось получить детальную информацию для car_id: {request.car_id}, is_banned={is_banned}")
-            return CarDetailResponse(
+            response = CarDetailResponse(
                 success=False,
                 car_id=request.car_id,
                 error="Не удалось получить детальную информацию",
                 is_banned=is_banned  # Возвращаем is_banned даже при data=null
             )
+            _record_detail_request("parse", started_at, response.success, response.is_banned)
+            return response
             
     except Exception as e:
         logger.error(f"Ошибка парсинга car_id {request.car_id}: {e}")
-        return CarDetailResponse(
+        response = CarDetailResponse(
             success=False,
             car_id=request.car_id,
             error=str(e),
             is_banned=False  # При исключении не знаем о блокировке
         )
+        _record_detail_request("parse", started_at, response.success, response.is_banned)
+        return response
 
 @router.post("/parse-batch", response_model=BatchDetailResponse)
 async def parse_cars_details_batch(request: BatchDetailRequest):
@@ -480,6 +507,8 @@ async def parse_cars_details_batch(request: BatchDetailRequest):
     Returns:
         BatchDetailResponse с результатами парсинга
     """
+    started_at = time.monotonic()
+    metrics.CHE168_DETAIL_BATCH_SIZE.observe(len(request.car_ids))
     try:
         logger.info(f"Начало пакетного парсинга для {len(request.car_ids)} машин")
         
@@ -504,23 +533,32 @@ async def parse_cars_details_batch(request: BatchDetailRequest):
 
         successful = sum(1 for result in results if result.success)
         failed = len(results) - successful
+        banned_count = sum(1 for result in results if result.is_banned)
+        for result in results:
+            metrics.CHE168_DETAIL_BATCH_ITEMS.inc(
+                endpoint="parse-batch",
+                result="success" if result.success else "failure",
+                banned=str(bool(result.is_banned)).lower(),
+            )
 
         logger.info(f"Пакетный парсинг завершен: успешно {successful}, ошибок {failed}")
 
-        return BatchDetailResponse(
+        response = BatchDetailResponse(
             success=True,
             processed=len(request.car_ids),
             successful=successful,
             failed=failed,
             results=results,
         )
+        _record_detail_request("parse-batch", started_at, response.success, banned_count > 0)
+        return response
         
     except Exception as e:
         logger.error(f"Ошибка пакетного парсинга: {e}")
+        _record_detail_request("parse-batch", started_at, False, False)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/health")
 async def health_check():
     """Проверка здоровья сервиса"""
     return {"status": "healthy", "service": "che168-detailed-parser"}
-

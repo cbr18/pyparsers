@@ -7,6 +7,7 @@ import hashlib
 import logging
 import os
 import re
+import time
 import uuid
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
@@ -16,6 +17,7 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 
 import requests
 
+import metrics
 from api.memory_optimized import MemoryOptimizedList
 from car_filter import filter_cars_by_year
 from converters import decode_dongchedi_list_sh_price
@@ -191,6 +193,14 @@ class TaskService:
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix=f"{source}-task")
         self._worker_task: Optional[asyncio.Task] = None
 
+    def _refresh_metrics(self) -> None:
+        metrics.refresh_task_inventory(
+            self.source,
+            self.tasks.values(),
+            results_cached=len(self.results),
+            queue_size=self._queue.qsize(),
+        )
+
     async def startup(self) -> None:
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = asyncio.create_task(self._worker_loop(), name=f"{self.source}-task-worker")
@@ -229,6 +239,8 @@ class TaskService:
         self.tasks[task_id] = record
         self.tasks.move_to_end(task_id)
         self._queue.put_nowait(task_id)
+        metrics.observe_task_created(self.source, request.task_type.value)
+        self._refresh_metrics()
         return record.to_snapshot()
 
     def list_tasks(self) -> list[TaskSnapshot]:
@@ -264,12 +276,21 @@ class TaskService:
             task.stage = TaskStage.CANCELLED
             task.message = "Task was cancelled before execution"
             task.finished_at = now
+            metrics.observe_task_completed(
+                source=self.source,
+                task_type=task.task_type.value,
+                status=TaskStatus.CANCELLED.value,
+                duration_seconds=0.0,
+                items_found=task.items_found,
+                items_sent=task.items_sent,
+            )
         elif task.status == TaskStatus.RUNNING:
             task.cancel_requested = True
             task.message = "Cancellation requested"
         task.updated_at = now
         task.heartbeat_at = now
         self.tasks.move_to_end(task_id)
+        self._refresh_metrics()
         return task.to_snapshot()
 
     async def _worker_loop(self) -> None:
@@ -292,6 +313,7 @@ class TaskService:
         task.updated_at = task.started_at
         task.heartbeat_at = task.started_at
         self.tasks.move_to_end(task_id)
+        self._refresh_metrics()
 
         context = TaskContext(self, task_id)
         runner = self.runners[task.task_type]
@@ -326,6 +348,18 @@ class TaskService:
                 result_available=True,
             )
             self.results[task_id] = result.result
+            duration_seconds = None
+            if task.started_at and task.finished_at:
+                duration_seconds = (task.finished_at - task.started_at).total_seconds()
+            metrics.observe_task_completed(
+                source=self.source,
+                task_type=task.task_type.value,
+                status=TaskStatus.SUCCEEDED.value,
+                duration_seconds=duration_seconds,
+                items_found=task.items_found,
+                items_sent=task.items_sent,
+            )
+            self._refresh_metrics()
         except TaskCancelledError:
             await self._update_task(
                 task_id,
@@ -334,6 +368,18 @@ class TaskService:
                 message="Task execution was cancelled",
                 finished_at=datetime.now(timezone.utc),
             )
+            duration_seconds = None
+            if task.started_at and task.finished_at:
+                duration_seconds = (task.finished_at - task.started_at).total_seconds()
+            metrics.observe_task_completed(
+                source=self.source,
+                task_type=task.task_type.value,
+                status=TaskStatus.CANCELLED.value,
+                duration_seconds=duration_seconds,
+                items_found=task.items_found,
+                items_sent=task.items_sent,
+            )
+            self._refresh_metrics()
         except Exception as exc:
             logger.exception("Task %s failed", task_id)
             await self._update_task(
@@ -344,6 +390,18 @@ class TaskService:
                 error_message=str(exc) or exc.__class__.__name__,
                 finished_at=datetime.now(timezone.utc),
             )
+            duration_seconds = None
+            if task.started_at and task.finished_at:
+                duration_seconds = (task.finished_at - task.started_at).total_seconds()
+            metrics.observe_task_completed(
+                source=self.source,
+                task_type=task.task_type.value,
+                status=TaskStatus.FAILED.value,
+                duration_seconds=duration_seconds,
+                items_found=task.items_found,
+                items_sent=task.items_sent,
+            )
+            self._refresh_metrics()
 
     async def _update_task(
         self,
@@ -397,6 +455,7 @@ class TaskService:
         task.updated_at = now
         task.heartbeat_at = now
         self.tasks.move_to_end(task_id)
+        self._refresh_metrics()
 
     def _cleanup_old_tasks(self) -> None:
         now = datetime.now(timezone.utc)
@@ -415,6 +474,8 @@ class TaskService:
         for task_id in to_delete:
             self.tasks.pop(task_id, None)
             self.results.pop(task_id, None)
+        if to_delete:
+            self._refresh_metrics()
 
     def _trim_if_needed(self) -> None:
         while len(self.tasks) >= MAX_TASKS:
@@ -423,6 +484,7 @@ class TaskService:
                 break
             self.tasks.pop(task_id, None)
             self.results.pop(task_id, None)
+        self._refresh_metrics()
 
 
 def _hash_car_id_from_link(link: str) -> int:
@@ -603,6 +665,9 @@ async def _flush_listing_batch(
 
     last_error: Optional[Exception] = None
     for attempt in range(1, delivery.max_retries + 1):
+        attempt_started_at = time.monotonic()
+        if attempt > 1:
+            metrics.BATCH_RETRIES.inc(source=source, task_type=task_type.value)
         try:
             logger.info(f"[FLOW] Entering batch send attempt={attempt}/{delivery.max_retries} batch_id={batch_id}")
             await context.run_sync(
@@ -612,6 +677,17 @@ async def _flush_listing_batch(
                 timeout_seconds=delivery.timeout_seconds,
                 auth_token=delivery.auth_token,
             )
+            metrics.BATCH_ATTEMPTS.inc(source=source, task_type=task_type.value, result="success")
+            metrics.BATCH_DURATION.observe(
+                time.monotonic() - attempt_started_at,
+                source=source,
+                task_type=task_type.value,
+                result="success",
+            )
+            metrics.BATCH_SIZE_ITEMS.observe(len(batch_items), source=source, task_type=task_type.value)
+            metrics.BATCH_ITEMS_SENT.inc(len(batch_items), source=source, task_type=task_type.value)
+            if final:
+                metrics.BATCH_FINAL.inc(source=source, task_type=task_type.value)
             delivery.batches_sent += 1
             delivery.items_sent += len(batch_items)
             await context.update(
@@ -626,6 +702,13 @@ async def _flush_listing_batch(
             )
             return
         except Exception as exc:
+            metrics.BATCH_ATTEMPTS.inc(source=source, task_type=task_type.value, result="failure")
+            metrics.BATCH_DURATION.observe(
+                time.monotonic() - attempt_started_at,
+                source=source,
+                task_type=task_type.value,
+                result="failure",
+            )
             last_error = exc
             logger.warning(
                 "Failed to deliver %s batch %s attempt %s/%s: %s",
@@ -639,6 +722,7 @@ async def _flush_listing_batch(
                 await asyncio.sleep(min(2 ** (attempt - 1), 10))
 
     delivery.failed_batches += 1
+    metrics.BATCH_FAILURES.inc(source=source, task_type=task_type.value)
     raise RuntimeError(f"Failed to deliver parser batch {batch_id}: {last_error}") from last_error
 
 
@@ -857,9 +941,18 @@ def _build_dongchedi_runners():
             pages_scanned = page
             cars_list = getattr(response.data, "search_sh_sku_info_list", None)
             if not cars_list:
+                metrics.LISTING_EMPTY_PAGES.inc(source="dongchedi", task_type=TaskType.FULL.value)
                 break
 
             filtered = filter_cars_by_year(cars_list, min_year=2017)
+            filtered_count = len(cars_list) - len(filtered)
+            if filtered_count > 0:
+                metrics.LISTING_ITEMS_FILTERED.inc(
+                    filtered_count,
+                    source="dongchedi",
+                    task_type=TaskType.FULL.value,
+                    reason="year_lt_2017",
+                )
             for car in filtered:
                 car_dict = car.model_dump(exclude_none=True)
                 sort_number = LISTING_SORT_NUMBER_BASE - global_index
@@ -909,6 +1002,7 @@ def _build_dongchedi_runners():
             "items_found": len(seen_keys) if delivery is not None else len(data),
             **_delivery_summary(delivery),
         }
+        metrics.observe_listing_summary("dongchedi", TaskType.FULL.value, summary["pages_scanned"], summary["items_found"])
         await context.set_stage(TaskStage.FINALIZING, message="Finalizing full dongchedi result")
         return TaskRunResult(result=[] if delivery is not None else list(data), summary=summary)
 
@@ -931,9 +1025,18 @@ def _build_dongchedi_runners():
             pages_scanned = page
             cars_list = getattr(response.data, "search_sh_sku_info_list", None)
             if not cars_list:
+                metrics.LISTING_EMPTY_PAGES.inc(source="dongchedi", task_type=TaskType.INCREMENTAL.value)
                 break
 
             filtered = filter_cars_by_year(cars_list, min_year=2017)
+            filtered_count = len(cars_list) - len(filtered)
+            if filtered_count > 0:
+                metrics.LISTING_ITEMS_FILTERED.inc(
+                    filtered_count,
+                    source="dongchedi",
+                    task_type=TaskType.INCREMENTAL.value,
+                    reason="year_lt_2017",
+                )
             found_existing = False
             for car in filtered:
                 car_dict = car.model_dump(exclude_none=True)
@@ -987,6 +1090,7 @@ def _build_dongchedi_runners():
             "id_field": id_field,
             **_delivery_summary(delivery),
         }
+        metrics.observe_listing_summary("dongchedi", TaskType.INCREMENTAL.value, summary["pages_scanned"], summary["items_found"])
         await context.set_stage(TaskStage.FINALIZING, message="Finalizing incremental dongchedi result")
         existing_set.clear()
         gc.collect()
@@ -1068,6 +1172,7 @@ def _build_che168_runners():
             pages_scanned = page
             cars_list = getattr(response.data, "search_sh_sku_info_list", None)
             if not cars_list:
+                metrics.LISTING_EMPTY_PAGES.inc(source="che168", task_type=TaskType.FULL.value)
                 empty_pages += 1
                 if empty_pages >= 3:
                     break
@@ -1115,6 +1220,7 @@ def _build_che168_runners():
             "items_found": len(seen_keys) if delivery is not None else len(data),
             **_delivery_summary(delivery),
         }
+        metrics.observe_listing_summary("che168", TaskType.FULL.value, summary["pages_scanned"], summary["items_found"])
         await context.set_stage(TaskStage.FINALIZING, message="Finalizing full che168 result")
         return TaskRunResult(result=[] if delivery is not None else list(data), summary=summary)
 
@@ -1137,6 +1243,7 @@ def _build_che168_runners():
             pages_scanned = page
             cars_list = getattr(response.data, "search_sh_sku_info_list", None)
             if not cars_list:
+                metrics.LISTING_EMPTY_PAGES.inc(source="che168", task_type=TaskType.INCREMENTAL.value)
                 break
 
             found_existing = False
@@ -1190,6 +1297,7 @@ def _build_che168_runners():
             "id_field": id_field,
             **_delivery_summary(delivery),
         }
+        metrics.observe_listing_summary("che168", TaskType.INCREMENTAL.value, summary["pages_scanned"], summary["items_found"])
         await context.set_stage(TaskStage.FINALIZING, message="Finalizing incremental che168 result")
         existing_set.clear()
         gc.collect()
@@ -1260,6 +1368,7 @@ def _build_encar_runners():
             pages_scanned = page
             cars_list = getattr(response.data, "search_sh_sku_info_list", None)
             if not cars_list:
+                metrics.LISTING_EMPTY_PAGES.inc(source="encar", task_type=TaskType.FULL.value)
                 break
 
             for car in cars_list:
@@ -1303,6 +1412,7 @@ def _build_encar_runners():
             "items_found": len(seen_keys) if delivery is not None else len(data),
             **_delivery_summary(delivery),
         }
+        metrics.observe_listing_summary("encar", TaskType.FULL.value, summary["pages_scanned"], summary["items_found"])
         await context.set_stage(TaskStage.FINALIZING, message="Finalizing full encar result")
         return TaskRunResult(result=[] if delivery is not None else list(data), summary=summary)
 
@@ -1326,6 +1436,7 @@ def _build_encar_runners():
             pages_scanned = page
             cars_list = getattr(response.data, "search_sh_sku_info_list", None)
             if not cars_list:
+                metrics.LISTING_EMPTY_PAGES.inc(source="encar", task_type=TaskType.INCREMENTAL.value)
                 break
 
             found_existing = False
@@ -1377,6 +1488,7 @@ def _build_encar_runners():
             "id_field": id_field,
             **_delivery_summary(delivery),
         }
+        metrics.observe_listing_summary("encar", TaskType.INCREMENTAL.value, summary["pages_scanned"], summary["items_found"])
         await context.set_stage(TaskStage.FINALIZING, message="Finalizing incremental encar result")
         existing_set.clear()
         gc.collect()

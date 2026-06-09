@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 from source_probes import SourceProbe, probe_item_value, run_source_probe
+import metrics
 
 # Настройка логирования
 log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -260,9 +261,10 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+app.state.source = "legacy"
 
 # IP Whitelist middleware (первым, до CORS)
-app.add_middleware(IPWhitelistMiddleware)
+app.add_middleware(IPWhitelistMiddleware, public_paths={"/", "/health", "/blocked", "/metrics"})
 
 # CORS configuration from environment variables
 cors_origins = os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
@@ -280,6 +282,7 @@ app.add_middleware(
 
 # Включаем роутеры для детального парсинга
 app.include_router(che168_detailed_router)
+app.add_api_route("/metrics", metrics.metrics_response, methods=["GET"])
 
 # Локи для тяжёлых операций (полный парсинг), чтобы избежать дублирования нагрузки
 # Используем LRU кэш для ограничения роста памяти
@@ -313,6 +316,10 @@ def _get_full_fetch_lock(key: str) -> asyncio.Lock:
 async def add_performance_info(request, call_next):
     # Записываем время начала запроса
     start_time = time.time()
+    source = metrics.source_from_request(request)
+    method = request.method
+    provisional_path = "pending"
+    metrics.REQUESTS_IN_PROGRESS.inc(source=source, method=method, path=provisional_path)
     request_timestamp = datetime.fromtimestamp(start_time, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
     # Измеряем использование памяти до запроса
@@ -324,12 +331,31 @@ async def add_performance_info(request, call_next):
         memory_before = None
 
     # Выполняем запрос
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        metrics.observe_http_request(
+            source=source,
+            method=method,
+            path=metrics.normalized_route(request),
+            status=500,
+            duration_seconds=time.time() - start_time,
+        )
+        metrics.REQUESTS_IN_PROGRESS.dec(source=source, method=method, path=provisional_path)
+        raise
 
     # Записываем время окончания запроса
     end_time = time.time()
     response_timestamp = datetime.fromtimestamp(end_time, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     execution_time_ms = (end_time - start_time) * 1000
+    metrics.observe_http_request(
+        source=source,
+        method=method,
+        path=metrics.normalized_route(request),
+        status=response.status_code,
+        duration_seconds=end_time - start_time,
+    )
+    metrics.REQUESTS_IN_PROGRESS.dec(source=source, method=method, path=provisional_path)
 
     # Измеряем использование памяти после запроса
     try:
@@ -594,19 +620,30 @@ def _build_encar_probe() -> SourceProbe:
     )
 
 
+async def _run_measured_source_probe(probe: SourceProbe):
+    started_at = time.time()
+    payload = await run_source_probe(probe)
+    blocked = int(payload.get("data", {}).get("blocked", 1))
+    result = "blocked" if blocked else "available"
+    metrics.SOURCE_PROBES.inc(source=probe.source, result=result)
+    metrics.SOURCE_PROBE_DURATION.observe(time.time() - started_at, source=probe.source, result=result)
+    metrics.SOURCE_BLOCKED.set(blocked, source=probe.source)
+    return payload
+
+
 async def get_dongchedi_blocked_status():
     """Короткий probe по dongchedi: list page 1 + one detailed."""
-    return await run_source_probe(_build_dongchedi_probe())
+    return await _run_measured_source_probe(_build_dongchedi_probe())
 
 
 async def get_che168_blocked_status():
     """Короткий probe по che168: list page 1 + one detailed."""
-    return await run_source_probe(_build_che168_probe())
+    return await _run_measured_source_probe(_build_che168_probe())
 
 
 async def get_encar_blocked_status():
     """Короткий probe по encar: list page 1 + one detailed."""
-    return await run_source_probe(_build_encar_probe())
+    return await _run_measured_source_probe(_build_encar_probe())
 
 
 def _normalize_encar_car_dict(car_dict: Dict[str, Any], sort_number: int) -> Optional[Dict[str, Any]]:

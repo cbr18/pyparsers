@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pyparsers"))
 
 from models import TaskCreateRequest, TaskStage, TaskStatus, TaskType
+import metrics
 from task_service import (
     BatchDeliveryState,
     TaskRunResult,
@@ -22,6 +23,19 @@ from task_service import (
     _post_parser_batch,
     build_task_service,
 )
+
+
+class FakeHttpResponse:
+    def __init__(self, content=b'{"status":202}', payload=None):
+        self.content = content
+        self.status_code = 202
+        self._payload = payload or {"status": 202}
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        return None
 
 
 class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -192,11 +206,6 @@ class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item["sort_number"] for item, _ in items], [75, 74, 73])
 
     def test_post_parser_batch_sends_idempotency_headers(self):
-        fake_response = mock.Mock()
-        fake_response.content = b'{"status":202}'
-        fake_response.json.return_value = {"status": 202}
-        fake_response.raise_for_status.return_value = None
-
         payload = {
             "task_id": "task-1",
             "batch_id": "task-1:1",
@@ -204,7 +213,7 @@ class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
             "item_count": 1,
         }
 
-        with mock.patch("task_service.requests.post", return_value=fake_response) as mocked_post:
+        with mock.patch("task_service.requests.post", return_value=FakeHttpResponse()) as mocked_post:
             result = _post_parser_batch(
                 endpoint="http://datahub/parser/batches",
                 payload=payload,
@@ -237,10 +246,7 @@ class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with mock.patch("task_service.requests.post") as mocked_post:
-            fake_response = mock.Mock()
-            fake_response.content = b""
-            fake_response.raise_for_status.return_value = None
-            mocked_post.return_value = fake_response
+            mocked_post.return_value = FakeHttpResponse(content=b"", payload={})
 
             await _flush_listing_batch(
                 Context(),
@@ -256,6 +262,9 @@ class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["items"], [])
         self.assertEqual(payload["item_count"], 0)
         self.assertTrue(payload["is_final"])
+        rendered_metrics = metrics.render_metrics()
+        self.assertIn('pyparsers_batch_delivery_attempts_total{result="success",source="encar",task_type="full"}', rendered_metrics)
+        self.assertIn('pyparsers_batch_final_total{source="encar",task_type="full"}', rendered_metrics)
 
     async def test_push_batches_runs_for_all_sources_and_listing_task_types(self):
         parser_patches = {
@@ -271,13 +280,16 @@ class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
 
                     def fake_post(endpoint, *, json, headers, timeout):
                         payloads.append(json)
-                        response = mock.Mock()
-                        response.content = b'{"status":202}'
-                        response.json.return_value = {"status": 202}
-                        response.raise_for_status.return_value = None
-                        return response
+                        return FakeHttpResponse()
 
-                    with mock.patch(patch_target, side_effect=self._fake_listing_response), mock.patch("task_service.requests.post", side_effect=fake_post):
+                    async def direct_run_sync(context, func, *args, **kwargs):
+                        return func(*args, **kwargs)
+
+                    with (
+                        mock.patch(patch_target, side_effect=self._fake_listing_response),
+                        mock.patch("task_service.requests.post", side_effect=fake_post),
+                        mock.patch("task_service.TaskContext.run_sync", direct_run_sync),
+                    ):
                         service = build_task_service(source)
                         await service.startup()
                         try:

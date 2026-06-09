@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 import async_api_server
+import metrics
 from models import TaskCreateRequest
 from task_service import build_task_service
 
@@ -37,7 +38,7 @@ def _build_base_app(source: str, endpoints: dict[str, str]) -> FastAPI:
     )
     app.add_middleware(
         async_api_server.IPWhitelistMiddleware,
-        public_paths={"/", "/health", "/blocked"},
+        public_paths={"/", "/health", "/blocked", "/metrics"},
     )
     app.add_middleware(
         CORSMiddleware,
@@ -47,13 +48,16 @@ def _build_base_app(source: str, endpoints: dict[str, str]) -> FastAPI:
         allow_headers=async_api_server.cors_headers,
     )
     task_service = build_task_service(source)
+    app.state.source = source
     app.state.task_service = task_service
+    metrics.BUILD_INFO.set(1, source=source, version="1.0.0")
     app.middleware("http")(async_api_server.add_performance_info)
     app.add_event_handler("startup", task_service.startup)
     app.add_event_handler("shutdown", async_api_server.shutdown_event)
     app.add_event_handler("shutdown", task_service.shutdown)
     app.add_api_route("/", _build_root_handler(source, endpoints), methods=["GET"])
     app.add_api_route("/health", async_api_server.health_check, methods=["GET", "HEAD"])
+    app.add_api_route("/metrics", metrics.metrics_response, methods=["GET"])
     app.add_api_route("/tasks", _create_task(task_service), methods=["POST"])
     app.add_api_route("/tasks", _list_tasks(task_service), methods=["GET"])
     app.add_api_route("/tasks/{task_id}", _get_task(task_service), methods=["GET"])

@@ -17,6 +17,7 @@ from .models.detailed_car import Che168DetailedCar
 from .chrome_runtime import add_chromium_runtime_options, make_chromium_temp_dir
 from api.date_utils import normalize_first_registration_date
 from api.mileage_utils import normalize_mileage
+import metrics
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -55,6 +56,10 @@ def _desktop_urls_to_try(car_id: int, shop_id: Optional[int] = None, allow_gener
     return urls_to_try
 
 
+def _fallback_result(payload: Dict[str, Any]) -> str:
+    return "success" if bool(payload) else "failure"
+
+
 @contextmanager
 def _fallback_slot(car_id: int, source: str):
     logger.info(
@@ -64,11 +69,13 @@ def _fallback_slot(car_id: int, source: str):
         CHE168_FALLBACK_MAX_CONCURRENT,
     )
     _fallback_semaphore.acquire()
+    metrics.CHE168_FALLBACK_IN_PROGRESS.inc(kind=source)
     logger.info("[API] Selenium fallback acquired car_id=%s source=%s", car_id, source)
     try:
         yield
     finally:
         _fallback_semaphore.release()
+        metrics.CHE168_FALLBACK_IN_PROGRESS.dec(kind=source)
         logger.info("[API] Selenium fallback released car_id=%s source=%s", car_id, source)
 
 
@@ -1310,8 +1317,13 @@ class Che168DetailedParserAPI:
         Fallback метод для получения изображений через selenium парсер
         когда API блокируется (403). Парсит head_images из JSON на странице.
         """
+        started_at = time.monotonic()
         with _fallback_slot(car_id, "mobile"):
-            return self._fetch_images_fallback_unlocked(car_id)
+            payload = self._fetch_images_fallback_unlocked(car_id)
+        result = _fallback_result(payload)
+        metrics.CHE168_FALLBACK_ATTEMPTS.inc(kind="mobile", result=result)
+        metrics.CHE168_FALLBACK_DURATION.observe(time.monotonic() - started_at, kind="mobile", result=result)
+        return payload
 
     def _fetch_images_fallback_unlocked(self, car_id: int) -> Dict[str, Any]:
         try:
@@ -1530,13 +1542,18 @@ class Che168DetailedParserAPI:
         Основной Selenium-fallback: парсит галерею с десктопной страницы.
         Использует eager page load strategy для быстрой загрузки.
         """
+        started_at = time.monotonic()
         with _fallback_slot(car_id, "desktop"):
-            return self._fetch_images_desktop_unlocked(
+            payload = self._fetch_images_desktop_unlocked(
                 car_id,
                 shop_id=shop_id,
                 return_html=return_html,
                 allow_generic=allow_generic,
             )
+        result = _fallback_result(payload)
+        metrics.CHE168_FALLBACK_ATTEMPTS.inc(kind="desktop", result=result)
+        metrics.CHE168_FALLBACK_DURATION.observe(time.monotonic() - started_at, kind="desktop", result=result)
+        return payload
 
     def _fetch_images_desktop_unlocked(
         self,

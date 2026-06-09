@@ -37,6 +37,7 @@ docker compose down -v          # stop and drop volumes
 ## Health & Troubleshooting
 
 - `./scripts/health-check.(sh|ps1)` – pings every HTTP health endpoint.
+- `GET /metrics` – Prometheus metrics for each parser service; see [`docs/metrics.md`](metrics.md).
 - `docker stats` – live container resources.
 - `docker compose ps` – quick readiness check.
 - Port conflicts: use `netstat -tulpn | grep :<port>` and stop foreign services (e.g., `sudo systemctl stop apache2`).

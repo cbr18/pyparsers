@@ -190,6 +190,7 @@ class IPWhitelistMiddleware(BaseHTTPMiddleware):
                 content={
                     "data": None,
                     "message": "Access denied: IP not in whitelist",
+                    "client_ip": client_ip,
                     "status": 403
                 }
             )
